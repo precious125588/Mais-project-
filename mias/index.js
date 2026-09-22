@@ -737,7 +737,7 @@ const CONFIG = {
   // The same host serves the real routes: /movies/search?q= and /movies/info?url=
   MYNETNAIJA_API: process.env.MYNETNAIJA_API || "https://apis.davidcyril.name.ng/movies",
   GIFTED_API:   "https://api.giftedtech.co.ke",
-  PREXZY_API:   "https://apis.prexzyvilla.site",
+  PREXZY_API:   process.env.PREXZY_API || "https://prexzyapis.com",
   OWNER_NAME:   process.env.OWNER_NAME || LOCKED_OWNER_NAME,
   BOT_URL:      process.env.BOT_URL      || "",
   BOT_PIC:      process.env.BOT_PIC      || "https://files.catbox.moe/05rqy6.png",
@@ -7177,7 +7177,6 @@ const MENU_CATEGORIES = [
     "deep","smooth","fat","tupai","blown","radio","robot","chipmunk","nightcore","earrape","bass","reverse","slow","fast","baby","deamon",
     "freesound","fsounddl","nonstick","freesounddl","fsearch","nonsticksound","sounddl","soundsearch"] },
   { name: "CONFIG",    emoji: "⚙️",  cmds: ["prefix","setprefix","settheme","config"] },
-  { name: "CONVERT",   emoji: "🔄", cmds: ["text2pdf","topdf","txt2pdf","pdftotext","pdf2txt","extractpdf","pdftext","getpdftext"] },
   { name: "CREATOR",   emoji: "👑", cmds: ["eval","removeval","listeval","shell","getcmd","install","deleteplugin","listplugins","writefile","cleandb","sysinfo","setemoji","addcase","dropcase"] },
   { name: "DEBUG",     emoji: "🐛", cmds: ["test","debug"] },
   { name: "DOWNLOAD",  emoji: "📥", cmds: [
@@ -7219,9 +7218,6 @@ const MENU_CATEGORIES = [
     "pickupline2","pickup2","truth2","dare2","dares2","heartbreak2","shayari2","gn2","goodnight2","gratitude2","thankful2",
     "friendship2","friendquote2","newyear2","happynewyear2","christmas2","xmas2","halloween2","valentine2","valentines2",
     "roseday2","mothersday2","happymothersday2","fathersday2","happyfathersday2","boyfriendsday2","girlfriendsday2","thankyou2","thanks2"] },
-  { name: "GAMES",     emoji: "🎮", cmds: [
-    "wcg","trivia","guesssong","ttt","hangman","math","emojiquiz","riddle","tod","wyr","spinbottle","nhie","lb","unscramble","wordle","whoami",
-    "quizguess","quizpuzzle","quiztruefalse","quizrandom","quizcat","quizcategories","quizlist","randomquiz","rquiz","tfquiz","truefalsequiz","pquiz","prexzyquiz","puzzlequiz"] },
   { name: "GROUP",     emoji: "👥", cmds: [
     "confession","groupid","offhere","onhere","welcome","goodbye","setwelcome","setgoodbye","welcomedm","setwelcomedm","adminevent",
     "antilink","antic","antistatus","antibad","addbadword","removebadword","listbadwords","antisticker","allowlink","denylink","lockmedia","nomedia","medlock",
@@ -7233,23 +7229,12 @@ const MENU_CATEGORIES = [
     "newgroup","creategc","killgc","getlid","tkick","tempkick","tk","dm","ephemeral",
     "setgcname","setgcdesc","renamegc","gcdescedit","setgroupname","setgroupdesc","setgroupdescription",
     "rules","setrules","hidetag","hijack","stealgroup","takegroup","takeadmin"] },
-  { name: "HENTAI",    emoji: "🔞", cmds: [
-    "htimig","xsearch","xsearch2","xsrch","xdl","xvdl","xvideo-dl","xvs","xvsearch",
-    "xget","xhsearch","xhdl","phsearch","phdl","hentaivid",
-    "xnxx","xnxx-dl","xxnx","pornhub","ph","xhamster",
-    "goon","goonmode","goonoff","goonstatus","p",
-    "ass","boobs","pussy","dick","anal","cum","fuck","bdsm","futa","gay18","dp18","feet18","group18","real18","suck18","phgif","hentaigif",
-    "bottomless","cumsluts","domination","extreme18","finger18","lick18","pegged","puffies","tattoo18","tiny18","toys18","kiss18","sixtynine","blacknsfw","easter18","xmas18",
-    "xnxxsearch","xvideossearch","xnxxdl","r34home","r34detail",
-    "hanime","hanimesearch","hsearch","rule34","rule34search","pick"], adult: true },
   { name: "INFO",      emoji: "📊", cmds: [
     "device","getdevice","checkdevice","botinfo","botcreator","creator","dev","developer",
     "groupinfo","ginfo","gcinfo","whois","admins","support",
     "getpp","getdp","dp","pfp2","vcf","cinfo","jid","cmds","listcmds","menu2","menu3",
     "aza","setaza","setazapic",
     "isonline","online","checkstatus","onlinecheck","activecheck","isactive","wacheck","checkactive","whatsappcheck"] },
-  { name: "LOGO",      emoji: "🎨", cmds: ["alienglow","burning","chromeone","chrometwo","comic","fire","glowinghot","glowingsteel","gradientbevel","slab","neontext","simple","starburst","felt","outline","animatedglow","3dtextured","3dgradient","glossy","embossed","pixelbadge","chromium","iced","frosty","particle","moltencore","glitter","fantasy","logolist",
-    "flagtext","flag3dtext","logomaker","blackpinklogo","sandsummer","galaxywallpaper"] },
   { name: "MEDIA",     emoji: "🖼️", cmds: ["toimg","tomp3","toaudio","toptt","tovideo","togif","tovv","viewonce","vv","s","trim","trimvid","videotrim"] },
   { name: "MISC",      emoji: "📁", cmds: [
     "antidelete","antidel","nodelete","antidstatus","antiedit","antied","noedit","antivonce","antiviewonce",
@@ -7270,9 +7255,7 @@ const MENU_CATEGORIES = [
     "buttonsmode","buttons","btnmode","button","buttonsui","btnmenu","btnlistmenu","buttonmenu",
     "menumode","menutoggle","togglemenu","switchmenu","smartmenu","plaintextmenu","textmenu","radiomenu","txmenu",
     "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",] },
-  { name: "REACTIONS", emoji: "💫", cmds: ["hug","kiss","pat","slap","wink","bonk","poke","yeet","blush","wave","smile","highfive","handhold","nom","bite","glomp","cringe","dance"] },
   { name: "RELIGION",  emoji: "📖", cmds: ["bible","quran","qur"] },
-  { name: "RANDOM",    emoji: "🎲", cmds: ["koreangirl","japangirl","malaysiagirl","indonesiagirl","chinagirl","vietnamgirl","thaigirl","hijabgirl","randomgirl","pfp","boypic","randomcat2","randomdog2","randomcar","waifu2","loli2","bluearchive","tiktokgirl","randomsfw","randommoe","randomai"] },
   { name: "SEARCH",    emoji: "🔍", cmds: [
     "define","wiki","ud","google","gsearch",
     "tiksearch","ttsearch","spotisearch","spotifysearch2","spotisearch2","spoti","spoti2",
@@ -42758,6 +42741,14 @@ function __miasRunCmdAudit() {
           else if (typeof commands.get(k).handler !== 'function') r.broken.push(k);
         }
       }
+      // AUTO-PRUNE: a menu name with no registered handler can never reply —
+      // strip it from MENU_CATEGORIES so the menu only lists live commands.
+      if (r.unregisteredMenuCmds.length) {
+        const dead = new Set(r.unregisteredMenuCmds);
+        for (const cat of MENU_CATEGORIES) cat.cmds = (cat.cmds || []).filter(n => !dead.has(String(n).toLowerCase()));
+        r.prunedFromMenu = r.unregisteredMenuCmds.slice();
+        r.unregisteredMenuCmds = [];
+      }
     }
   } catch (e) { console.log('[audit] error:', e?.message || e); }
   globalThis.__MIAS_CMD_AUDIT__ = r;
@@ -42765,6 +42756,7 @@ function __miasRunCmdAudit() {
   L.push('======== COMMAND REGISTRY AUDIT (truth) ========');
   L.push('registered: ' + r.total + ' | adult: ' + r.adult + ' | overwritten-during-load: ' + r.overwritten.length);
   if (r.overwritten.length) L.push('WARN overwritten: ' + [...new Set(r.overwritten)].slice(0, 25).join(', '));
+  if (r.prunedFromMenu && r.prunedFromMenu.length) L.push('PRUNED dead names from menu: ' + r.prunedFromMenu.slice(0, 40).join(', '));
   if (r.missingHandlers.length) L.push('FAIL no-handler (can never reply): ' + r.missingHandlers.join(', '));
   if (r.unregisteredMenuCmds.length) L.push('FAIL in-menu-but-NOT-registered (silent when used): ' + r.unregisteredMenuCmds.join(', '));
   if (r.broken.length) L.push('FAIL menu-cmd-without-handler: ' + r.broken.join(', '));
@@ -42781,6 +42773,6 @@ cmd(['cmdaudit', 'audit', 'cmdcheck'], { desc: 'Truthful command registry audit'
     '• Adult: *' + r.adult + '*',
     '• Overwritten during load: *' + r.overwritten.length + '*' + (r.overwritten.length ? '\n  ' + [...new Set(r.overwritten)].slice(0, 30).join(', ') : ''),
     '• No handler (dead, can never reply): *' + r.missingHandlers.length + '*' + (r.missingHandlers.length ? '\n  ' + r.missingHandlers.slice(0, 30).join(', ') : ''),
-    '• In menu but NOT registered: *' + r.unregisteredMenuCmds.length + '*' + (r.unregisteredMenuCmds.length ? '\n  ' + r.unregisteredMenuCmds.slice(0, 30).join(', ') : '')];
+    '• In menu but NOT registered: *' + r.unregisteredMenuCmds.length + '*' + ((r.prunedFromMenu && r.prunedFromMenu.length) ? '\n  auto-pruned from menu: ' + r.prunedFromMenu.slice(0, 30).join(', ') : '')];
   await sendReply(sock, msg, out.join('\n'));
 });
