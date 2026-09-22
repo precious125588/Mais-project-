@@ -423,6 +423,28 @@ function install(deps) {
         const ep = info.match.test(url) ? info.ep : (/xnxx\./i.test(url) ? '/nsfw/xnxx-dl' : '/nsfw/xvideos-dl');
         const chain = [
           { via: `prexzy ${ep}`, fn: async () => { const r = await prexzyJson(ep, { url }, 45000); if (!r.ok) throw new Error(r.error); return pickUrl(r.data); } },
+          { via: 'giftedtech /download/' + (/xnxx\./i.test(url) ? 'xnxx' : 'xvideos'), fn: async () => {
+              const u = GIFTED_API + '/download/' + (/xnxx\./i.test(url) ? 'xnxx' : 'xvideos') + '?apikey=' + encodeURIComponent(GIFTED_KEY) + '&url=' + encodeURIComponent(url);
+              const res = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(30000) });
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+              const j = await res.json().catch(() => null);
+              if (!j) throw new Error('provider returned non-JSON');
+              const out = pickUrl(j.result || j);
+              if (!out) throw new Error('no media url in response');
+              return out;
+            } },
+          { via: 'nexoracle /downloader/' + (/xnxx\./i.test(url) ? 'xnxx' : 'xvideos'), fn: async () => {
+              const key = process.env.NEXORACLE_KEY || 'free';
+              const u = 'https://api.nexoracle.com/downloader/' + (/xnxx\./i.test(url) ? 'xnxx' : 'xvideos') + '?apikey=' + encodeURIComponent(key) + '&url=' + encodeURIComponent(url);
+              const res = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(30000) });
+              const ct = res.headers.get('content-type') || '';
+              if (!res.ok || !/json/i.test(ct)) throw new Error('HTTP ' + res.status + ' (HTML page, not JSON - check NEXORACLE_KEY)');
+              const j = await res.json();
+              if (!j || j.status === false) throw new Error((j && j.message) || 'status false');
+              const out = pickUrl(j.result || j);
+              if (!out) throw new Error('no media url in response');
+              return out;
+            } },
         ];
         for (const p of DC_ADULT_PATHS) {
           chain.push({ via: `davidcyril ${p}`, fn: async () => { const r = await dcGet(p, { url }, 30000); if (!r.ok) throw new Error(r.error); return pickUrl(r.data); } });
