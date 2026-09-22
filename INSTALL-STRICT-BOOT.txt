@@ -1,0 +1,48 @@
+MAIS MDX — REPLACEMENT FILES (debug pass 2026-09-22)
+====================================================
+Copy these files over your repo root, overwriting the originals
+(folder structure already matches). Then restart the bot.
+
+Fixed:
+1. index.js                      - AUTH_FILE was never declared -> fatal
+                                   ReferenceError on every boot. Declared it
+                                   + guarded isAuthenticated() against bad JSON.
+2. mias/index.js                 - require('./sessionPaths') -> '../sessionPaths'
+                                   (wrong depth; child process could not resolve
+                                   the session root).
+3. patch-nsfw.cjs                - './lib/nsfwAdultPack.cjs'  -> './mias/lib/...'
+                                   './nsfwPrexzy.cjs'         -> './mias/lib/...'
+4. mias/handlers/socketWrapper.cjs - self-referencing require path fixed.
+5. mias/handlers/bridge.cjs        - self-referencing require path fixed.
+6. mias/lib/playv2-deliver.cjs   - misleading inline doc path cleaned.
+7. downloadWorker.js             - misleading inline doc path cleaned.
+
+Verified after fix: 204 files, 0 syntax errors, 0 broken requires,
+boot manifest reports "25 files loaded, 0 failed".
+
+Reminder: set TELEGRAM_BOT_TOKEN and ADMIN_PASSWORD in .env / Railway
+variables, and pair at least one number for WhatsApp commands to respond.
+
+====================================================
+ADDED 2026-09-22 — FAIL-LOUD CRASH REPORTING
+====================================================
+8. strict-boot.cjs  (NEW FILE)  - drop in repo root.
+9. index.js         - now loads strict-boot.cjs on line 1, and the master fix
+                      boot no longer swallows its error.
+10. mias/handlers/bridge.cjs - "handlers not loaded" / missing handler is now a
+                      hard crash with a full report instead of returning null.
+
+What it does:
+ - Any file that cannot be required prints: what broke, which file required it,
+   the reason in plain words, the full require chain, and the stack -> exit 1.
+ - Any fix pack that fails to install crashes instead of logging and continuing.
+ - Log lines like "failed to load", "install failed", "N failed",
+   "parent boot FAILED", "not loaded correctly" are treated as fatal.
+ - uncaughtException + unhandledRejection print a full report and exit 1.
+ - So the bot can no longer pair to WhatsApp while a feature is silently dead.
+
+Optional in your own boot code:
+   STRICT.assertBootClean(['mias/index.js', 'pair.js', 'sessionPaths.js']);
+   STRICT.step('label', () => somethingThatMightFail());
+
+Escape hatch: MAIS_STRICT=0 -> everything above only warns (old behaviour).

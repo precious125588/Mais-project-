@@ -1,3 +1,6 @@
+// STRICT BOOT must be first: it makes every missing file / failed fix crash
+// loudly with the exact cause instead of booting half-dead and pairing anyway.
+const STRICT = require('./strict-boot.cjs');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -11,10 +14,16 @@ const { startupPassword } = require('./nexstore/token');
    precious-all-packs-boot.cjs. The inline patcher chain, the session-fix
    require and the session-boot require that used to live in this spot all
    moved into bootParent(), so `node index.js` can never skip a fix again. ── */
-try { require('./precious-master-fix-boot.cjs').bootParent(); }
-catch (_eMFB) { console.log('[MASTER-FIX] parent boot FAILED (' + (_eMFB && _eMFB.message) + ')'); }
+// Fail-loud: if the master fix boot does not run, every fix pack is dead, so
+// booting on is worse than crashing. strict-boot prints the exact cause.
+STRICT.step('master fix boot (precious-master-fix-boot.cjs -> bootParent)', () =>
+  STRICT.requireStrict('./precious-master-fix-boot.cjs', 'master fix boot').bootParent()
+);
 const _preciousSessionPaths = require('./sessionPaths');
 const PAIRING_DIR = _preciousSessionPaths.ensureSessionRoot() + '/';
+// FIX: AUTH_FILE was referenced by isAuthenticated()/setAuthenticated() but
+// never declared -> ReferenceError crashed launchBot()/headless auth every boot.
+const AUTH_FILE = require('path').join(PAIRING_DIR, '.bot_auth.json');
 const pairModule = require('./pair');
 const startpairing = typeof pairModule === 'function' ? pairModule : pairModule.startpairing;
 if (typeof startpairing !== 'function') throw new Error('Pairing module is not loaded correctly');
@@ -22,7 +31,8 @@ if (typeof startpairing !== 'function') throw new Error('Pairing module is not l
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function isAuthenticated() {
-    return fs.existsSync(AUTH_FILE) && JSON.parse(fs.readFileSync(AUTH_FILE)).authenticated;
+    try { return fs.existsSync(AUTH_FILE) && !!JSON.parse(fs.readFileSync(AUTH_FILE)).authenticated; }
+    catch { return false; }
 }
 
 function setAuthenticated(value) {

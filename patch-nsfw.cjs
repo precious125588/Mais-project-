@@ -86,7 +86,7 @@ const BOOT = `
    re-registers .play / .ai / .aio with handlers that can never go silent.
    ══════════════════════════════════════════════════════════════════════════ */
 try {
-  require('./lib/nsfwAdultPack.cjs').boot({
+  require('./mias/lib/nsfwAdultPack.cjs').boot({
     commands: commands,
     cmd: cmd,
     sendReply: (typeof sendReply === 'function' ? sendReply : null),
@@ -116,7 +116,7 @@ const AUTO_PATCH = `
    generic provider that returned "an error page instead of media".
    ══════════════════════════════════════════════════════════════════════════ */
 try {
-  const __nsfw = require('./nsfwPrexzy.cjs');
+  const __nsfw = require('./mias/lib/nsfwPrexzy.cjs');
   if (typeof resolvePlatformMedia === 'function' && !globalThis.__NSFW_AUTODL_PATCHED__) {
     globalThis.__NSFW_AUTODL_PATCHED__ = true;
     const __origResolve = resolvePlatformMedia;

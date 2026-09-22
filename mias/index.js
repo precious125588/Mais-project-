@@ -811,7 +811,7 @@ const _sessionPaths = (() => {
     () => require("./../sessionPaths"),
     () => require("../sessionPaths"),
     () => require("../nexstore_modules/sessionPaths"),
-    () => require("./sessionPaths"),
+    () => require("../sessionPaths"),
   ];
   for (const t of tries) { try { return t(); } catch {} }
   return null;

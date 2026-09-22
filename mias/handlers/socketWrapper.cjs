@@ -23,7 +23,7 @@
  * All hooks are fail-soft: any error inside the wrapper is swallowed
  * and the original send proceeds.
  *
- *   const { wrapSocket } = require('./handlers/socketWrapper.cjs');
+ *   const { wrapSocket } = require('./socketWrapper.cjs');
  *   const sock = makeWASocket({ ... });
  *   wrapSocket(sock);
  */

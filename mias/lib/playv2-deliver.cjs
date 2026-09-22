@@ -115,7 +115,7 @@ async function _p2SendVideoRaw(sock, jid, video, quotedKey, opts) {
 
 /**
  * Public entry point used by mias/index.js (the inlined _p2Deliver is
- * reduced to one line:  const { _p2Deliver } = require("./lib/playv2-deliver.cjs");).
+ * reduced to one line:  const { _p2Deliver } = require("./playv2-deliver.cjs");).
  *
  * @param sock      Baileys socket
  * @param entry     anchor object with .url, .title, .body, .kind(video|audio)

@@ -6,7 +6,7 @@
  *
  * Usage in case.js or any CJS file:
  *
- *   const MIAS = require('./mias/handlers/bridge.cjs');
+ *   const MIAS = require('./bridge.cjs');
  *   await MIAS.sendText(sock, jid, 'Hello!');
  *   await MIAS.sendImage(sock, jid, buffer, { caption: 'Hi' });
  *   await MIAS.reactSuccess(sock, msg);
@@ -18,6 +18,10 @@
  */
 
 "use strict";
+
+// Fail-loud guard (no-op if strict-boot was not loaded by index.js).
+const _STRICT = globalThis.__MAIS_STRICT_BOOT__ || null;
+const _isStrict = !!(_STRICT && _STRICT.STRICT);
 
 // ─── Proxy factory ────────────────────────────────────────────────────────────
 // We return a Proxy that resolves each function call through globalThis.__MIAS__
@@ -56,18 +60,44 @@ const MIAS_BRIDGE = new Proxy({}, {
     return async function (...args) {
       const handlers = globalThis.__MIAS__;
       if (!handlers) {
-        console.warn(`[MIAS Bridge] Handlers not loaded yet — called: ${String(prop)}`);
+        // The handler system never finished loading. Returning null here is what
+        // made the bot look paired while every command silently did nothing.
+        const msg =
+          `[MIAS Bridge] HANDLERS NOT LOADED — command "${String(prop)}" cannot run.\n` +
+          `Cause: mias/index.js did not populate globalThis.__MIAS__ (it crashed or was never required).`;
+        if (_isStrict) {
+          _STRICT.fatal("HANDLER SYSTEM NOT LOADED", [
+            ["Called", String(prop)],
+            ["Reason", "globalThis.__MIAS__ is empty — mias/index.js never finished loading."],
+            ["Meaning", "WhatsApp would connect but no command would ever reply."],
+            ["Stack", new Error("trace").stack],
+          ]);
+        }
+        console.warn(msg);
         return null;
       }
       const fn = handlers[prop];
       if (typeof fn !== "function") {
-        // Silently return null for unknown properties (allows destructuring)
+        if (_isStrict) {
+          _STRICT.fatal("HANDLER MISSING", [
+            ["Called", String(prop)],
+            ["Reason", `No handler named "${String(prop)}" exists in the loaded handler set.`],
+            ["Available", Object.keys(handlers).slice(0, 40).join(", ")],
+            ["Stack", new Error("trace").stack],
+          ]);
+        }
         return null;
       }
       try {
         return await fn(...args);
       } catch (err) {
-        console.error(`[MIAS Bridge] Error in ${String(prop)}:`, err?.message || err);
+        // Runtime send errors stay non-fatal, but they are now reported in full
+        // (message + stack) instead of a one-line shrug.
+        console.error(
+          `[MIAS Bridge] Error in ${String(prop)}:`,
+          err?.message || err,
+          "\n" + String(err?.stack || "").split("\n").slice(0, 6).join("\n")
+        );
         return null;
       }
     };

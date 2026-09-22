@@ -17,7 +17,7 @@
      DOWNLOAD_DIR             default os.tmpdir()/p2-dl
      DOWNLOAD_WORKER_COUNT    default 2  (parallel jobs in the queue)
 
-   Public API (CommonJS — drop-in require('...')):
+   Public API (CommonJS — drop-in require('...') /* doc comment only */):
      fetch({ url, timeoutMs, mimeHint })  → { ok, path, size, mime, elapsedMs }
      stats()                              → { queued, inflight, completedBytes }
    ══════════════════════════════════════════════════════════════════════════════ */
