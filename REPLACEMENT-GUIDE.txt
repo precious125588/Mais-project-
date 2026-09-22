@@ -1,0 +1,26 @@
+MIAS command/API engine migration replacement files
+====================================================
+
+This archive contains the verified MIAS engine registry, compatibility facades,
+shared upload handler, NIX API/module updates, and all unprotected command/API
+modules migrated to use the registered HTTP, image, and file-detection engines.
+
+Preserved boundaries
+--------------------
+The protected case.js, pair.js, mias/index.js, button/menu/status handlers,
+launcher, start script, and Railway files are intentionally not included because
+their baseline contents were verified unchanged. Keep those existing files.
+
+Install
+-------
+1. Back up the current project.
+2. Extract this archive at the project root, preserving directories.
+3. Keep the protected files listed above from the existing project.
+4. Run: npm install
+5. Run: npm run check:infrastructure
+
+Compatibility
+-------------
+CJS modules use mias/lib/engineAccess.cjs.
+ESM modules use mias/lib/engineAccess.js.
+Existing Axios, Jimp, and File Type call shapes remain compatible.

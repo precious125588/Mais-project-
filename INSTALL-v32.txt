@@ -1,0 +1,42 @@
+MIAS BOT — REPLACEMENT PACK v32
+================================
+
+WHAT THIS PACK CONTAINS
+  mias/index.js                patched main entry (picker + quote engine + pipeline wired in)
+  mias/lib/mediaPipeline.cjs   NEW — the disk media pipeline
+  DELETE-precious-tt-quote-fix.txt
+
+WHAT TO DO
+  1. Upload  mias/index.js  over your running  mias/index.js  (Bot Owner/index.js on your
+     panel, or redeploy the repo on Railway).
+  2. Upload  mias/lib/mediaPipeline.cjs  into  mias/lib/  (create the file — it is new).
+  3. DELETE  mias/precious-tt-quote-fix.cjs  — the old broken quote fix. It is no longer
+     needed and is never loaded now. (precious-gst-picker.cjs is unrelated; leave it.)
+  4. Restart / re-pair the bot.
+
+WHAT v32 FIXES — THE "1.1 GOES SILENT" BUG
+  • The TikTok picker card title is rendered in stylized Unicode (𝙏𝙄𝙆𝙏𝙊𝙆 …). The old
+    regexes (/reply with the number/i …) were ASCII-only, so they NEVER matched the
+    quoted card -> every gate evaluated false -> the reply fell through with no answer.
+  • v32 folds the quoted text through NFKD (𝙏->T, fullwidth digits -> 1..9) before
+    matching, and the dispatch gate now fires whenever the reply QUOTES any message
+    (not only when a picker is already live), so a quoted "1.1" always reaches the
+    picker consumer.
+  • The picker + quote handler now lives NATIVELY in mias/index.js (no external .cjs).
+    The picker card is re-shown as an IMAGE CARD built by the pipeline when a choice
+    is bad or the menu expired.
+
+THE DISK MEDIA PIPELINE (mias/lib/mediaPipeline.cjs)
+  • Every download streams to disk; every large upload streams FROM disk
+    (sock.sendMessage is wrapped) — media never sits in the bot's RAM, so downloads
+    and uploads stay fast and never slow the bot down.
+  • Premium output engine chain:  image cards  @napi-rs/canvas -> canvas -> sharp(SVG) -> jimp
+                                  video        ffmpeg-static normalize (h264/yuv420p/+faststart)
+  • Safety: per-file size cap + TTL sweeper so the workspace can never fill the disk.
+  • Type  .pipeline  in chat to see live engine + disk status.
+
+OPTIONAL ENV KNOBS
+  MIAS_PIPELINE_DIR        workspace root      (default <cwd>/pipeline-work)
+  MIAS_PIPELINE_MAX_BYTES  per-file size cap   (default 200 MB)
+  MIAS_PIPELINE_BUF_MAX    spill-to-disk above (default 2 MB)
+  MIAS_PIPELINE_TTL_MS     file time-to-live   (default 30 min)

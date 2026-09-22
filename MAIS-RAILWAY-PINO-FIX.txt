@@ -1,0 +1,9 @@
+# MAIS Railway deployment fix
+
+The runtime error was:
+
+    Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'pino' imported from /app/mias/index.js
+
+The repository already includes pino in both package manifests and uses the Dockerfile to install root and mias dependencies. Redeploy this commit with a clean build cache so Railway rebuilds both dependency trees.
+
+This marker commit intentionally does not modify mias/index.js, case.js, or any command implementation.

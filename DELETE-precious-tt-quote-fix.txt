@@ -1,0 +1,4 @@
+DELETE this file from your bot:
+  mias/precious-tt-quote-fix.cjs
+
+It is the old broken quote fix. v32 builds the picker + quote logic natively into index.js, so this file is no longer needed and is never loaded.

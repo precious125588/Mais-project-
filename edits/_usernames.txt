@@ -1,0 +1,10 @@
+# TikTok pages to fetch edits from — one username per line (with or without @)
+# Add more lines whenever you want; save and restart the bot.
+_rayto
+yrovax
+.the_newbie
+kage.cq
+qzeeco
+_timise_
+hyugagms
+flxds0

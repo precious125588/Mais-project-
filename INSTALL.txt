@@ -1,0 +1,31 @@
+V29/V28 BOOT FIX — "install pass complete" & "precious-v28 installed" missing from logs
+=======================================================================================
+ROOT CAUSE (confirmed in your repo, commit cc26ad5 / deployed d7220e5d):
+precious-all-packs-boot.cjs had the v28 + v29 install blocks AFTER installAll()'s
+`return result` and after module.exports. That made them DEAD CODE — the file
+parsed fine, deploys were green, but the v28/v29 runtime installers NEVER ran.
+That's why you only ever saw "PATCH-v29| done — applied 6, missed 0"
+(the file patcher, which works) but never the runtime lines:
+    [v29] ✅ install pass complete
+    [precious-v28] ✅ installed
+v27's boot entry was dead code too; it is now a live step as well.
+
+THE FIX: v27/v28/v29 are now installed INSIDE installAll(), dead last, with the
+v29 deferred-retry timers preserved. Verified: node --check passes, and a live
+boot simulation prints all three success lines and registers .nkiri + wraps
+.movie/.savetube quote-replies.
+
+INSTALL (2 minutes):
+  1. Copy these 3 files into your repo ROOT, overwriting the existing ones:
+       precious-all-packs-boot.cjs   (the fixed file — the important one)
+       precious-fixes-v28.cjs        (unchanged, included for completeness)
+       precious-fixes-v29.cjs        (unchanged, included for completeness)
+  2. Commit & push:
+       git add -A && git commit -m "fix: v27/v28/v29 were dead code after installAll return — now live" && git push
+  3. Railway will rebuild. (Confirm Railway deploys branch `main` — v29 files
+     exist only on main; master and other branches do NOT have them.)
+  4. Watch Deploy Logs for:
+       [precious-v28] ✅ installed — {"movieQuote":true,"nkiri":true}
+       [v29] ✅ install pass complete: {...}
+       [packs] ✅ precious-fixes-v29 installed
+No session/config changes needed. Safe to re-run: every step is idempotent.

@@ -1,0 +1,12 @@
+{"ts":"2026-09-16T21:09:04.295Z","level":"INFO","type":"system","message":"Server started port=3999 pair=true launcher=true"}
+{"ts":"2026-09-16T21:09:07.308Z","level":"INFO","type":"system","message":"Telegram bot loaded from environment/persisted settings"}
+{"ts":"2026-09-16T21:09:10.297Z","level":"INFO","type":"system","message":"AutoLoad: 0/0 started"}
+{"ts":"2026-09-16T21:10:50.361Z","level":"INFO","type":"system","message":"Server started port=4599 pair=true launcher=true"}
+{"ts":"2026-09-16T21:10:53.372Z","level":"INFO","type":"system","message":"Telegram bot loaded from environment/persisted settings"}
+{"ts":"2026-09-16T21:10:56.363Z","level":"INFO","type":"system","message":"AutoLoad: 0/0 started"}
+{"ts":"2026-09-16T21:11:42.779Z","level":"INFO","type":"system","message":"Server started port=4788 pair=true launcher=true"}
+{"ts":"2026-09-16T21:11:45.792Z","level":"INFO","type":"system","message":"Telegram bot loaded from environment/persisted settings"}
+{"ts":"2026-09-16T21:11:48.781Z","level":"INFO","type":"system","message":"AutoLoad: 0/0 started"}
+{"ts":"2026-09-16T21:12:21.933Z","level":"INFO","type":"system","message":"Server started port=4677 pair=true launcher=true"}
+{"ts":"2026-09-16T21:12:24.946Z","level":"INFO","type":"system","message":"Telegram bot loaded from environment/persisted settings"}
+{"ts":"2026-09-16T21:12:27.935Z","level":"INFO","type":"system","message":"AutoLoad: 0/0 started"}

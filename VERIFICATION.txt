@@ -1,0 +1,32 @@
+PRECIOUS FIX PACK — verification (2026-09-14T10:24Z)
+
+node --check results:
+  OK   mias/index.js
+  OK   pair.js
+  OK   server.js
+  OK   index.js
+  OK   autoload.js
+  OK   fix_all.cjs
+  OK   deploy/deploymentManager.js
+  OK   sessionPaths.js
+  OK   precious-session-boot.cjs
+  OK   precious-session-fix.cjs
+  OK   precious-play-v2.js
+
+cleanup counters (all must be 0):
+  ping command removed ............ 0
+  allmenu command removed ......... 0
+  ANIME menu category removed ..... 0
+  dangling animeEditFlow refs ..... 0
+  BTN:...ping / ALL CMDS buttons .. 0
+  hard fs.rmSync(AUTH_DIR) left ... 0
+  quarantine guards in place ...... 2
+
+new .play handler:
+8913:cmd(["play", "music", "song"], { desc: "Play a song — card + pick 1 audio / 2 document / 3 voice / 4 video", category: "DOWNLOAD" }, async (sock, msg, args) => {
+9005:  _P2_PENDING.set(sent.key.id, {
+
+session resolver:
+  resolveSessionRoot() = /app/nexstore/pairing
+[sessionPaths] could not create session root: EACCES: permission denied, mkdir '/app/nexstore/pairing'
+  sessionDirFor(2348012345678) = /app/nexstore/pairing/2348012345678@s.whatsapp.net

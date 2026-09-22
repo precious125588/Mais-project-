@@ -1,0 +1,27 @@
+MIAS FIX PACK — 2026-09-22
+Replace these 3 files in your bot (same paths as in this zip), then restart:
+
+  mias/index.js
+  mias/lib/autoDownloader.js
+  precious-fixes-v21.cjs
+
+What was fixed:
+1. .tt option 1.7 (Video Note) — now sends a real round video note (ptv).
+   Added to the v32 download executor (it was missing — fell through to plain
+   mp4) + quoted/unquoted retry cascade in both send paths.
+2. .play reply-quote 1-4 — audio/video resolver got 7 extra providers
+   (nexray ytaudio/ytmp3, nexoracle, siputzx, ryzendesu, princetechn, cobalt)
+   so "Download failed: no valid audio file url" no longer happens.
+3. .video / Bot Owner Video — provider chain now includes Nexray ytvideo /
+   v2 / v1 youtube + siputzx + ryzendesu as fallback (old APIs stay first),
+   so "All download providers are busy" is a last resort, not the default.
+4. Auto-downloader — reacts 🔄 when a link is detected, ✅ when done,
+   ❌ on error (was ⬇️ before). Nexray fallback added for every platform.
+5. .aio — Nexray /downloader/aio universal fallback added (detects link +
+   media type). Settings UI now documents all AIO/auto-dl sources under
+   section 29.
+6. Auto-chatbot — added nexoracle gpt4, ryzendesu chatgpt, prexzy gpt
+   fallbacks so it always replies when enabled (scope: .chatbotscope all/dm/group).
+
+NOTE: if your host blocks outbound to some providers, a few fallbacks may
+still fail — the chain moves to the next one automatically.

@@ -1,0 +1,6 @@
+Delete these paths from an existing checkout before copying the replacement
+files when upgrading in place:
+
+mias/handlers/buttonHandler.js
+mias/handlers/buttonMenuHandler.js
+mias/nix/
