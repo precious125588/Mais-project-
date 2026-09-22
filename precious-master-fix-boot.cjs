@@ -216,52 +216,6 @@ function sessionFixVerify() {
   } catch (e) { bad('session audit skipped: ' + (e && e.message)); return false; }
 }
 
-/* Baked-tree verification: proves the fixes that used to be runtime patchers
-   are present in the files on disk (so a fresh clone boots already-fixed). */
-function treeVerify() {
-  const checks = [
-    ['mias/index.js', '__V30_PATCHED__',                 'v30 inline fixes baked into mias/index.js'],
-    ['mias/index.js', 'quarantineDir',                   'session 401 → quarantine (never delete) baked'],
-    ['mias/index.js', 'bootChild',                       'child master-boot call present'],
-    ['server.js',     'bootParent',                      'parent master-boot call present'],
-    ['mias/index.js', '__PRECIOUS_INSTALLED__',          'v20 loader-marker bridge present (no double install)'],
-  ];
-  let good = 0;
-  for (const [rel, needle, label] of checks) {
-    let hit = false;
-    try { hit = fs.readFileSync(path.join(ROOT, rel), 'utf8').includes(needle); } catch (_) {}
-    if (hit) { good++; ok('tree: ' + label + ' ✓'); }
-    else bad('tree: MISSING ' + label + ' (' + rel + ' should contain ' + JSON.stringify(needle) + ')');
-  }
-  return good === checks.length;
-}
-
-/* (was precious-packs-preflight.cjs) — one line per pack file: OK / MISSING. */
-function preflightInline() {
-  const PACKS = [
-    'mias/precious-fixes-v20.cjs',
-    'mias/precious-fixes-v21.cjs',
-    'mias/precious-gst-picker.cjs',
-    'patches/precious-fixes-v23-rc.cjs',
-    'mias/precious-fixes-v24.cjs',
-    'precious-fixes-v27.cjs',
-    'precious-fixes-v28.cjs',
-    'precious-fixes-v29.cjs',
-    // 'mias/precious-tt-quote-fix.cjs' (deleted in v32 - built natively into mias/index.js)
-    'mias/precious-anime-edits.cjs',
-    'sessionPaths.js',
-    'cleanup.cjs',
-  ];
-  let present = 0;
-  for (const rel of PACKS) {
-    const exists = fs.existsSync(path.join(ROOT, rel));
-    if (exists) present++;
-    console.log('[packs-preflight] ' + (exists ? '✅ ' : '❌ MISSING ') + rel);
-  }
-  console.log('[packs-preflight] ' + present + '/' + PACKS.length + ' pack files healthy (' + MERGED_BUILD + ')');
-  return present === PACKS.length;
-}
-
 /* ═════════════════════════════ CHILD HELPERS ══════════════════════════════ */
 
 /* (was fix_pack_runtime.cjs installChild) — a bad pack can never kill the socket. */
@@ -412,7 +366,7 @@ function bootParent() {
   const t0 = Date.now();
   log('════════ PARENT BOOT (' + MERGED_BUILD + ') — merged fix boot ════════');
 
-  const result = { cleanup: false, tree: false, sessionBoot: false, sessionAudit: false, preflight: false };
+  const result = { cleanup: false, sessionBoot: false, sessionAudit: false, audit: null };
 
   /* 0. Volume sweeper (was only run by `npm start` — Railway never saw it). */
   try {
@@ -420,8 +374,6 @@ function bootParent() {
     if (typeof c.runOnce === 'function') { c.runOnce(); result.cleanup = true; }
   } catch (e) { warn('cleanup skipped: ' + (e && e.message)); }
 
-  /* 1. Prove the on-disk fixes are baked into the tree (no runtime patching). */
-  result.tree = treeVerify();
 
   /* 2. Session boot: volume detection + legacy session migration. */
   result.sessionBoot = sessionBootInline();
@@ -429,8 +381,12 @@ function bootParent() {
   /* 3. Session audit: warn if any hard session delete sneaks back in. */
   result.sessionAudit = sessionFixVerify();
 
-  /* 4. Preflight: pack-file health report. */
-  result.preflight = preflightInline();
+  /* 4. Real file audit: every source file is read and compiled; only genuine
+        failures are printed, with the real error. No claims, just results. */
+  try {
+    const a = require('./lib/boot-audit.cjs').audit({ root: ROOT, label: 'BOOT' });
+    result.audit = { loaded: a.loaded, failed: a.failed.length };
+  } catch (e) { bad('boot audit failed to run: ' + (e && e.message)); }
 
   log('════════ PARENT BOOT DONE in ' + (Date.now() - t0) + 'ms — ' + safeJson(result) + ' ════════');
   globalThis.__PRECIOUS_MASTER_PARENT__ = result;

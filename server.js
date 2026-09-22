@@ -15,33 +15,27 @@ catch (_eMFB) { console.log('[MASTER-FIX] parent boot FAILED (' + (_eMFB && _eMF
 /* v33: preflight now runs inside precious-master-fix-boot.cjs bootParent()
    (called above) — removed here so it can never run twice or be skipped. */
 
-/* __V27_MANIFEST__ — boot-time file load report.
-   Prints exactly which critical files loaded and which failed, so the
-   Railway logs show it immediately (e.g. "22 files loaded, 0 failed"). */
+/* ── REAL BOOT AUDIT ───────────────────────────────────────────────────────
+   Replaces the old __V27_MANIFEST__ block, which reported every file as
+   "loaded" because it only called createRequire() — a call that never reads
+   or parses the file. lib/boot-audit.cjs reads and compiles every source file
+   in the tree for real and prints exactly what failed and why. */
 try {
-  const _v27Files = [
-    'server.js', 'index.js', 'mais_launcher.js', 'pair.js', 'bot.js', 'autoload.js',
-    'precious-master-fix-boot.cjs', 'sessionPaths.js', 'sessionOwnership.js',
-    'notify.js', 'cleanup.cjs',
-    'precious-fixes-v27.cjs', 'precious-fixes-v28.cjs', 'precious-fixes-v29.cjs',
-    'mias/index.js', 'mias/precious-fixes-v20.cjs', 'mias/precious-fixes-v21.cjs',
-    'mias/precious-fixes-v24.cjs', 'mias/precious-gst-picker.cjs',
-    'mias/precious-tt-quote-fix.cjs', 'mias/precious-anime-edits.cjs',
-    'patches/precious-fixes-v23-rc.cjs',
-    'lib/crash-shield.cjs', 'mias/lib/playv2-deliver.cjs', 'mias/lib/portableVideo.cjs',
-  ];
-  const _v27Path = require('path');
-  const _v27fs = require('fs');
-  let _loaded = 0, _failed = [];
-  for (const _rel of _v27Files) {
-    const _abs = _v27Path.join(__dirname, _rel);
-    if (!_v27fs.existsSync(_abs)) { _failed.push(_rel + ' (missing)'); continue; }
-    try { require('module').createRequire(_abs); _loaded++; }
-    catch (_e) { _failed.push(_rel + ' (' + (_e && _e.message) + ')'); }
-  }
-  console.log('[manifest] ' + _loaded + ' files loaded, ' + _failed.length + ' failed');
-  if (_failed.length) console.log('[manifest] ❌ not loading: ' + _failed.join(' | '));
-} catch (_eM) { console.log('[manifest] report error:', _eM && _eM.message); }
+  require('./lib/boot-audit.cjs').audit({
+    root: __dirname,
+    label: 'BOOT',
+    required: [
+      'server.js', 'index.js', 'mais_launcher.js', 'pair.js', 'bot.js', 'autoload.js',
+      'precious-master-fix-boot.cjs', 'sessionPaths.js', 'sessionOwnership.js',
+      'notify.js', 'cleanup.cjs',
+      'precious-fixes-v27.cjs', 'precious-fixes-v28.cjs', 'precious-fixes-v29.cjs',
+      'mias/index.js', 'mias/precious-fixes-v20.cjs', 'mias/precious-fixes-v21.cjs',
+      'mias/precious-fixes-v24.cjs', 'mias/precious-gst-picker.cjs',
+      'mias/precious-anime-edits.cjs', 'patches/precious-fixes-v23-rc.cjs',
+      'lib/crash-shield.cjs',
+    ],
+  });
+} catch (_eM) { console.log('[BOOT] audit failed to run: ' + (_eM && _eM.message)); }
 
 // ═════════════════════════════════════════════════════════════════════════════
 
