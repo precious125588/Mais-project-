@@ -2322,7 +2322,7 @@ async function connectToWA(force = false) {
               (typeof getOwnerName === "function" ? getOwnerName() : null) ||
               CONFIG.OWNER_NAME || "Owner";
             const ownerPhoneNum = _cleanNum(ownerJid);
-            console.log(`✅ MIAS MDX is active | Owner: ${ownerDisplayName} (+${ownerPhoneNum || "unknown"}) | ${commands.size} commands loaded`);
+            console.log(`✅ MIAS MDX is active | Owner: ${ownerDisplayName} (+${ownerPhoneNum || "unknown"}) | ${commands.size} commands | AUDIT: ${(globalThis.__MIAS_CMD_AUDIT__?.missingHandlers?.length||0)} dead, ${(globalThis.__MIAS_CMD_AUDIT__?.unregisteredMenuCmds?.length||0)} unregistered`);
             await sock.sendMessage(ownerJid, {
               text: `MIAS is ALIVE\n\nBy \ud835\udc77\ud835\udc79\ud835\udc6c\ud835\udc6a\ud835\udc70\ud835\udc76\ud835\udc7c\ud835\udc7a x`,
             });
@@ -3660,6 +3660,7 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
           const entry = commands.get(name);
           // Check custom commands if no built-in found
           if (!entry) {
+            console.log('[CMD XX] NOT REGISTERED: ' + name + ' (from ' + msg.key.remoteJid + ') — no built-in handler exists');
             const customReply = customCmds.get(name);
             if (customReply) {
               try {
@@ -3668,6 +3669,7 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
                 else if (customReply?.type === "text") await sendReply(sock, msg, customReply.text || "");
               } catch (e) { console.error('[CUSTOM_CMD]', e?.message); }
             }
+            if (!customCmds.has(name)) console.log('[CMD XX] ' + name + ' is not registered anywhere — dropped (this was the old silent no-reply path, now logged)');
             return;
           }
           let fromGroupAdmin = false;
@@ -3706,22 +3708,23 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
               return;
             }
           } catch {}
-          // Safe Mode — block risky commands for everyone
-          try {
-            const _ownerJ2 = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-            if (getSettings(_ownerJ2)?.safeMode && RISKY_CMDS.has(name)) {
-              await sendReply(sock, msg, `🛡️ *Safe Mode is ON* — \`${name}\` is blocked.\nDisable with *${CONFIG.PREFIX}safemode off*`);
-              return;
-            }
-          } catch {}
+          // [removed] Safe Mode dispatch block deleted — no command is ever blocked here.
+          console.log('[CMD ->] ' + name + ' from ' + msg.key.remoteJid);
+          const _origSendMsg = sock.sendMessage.bind(sock);
+          let _realSends = 0; const _cmdT0 = Date.now();
+          sock.sendMessage = (..._a) => { try { if (!_a[1] || !_a[1].react) _realSends++; } catch {} return _origSendMsg(..._a); };
           try {
             await entry.handler(sock, msg, args);
+            if (_realSends === 0) console.log('[CMD !!] ' + name + ' finished in ' + (Date.now() - _cmdT0) + 'ms but sent NO reply (silent handler)');
+            else console.log('[CMD OK] ' + name + ' replied x' + _realSends + ' in ' + (Date.now() - _cmdT0) + 'ms');
+            try { sock.sendMessage = _origSendMsg; } catch {}
             // ── Execute joint commands queued from & chaining
             for (const _jP of _jointQueue) {
               try { await new Promise(r=>setTimeout(r,750)); const _jT=_jP.split(/\s+/); const _jN=(_jT.shift()||"").toLowerCase(); const _jA=_jT; const _jE=commands.get(_jN); if(_jE) await _jE.handler(sock,msg,_jA); } catch(_je){ try{console.error("[JOINT]",_je?.message);}catch{} }
             }
           } catch (e) {
-            console.error(`[CMD ${name}] error:`, e?.message || e);
+            try { sock.sendMessage = _origSendMsg; } catch {}
+            console.error('[CMD FAIL] ' + name + ' threw after ' + (Date.now() - _cmdT0) + 'ms:', e?.message || e);
             try { await sendReply(sock, msg, `❌ Error running *${name}*: ${e?.message || e}`); } catch {}
             notifyOwnerError(sock, msg, name, e).catch(() => {});
           }
@@ -5110,7 +5113,7 @@ async function sendInteractiveListMenu(sock, msg, menuText, coverBuf) {
   const ppUrl = (typeof __getBotPp === "function") ? await __getBotPp(sock).catch(() => null) : null;
 
   const catRows = MENU_CATEGORIES
-    .filter(cat => !cat.adult || (s.adultMode && !s.safeMode))
+    .filter(cat => !cat.adult || s.adultMode)
     .map(cat => ({
       title: cat.emoji + ' ' + cat.name + '  ‹' + [...new Set(cat.cmds)].length + '›',
       description: CONFIG.PREFIX + 'menu ' + cat.name.toLowerCase(),
@@ -5927,34 +5930,7 @@ function saveNow() {
 }
 globalThis.saveNow = saveNow;
 
-// ─────────────────────────────────────────────────────────────────────
-// SAFE MODE: list of risky cmds blocked when safeMode is ON
-// ─────────────────────────────────────────────────────────────────────
-// v15: Adult cmds are NOT here — safeMode already disables adultMode separately,
-// which hides them via the category filter. RISKY_CMDS = anything that can
-// genuinely get the bot/owner banned, kicked, or blow up a group/contact list.
-const RISKY_CMDS = new Set([
-  // group destruction / mass-kick — hijack/takegroup/stealgroup REMOVED in v4.8.0
-  "kickall","kickinactive","killgc","newgroup","newgroup2","tkick",
-  "leave","destroy","reset","resetgroup",
-  // mass-mention / spam (gets bot banned by WA)
-  "tagall","everyone","botall","hidetag","tag","mention","mentionall",
-  // mass DM / blasts
-  "broadcast","bcast","bc","sendall","dmall","spam","sms",
-  // moderation that can be abused
-  "ban","unban","banall","mute","unmute","muteall","warnall","resetwarn",
-  "promote","demote","add","kick","report","gban","ungban",
-  // anti-raid / anti-* triggers (can chain-kick a whole group)
-  "antiraid","antidemote","antipromote",
-  // dangerous bot-state ops
-  "update","restart","reboot","shutdown","nuke","wipe","cleardb",
-  // scraping / data-harvesting
-  "scrapegroup","scrape","getvcf","vcf","listghost","listactive",
-  // prank / crash / flooding
-  "crash","flood","prank","zalgo","crack",
-  // adult / explicit content
-  "nsfw","adult","hentai","explicit","rule34","xnxx","porn",
-]);
+// [removed] RISKY_CMDS / safe-mode blocklist deleted — nothing is blocked at dispatch.
 
 // ─────────────────────────────────────────────────────────────────────
 // ADULT VIDEO HELPER + per-chat picker store (.xxnx → numbered list → reply N)
@@ -6418,8 +6394,15 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
 //  COMMAND REGISTRY
 // ═══════════════════════════════════════════════════════════════════════════════
 const commands = new Map();
+const __cmdRegLog = { registered: 0, overwritten: [] };
 function cmd(names, opts, handler) {
-  for (const n of [].concat(names)) commands.set(n.toLowerCase(), { ...opts, handler });
+  for (const n of [].concat(names)) {
+    const _key = n.toLowerCase();
+    if (commands.has(_key)) { __cmdRegLog.overwritten.push(_key); console.log('[registry] overwrite: ' + _key + ' re-registered (earlier handler replaced)'); }
+    if (typeof handler !== 'function') console.log('[registry !!] ' + _key + ' registered WITHOUT a function handler — it can never reply');
+    commands.set(_key, { ...opts, handler });
+    __cmdRegLog.registered++;
+  }
 }
 
   cmd(["gpt4o","gpt-4o"], { desc: "Chat with GPT-4o", category: "AI" }, async (sock, msg, args) => {
@@ -7277,7 +7260,7 @@ const MENU_CATEGORIES = [
     "autobio","autoreact","autoview","autolike","antivo","antiviewoncetoggle","stealthvo",
     "bcheck","bancheck","setcmd","removecmd","listsetcmd",
     "inbox","viewentry","replyentry","delentry","clearinbox",
-    "mode","restart","broadcast","slowmode","safemode","ghostmode",
+    "mode","restart","broadcast","slowmode","ghostmode",
     "ban","unban","banuser","listban","checkban","isban","isbanned",
     "setsudo","delsudo","listsudo","autotyping","autorecording",
     "tostatus","togc","checkupdate","update","mygroups","newgroup2",
@@ -7286,8 +7269,7 @@ const MENU_CATEGORIES = [
     "logs","console","debug2",
     "buttonsmode","buttons","btnmode","button","buttonsui","btnmenu","btnlistmenu","buttonmenu",
     "menumode","menutoggle","togglemenu","switchmenu","smartmenu","plaintextmenu","textmenu","radiomenu","txmenu",
-    "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",
-    "safemode"] },
+    "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",] },
   { name: "REACTIONS", emoji: "💫", cmds: ["hug","kiss","pat","slap","wink","bonk","poke","yeet","blush","wave","smile","highfive","handhold","nom","bite","glomp","cringe","dance"] },
   { name: "RELIGION",  emoji: "📖", cmds: ["bible","quran","qur"] },
   { name: "RANDOM",    emoji: "🎲", cmds: ["koreangirl","japangirl","malaysiagirl","indonesiagirl","chinagirl","vietnamgirl","thaigirl","hijabgirl","randomgirl","pfp","boypic","randomcat2","randomdog2","randomcar","waifu2","loli2","bluearchive","tiktokgirl","randomsfw","randommoe","randomai"] },
@@ -7770,7 +7752,7 @@ function buildMenu(jid, senderName) {
   t += `└─────────────────────────\n\n`;
   t += `━━━━━「 🗂️ *CATEGORIES* 」━━━━━\n\n`;
   for (const cat of MENU_CATEGORIES) {
-    if (cat.adult && (!s.adultMode || s.safeMode)) continue;
+    if (cat.adult && !s.adultMode) continue;
     const count = [...new Set(cat.cmds)].length;
     t += `  ╰➤ ${cat.emoji} *${cat.name}*  ‹${count} cmds›\n`;
   }
@@ -22860,31 +22842,7 @@ cmd(["pmlist","showmenu","menulist"], { desc: "Re-display the last text menu for
   await sendReply(sock, msg, _out);
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SAFE MODE — hides all adult cmds + locks NSFW / strips adult settings
-// ═══════════════════════════════════════════════════════════════════════════════
-cmd("safemode", { desc: "Toggle safe mode (hide all 18+ commands)", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
-  const ownerJ = getOwnerJid();
-  const ownerS = getSettings(ownerJ);
-  const sub = (args[0] || "").toLowerCase();
-  if (sub === "on") ownerS.safeMode = true;
-  else if (sub === "off") ownerS.safeMode = false;
-  else ownerS.safeMode = !ownerS.safeMode;
-
-  if (ownerS.safeMode) {
-    ownerS.adultMode = false; ownerS.adultDl = false;
-    if (_goonState.timer) { clearInterval(_goonState.timer); _goonState.timer = null; }
-    _goonState.active = false;
-    const cs = getSettings(msg.key.remoteJid);
-    cs.adultMode = false; cs.adultDl = false; cs.safeMode = true;
-  } else {
-    const cs = getSettings(msg.key.remoteJid);
-    cs.safeMode = false;
-  }
-  try { saveNow && saveNow(); } catch {}
-  await sendReply(sock, msg,
-    `🛡️ *Safe Mode: ${ownerS.safeMode ? "✅ ON" : "❌ OFF"}*\n\n${ownerS.safeMode ? "All 18+ commands are now hidden and disabled." : "Adult commands are available again (still gated by adult mode)."}`);
-});
+// [removed] safemode command deleted — safe mode no longer exists in this bot.
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  TRUECALLER — number lookup (multi-API fallback)
@@ -42782,3 +42740,47 @@ try {
   console.log('[nsfw-pack] boot error:', (__nsfwErr && __nsfwErr.message) || __nsfwErr);
 }
 /* __NSFW_ADULT_PACK__ */
+
+/* ═══ TRUTHFUL COMMAND REGISTRY AUDIT — safe mode removed, logs tell the truth ═══ */
+function __miasRunCmdAudit() {
+  const r = { total: 0, adult: 0, missingHandlers: [], unregisteredMenuCmds: [], broken: [], overwritten: (typeof __cmdRegLog !== 'undefined' ? __cmdRegLog.overwritten.slice() : []) };
+  try {
+    r.total = commands.size;
+    for (const [n, e] of commands.entries()) {
+      if (e && e.adult) r.adult++;
+      if (!e || typeof e.handler !== 'function') r.missingHandlers.push(n);
+    }
+    if (typeof MENU_CATEGORIES !== 'undefined' && Array.isArray(MENU_CATEGORIES)) {
+      for (const cat of MENU_CATEGORIES) {
+        for (const n of (cat.cmds || [])) {
+          const k = String(n).toLowerCase();
+          if (!commands.has(k)) r.unregisteredMenuCmds.push(k);
+          else if (typeof commands.get(k).handler !== 'function') r.broken.push(k);
+        }
+      }
+    }
+  } catch (e) { console.log('[audit] error:', e?.message || e); }
+  globalThis.__MIAS_CMD_AUDIT__ = r;
+  const L = [];
+  L.push('======== COMMAND REGISTRY AUDIT (truth) ========');
+  L.push('registered: ' + r.total + ' | adult: ' + r.adult + ' | overwritten-during-load: ' + r.overwritten.length);
+  if (r.overwritten.length) L.push('WARN overwritten: ' + [...new Set(r.overwritten)].slice(0, 25).join(', '));
+  if (r.missingHandlers.length) L.push('FAIL no-handler (can never reply): ' + r.missingHandlers.join(', '));
+  if (r.unregisteredMenuCmds.length) L.push('FAIL in-menu-but-NOT-registered (silent when used): ' + r.unregisteredMenuCmds.join(', '));
+  if (r.broken.length) L.push('FAIL menu-cmd-without-handler: ' + r.broken.join(', '));
+  if (!r.missingHandlers.length && !r.unregisteredMenuCmds.length && !r.broken.length) L.push('PASS: every menu-listed command is registered with a working handler');
+  L.push('=================================================');
+  console.log(L.join('\n'));
+  return r;
+}
+__miasRunCmdAudit();
+cmd(['cmdaudit', 'audit', 'cmdcheck'], { desc: 'Truthful command registry audit', category: 'OWNER', ownerOnly: true }, async (sock, msg) => {
+  const r = __miasRunCmdAudit();
+  const out = ['*Command Registry Audit*', '',
+    '• Registered: *' + r.total + '*',
+    '• Adult: *' + r.adult + '*',
+    '• Overwritten during load: *' + r.overwritten.length + '*' + (r.overwritten.length ? '\n  ' + [...new Set(r.overwritten)].slice(0, 30).join(', ') : ''),
+    '• No handler (dead, can never reply): *' + r.missingHandlers.length + '*' + (r.missingHandlers.length ? '\n  ' + r.missingHandlers.slice(0, 30).join(', ') : ''),
+    '• In menu but NOT registered: *' + r.unregisteredMenuCmds.length + '*' + (r.unregisteredMenuCmds.length ? '\n  ' + r.unregisteredMenuCmds.slice(0, 30).join(', ') : '')];
+  await sendReply(sock, msg, out.join('\n'));
+});
