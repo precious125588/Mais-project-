@@ -137,6 +137,13 @@ export async function runStartupSelfTest(sessionPath, dbDir) {
     check("Database Dir",    () => checkDatabaseDir(_dbDir)),
     check("Memory Health",   () => checkMemoryHealth()),
     check("Environment",     () => checkEnvironment()),
+    check("Command Registry", () => {
+      const a = globalThis.__MIAS_CMD_AUDIT__;
+      if (!a) return { status: "WARNING", detail: "no command audit published — registry unverified" };
+      const bad = (a.missingHandlers?.length || 0) + (a.unregisteredMenuCmds?.length || 0) + (a.broken?.length || 0);
+      if (bad) return { status: "FAIL", detail: (a.missingHandlers?.length || 0) + " no-handler, " + (a.unregisteredMenuCmds?.length || 0) + " in-menu-but-unregistered: " + (a.unregisteredMenuCmds || []).slice(0, 8).join(", ") };
+      return { status: "PASS", detail: a.total + " commands registered, " + (a.adult || 0) + " adult, 0 dead" };
+    }),
   ];
 
   const fails    = results.filter(r => r.status === "FAIL");
