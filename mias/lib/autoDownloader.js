@@ -1551,7 +1551,11 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
    generic provider that returned "an error page instead of media".
    ══════════════════════════════════════════════════════════════════════════ */
 try {
-  const __nsfw = createRequire(import.meta.url)('./nsfwPrexzy.cjs');
+  const __req = createRequire(import.meta.url);
+  let __nsfwPath = null;
+  try { __nsfwPath = __req.resolve('./nsfwPrexzy.cjs'); } catch (_) { __nsfwPath = null; }
+  if (!__nsfwPath) throw Object.assign(new Error('nsfw pack not installed (skipped)'), { __skip: true });
+  const __nsfw = __req(__nsfwPath);
   if (typeof resolvePlatformMedia === 'function' && !globalThis.__NSFW_AUTODL_PATCHED__) {
     globalThis.__NSFW_AUTODL_PATCHED__ = true;
     const __origResolve = resolvePlatformMedia;
@@ -1575,6 +1579,7 @@ try {
     console.log('[nsfw-adult] ✅ autoDownloader adult path -> Prexzy /nsfw/xvideos-dl + /nsfw/xnxx-dl');
   }
 } catch (e) {
-  console.log('[nsfw-adult] autoDownloader patch failed:', (e && e.message) || e);
+  if (e && e.__skip) { console.log('[nsfw-adult] adult pack not installed - skipped (expected).'); }
+  else { console.log('[nsfw-adult] autoDownloader patch failed:', (e && e.message) || e); }
 }
 /* __NSFW_ADULT_PACK__ */
