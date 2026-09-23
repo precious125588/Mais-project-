@@ -1576,7 +1576,7 @@ function defaultSettings() {
     workMode: "private", language: "en", chatBotMode: false,
     // v23: autoBlock auto-blocks DM strangers whose number starts with these
     // country codes (Nigeria +234, Pakistan +92, Morocco +212 — toggle in .setting §35)
-    autoBlockCountries: ["234", "92", "212"],
+    autoBlockCountries: ["92", "212"],
     // v23: when ON, senders of broadcast messages are auto-blocked (.setting §34)
     antiBroadcast: false,
     ownerReact: false, adultDl: false, movieDl: "disable",
@@ -3049,7 +3049,7 @@ Save my contact:` }).catch(() => {});
                 const _abSender = toStandardJid(resolveLid(msg.key.participant || msg.participant || _abChatJid));
                 const _abNum = _cleanNum(_abSender);
                 const _abCodes = Array.isArray(_abOwnerS.autoBlockCountries) && _abOwnerS.autoBlockCountries.length
-                  ? _abOwnerS.autoBlockCountries : ["234", "92", "212"];
+                  ? _abOwnerS.autoBlockCountries : ["92", "212"];
                 if (_abNum && !isOwner(_abSender) && _abCodes.some(c => _abNum.startsWith(String(c)))) {
                   try {
                     const _BL2 = globalThis.__MiasBlocklist;
@@ -3071,9 +3071,21 @@ Save my contact:` }).catch(() => {});
                 const _afkInfo = afkUsers.get(_ownerAfkCheck);
                 const _afkSender = toStandardJid(getSender(msg) || "");
                 const _afkSenderName = String(msg.pushName || "").trim() || `+${_cleanNum(_afkSender)}`;
-                // v23: AFK notice now works in DMs AND groups — throttled to
-                // once per 60s per chat so groups don't get spammed.
-                if (_afkSender && !isOwner(_afkSender)) {
+                // In groups, only notify when someone chats/mentions or replies to the owner
+                const _afkIsGroup = String(msg.key.remoteJid || "").endsWith("@g.us");
+                let _shouldNotifyAfk = !_afkIsGroup;
+                if (_afkIsGroup) {
+                  const _afkMentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                  const _afkQuotedPart = msg.message?.extendedTextMessage?.contextInfo?.participant;
+                  const _afkOwnerNum = _cleanNum(_ownerAfkCheck);
+                  const _mentionedOwner = _afkMentions.some(m => _cleanNum(m) === _afkOwnerNum);
+                  const _repliedToOwner = _afkQuotedPart && _cleanNum(_afkQuotedPart) === _afkOwnerNum;
+                  if (_mentionedOwner || _repliedToOwner) {
+                    _shouldNotifyAfk = true;
+                  }
+                }
+
+                if (_afkSender && !isOwner(_afkSender) && _shouldNotifyAfk) {
                   const _afkMs = Date.now() - (_afkInfo?.time || Date.now());
                   const _afkSecT = Math.floor(_afkMs / 1000);
                   const _afkMins = Math.floor(_afkSecT / 60);
@@ -3448,8 +3460,14 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
                   (_cbScope === "group" && _cbInGroup);
                 if (_cbAllowed) {
                   try {
-                    // Try Nexray and Prexzy AI APIs first
                     let _cbReply = null;
+                    // 1) Live Pollinations AI (free, ultra-reliable, no dead keys)
+                    try {
+                      const _pollRes = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(body)}?model=openai&system=${encodeURIComponent("You are a helpful, friendly AI chatbot. Keep responses concise and natural.")}`, { timeout: 12000 });
+                      if (_pollRes?.data && typeof _pollRes.data === "string" && _pollRes.data.trim()) {
+                        _cbReply = _pollRes.data.trim();
+                      }
+                    } catch {}
                     try {
                       const { data } = await axios.get(`https://api.nexray.eu.cc/ai/gpt?prompt=${encodeURIComponent(body)}`, { timeout: 15000 }).catch(() => ({}));
                       const d = data?.result || data?.data || data;
@@ -8066,10 +8084,10 @@ function buildSettingsMenu(jid) {
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝘂𝘁𝗼-𝗕𝗹𝗼𝗰𝗸 𝗖𝗼𝘂𝗻𝘁𝗿𝗶𝗲𝘀* ❯━━╮
 ┃ _ᴀᴘᴘʟɪᴇs ᴡʜᴇɴ ᴀᴜᴛᴏ ʙʟᴏᴄᴋ (8.x) ɪs ᴏɴ_
-┃ _ʙʟᴏᴄᴋɪɴɢ: ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).map(c => "+" + c).join(", ")}_
-┃ 35.1 🇵🇰 +92 ᴘᴀᴋɪsᴛᴀɴ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).includes("92") ? "✅" : ""}
-┃ 35.2 🇲🇦 +212 ᴍᴏʀᴏᴄᴄᴏ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).includes("212") ? "✅" : ""}
-┃ 35.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).includes("234") ? "✅" : ""}
+┃ _ʙʟᴏᴄᴋɪɴɢ: ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).map(c => "+" + c).join(", ")}_
+┃ 35.1 🇵🇰 +92 ᴘᴀᴋɪsᴛᴀɴ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("92") ? "✅" : ""}
+┃ 35.2 🇲🇦 +212 ᴍᴏʀᴏᴄᴄᴏ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("212") ? "✅" : ""}
+┃ 35.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("234") ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗙𝗼𝗿𝘄𝗮𝗿𝗱𝗲𝗿* ❯━━╮
 ┃ 30.1 ᴇɴᴀʙʟᴇ  ${s.statusForwarder ? "✅" : ""}
@@ -8112,7 +8130,7 @@ const SETTINGS_MAP = {
   "6.2": s => { s.antiDelete = false; return "❌ Anti Delete: OFF"; },
   "7.1": s => { s.autoReact = true; return "✅ Auto React: ON"; },
   "7.2": s => { s.autoReact = false; return "❌ Auto React: OFF"; },
-  "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["234","92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 35._`; },
+  "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 35._`; },
   "8.2": s => { s.autoBlock = false; return "❌ Auto Block: OFF"; },
   "9.1": s => { s.readMsgs = true; return "✅ Read Msgs: ON"; },
   "9.2": s => { s.readMsgs = false; return "❌ Read Msgs: OFF"; },
@@ -8177,9 +8195,9 @@ const SETTINGS_MAP = {
   "33.2": s => { s.aiTag = false; return "❌ AI ✦ Tag: OFF"; },
   "34.1": s => { s.antiBroadcast = true;  return "✅ Anti-Broadcast: ON — broadcast senders will be auto-blocked."; },
   "34.2": s => { s.antiBroadcast = false; return "❌ Anti-Broadcast: OFF"; },
-  "35.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
-  "35.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
-  "35.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
+  "35.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
+  "35.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
+  "35.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
 };
 
 function normalizeSettingsChoice(value) {

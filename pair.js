@@ -744,7 +744,7 @@ function ensureDirectoryExists(dirPath) {
 // (this is why the site "counted for 60 seconds"). We now cache the result
 // for 6 hours, cap the lookup at 6 seconds, and fall back to a known-good
 // version instead of failing the whole pairing.
-const FALLBACK_WA_VERSION = [2, 3000, 1043857760];
+const FALLBACK_WA_VERSION = [2, 3000, 1015901307];
 let _waVersionCache = { version: null, at: 0 };
 const WA_VERSION_TTL = 6 * 60 * 60 * 1000;
 
@@ -1005,7 +1005,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: Browsers.ubuntu('Chrome'),
+        browser: ['Mac OS', 'Chrome', '121.0.6167.85'],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
