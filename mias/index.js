@@ -4068,8 +4068,13 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
               .replace(/\{name\}/gi, display).replace(/\{number\}/gi, num)
               .replace(/\{group\}/gi, groupName).replace(/\{members?\}/gi, String(memberCount));
             const _wCaption =
-              `__> @${num} welcome to *${groupName}*\n` +
-              `__> follow the rules and enjoy your stay ✅` +
+              `╭─❒ 「 🎴 *WELCOME* 」\n` +
+              `│ 👤 *${display}* (@${num})\n` +
+              `│ 🏰 *${groupName}*\n` +
+              `│ 👥 Member #${memberCount}\n` +
+              `╰──────────────❒\n\n` +
+              `✨ A new legend just entered *${groupName}*!\n` +
+              `📜 Read the rules, vibe with the crew & enjoy your stay 🔥` +
               (_wCustom ? `\n\n${_wCustom}` : "");
             let _wPp = null;
             try {
@@ -4096,7 +4101,7 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
               console.error("[WELCOME] Error sending welcome message:", e?.message);
             }
             if (s?.welcomeDM) {
-              const _dmT = String(s.welcomeDMMsg || `👋 Hey @{number}, welcome to *{group}*! Check the group description for rules.`)
+              const _dmT = String(s.welcomeDMMsg || `🎴 Yo @{number}! Welcome to *{group}* 🔥 Check the group description for the rules & enjoy the vibes!`)
                 .replace(/\{name\}/gi, display).replace(/\{number\}/gi, num).replace(/\{group\}/gi, groupName);
               try { await sock.sendMessage(pJid, { text: _dmT }); } catch {}
             }
@@ -4108,8 +4113,13 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
               .replace(/\{name\}/gi, display).replace(/\{number\}/gi, num)
               .replace(/\{group\}/gi, groupName).replace(/\{members?\}/gi, String(memberCount));
             const _gCaption =
-              `__> @${num} goodbye from *${groupName}*\n` +
-              `__> hope we'll never see you again 👋` +
+              `╭─❒ 「 🕊️ *GOODBYE* 」\n` +
+              `│ 👤 *${display}* (@${num})\n` +
+              `│ 🏰 *${groupName}*\n` +
+              `│ 👥 ${memberCount} members remain\n` +
+              `╰──────────────❒\n\n` +
+              `🌙 Another soul leaves the battlefield…\n` +
+              `_Farewell — may your next adventure be legendary_ ⚔️` +
               (_gCustom ? `\n\n${_gCustom}` : "");
             let _gPp = null;
             try {
@@ -32661,23 +32671,66 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
           const fgJ = j.clone().contain(side, side);
           bgJ.composite(fgJ, ((side - fgJ.getWidth()) / 2) | 0, ((side - fgJ.getHeight()) / 2) | 0);
           outBuf = await bgJ.quality(95).getBufferAsync(Jimp.MIME_JPEG);
-        } catch (_e2) { outBuf = buf; }
+        } catch (_e2) {
+          // FORCE: never hand WhatsApp the raw upload — it only accepts JPEG.
+          // If the blurred-canvas step failed, force-convert the original to
+          // a plain JPEG so the upload can still proceed.
+          try {
+            const Jimp2 = require("jimp");
+            const plain = await Jimp2.read(buf);
+            outBuf = await plain.quality(95).getBufferAsync(Jimp2.MIME_JPEG);
+          } catch (_e3) { outBuf = buf; }
+        }
       }
       if (!outBuf) outBuf = buf;
+      const me = sock.user?.id || sock.user?.jid || "";
       // Send DIRECTLY to WhatsApp — bypass the crop-resize shim so nothing
       // ever crops or downscales the composed image again.
-      await sock.query({
+      // FORCE-UPLOAD LADDER: WhatsApp answers non-JPEG / oversized / odd
+      // pictures with "not-acceptable" (406). Instead of giving up, retry
+      // with progressively smaller JPEGs, and as a last resort fall back to
+      // the normal (cropped) profile-picture path — a cropped DP beats no DP.
+      const __sendDp = async (pictureBuf) => sock.query({
         tag: "iq",
         attrs: { to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
-        content: [{ tag: "picture", attrs: { type: "image" }, content: outBuf }],
+        content: [{ tag: "picture", attrs: { type: "image" }, content: pictureBuf }],
       });
+      let __dpUploaded = false;
+      let __dpLastErr = null;
+      try { await __sendDp(outBuf); __dpUploaded = true; }
+      catch (e0) { __dpLastErr = e0; }
+      if (!__dpUploaded) {
+        try {
+          const Jimp = require("jimp");
+          const base = await Jimp.read(outBuf).catch(() => Jimp.read(buf));
+          for (const step of [{ side: 1080, q: 88 }, { side: 720, q: 82 }, { side: 480, q: 75 }]) {
+            if (__dpUploaded) break;
+            try {
+              const attempt = await base.clone().scaleToFit(step.side, step.side).quality(step.q).getBufferAsync(Jimp.MIME_JPEG);
+              await __sendDp(attempt);
+              outBuf = attempt;
+              __dpUploaded = true;
+            } catch (eStep) { __dpLastErr = eStep; }
+          }
+        } catch (eLadder) { __dpLastErr = eLadder; }
+      }
+      if (!__dpUploaded) {
+        // Final force: go through the resize shim (square-crop) so the
+        // picture uploads even when WhatsApp rejected the full-bleed version.
+        try {
+          const forced = await __miasResizeProfilePic(outBuf).catch(() => outBuf);
+          await sock.updateProfilePicture(me, forced);
+          outBuf = forced;
+          __dpUploaded = true;
+        } catch (eFinal) { throw (__dpLastErr || eFinal); }
+      }
       try {
         const target = _path.join(__dirname, "assets", "botpic1.jpg");
         _fs.mkdirSync(_path.dirname(target), { recursive: true });
         _fs.writeFileSync(target, outBuf);
       } catch {}
       await react(sock, msg, "✅");
-      await sendReply(sock, msg, `✅ *Full DP updated!*\n_Entire picture set — no cropping, original quality & aspect ratio preserved (square canvas + blurred fill)._`);
+      await sendReply(sock, msg, `✅ *Full DP updated!*\n_Entire picture set — no cropping, original quality & aspect ratio preserved (square canvas + blurred fill). If WhatsApp initially rejected it, the upload was forced through automatically._`);
     } catch (e) {
       await react(sock, msg, "❌");
       await sendReply(sock, msg, `❌ Full DP failed: ${e?.message || e}`);
