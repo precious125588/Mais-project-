@@ -311,7 +311,11 @@ const text = parsedCommand.text;
 const botNumber = await devtrust.decodeJid(devtrust.user.id)
 const _mSenderNumStrict = String(m.sender||'').split('@')[0].split(':')[0].replace(/[^0-9]/g,'');
 // LOCKED creator number — not env-overridable (see mias/index.js).
-const _creatorAllowlist = ['2349068551055'];
+const _creatorAllowlist = Array.from(new Set([
+  ...(Array.isArray(owner) ? owner : []),
+  String(process.env.OWNER_NUMBER || ''),
+  String(botNumber || ''),
+].map(v => String(v).split('@')[0].split(':')[0].replace(/[^0-9]/g, '')).filter(v => v.length >= 7)));
 const isCreator = !!_mSenderNumStrict && _creatorAllowlist.includes(_mSenderNumStrict);
 const isOwner = isCreator;
 const isPremium = [botNumber, ...Premium].map(v => v.replace(/[^0-9]/g, '') + '@s.whatsapp.net').includes(m.sender)
