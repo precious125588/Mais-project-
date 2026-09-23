@@ -2486,6 +2486,7 @@ async function connectToWA(force = false) {
     });
 
     sock.ev.on("messages.upsert", async (ev) => {
+      try { globalThis.__tkickSock = sock; } catch {}
       try {
         // ─── ⚡ v4.9.2 BIG-ACCOUNT SPEED PATCH ────────────────────────────
         //
@@ -3944,6 +3945,7 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
 
     // ── GROUP PARTICIPANTS UPDATE: welcome/goodbye/antidemote/antipromote/antiraid ──
     sock.ev.on("group-participants.update", async (event) => {
+      try { globalThis.__tkickSock = sock; } catch {}
       try {
         if (isBotPrivateModeActive()) return;
         const { id: gid, participants: rawParticipants, action } = event;
@@ -3985,81 +3987,52 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
 
           // ── Welcome ─────────────────────────────────────────────────────────
           if (action === "add" && s?.welcome) {
-            const template = s.welcomeCustomMsg ||
-              `👋 Welcome to *{group}*, @{number}! 🎉\nWe're glad you're here.`;
-            const text = template
-              .replace(/\{name\}/gi, display)
-              .replace(/\{number\}/gi, num)
-              .replace(/\{group\}/gi, groupName)
-              .replace(/\{members?\}/gi, String(memberCount))
-              .replace(/\{size\}/gi, String(memberCount));
-            // Auto-include group name, mention, member size and the new member's profile picture
-            const fullCaption =
-              `╭━━━〔 👋 *WELCOME* 〕━━━┈⊷\n` +
-              `┃ 🏷️ *Group:* ${groupName}\n` +
-              `┃ 👤 *Member:* @${num}\n` +
-              `┃ 👥 *Total Members:* ${memberCount}\n` +
-              `╰━━━━━━━━━━━━━━━━┈⊷\n\n` +
-              `${text}\n\n` +
-              ``;
-            let ppBuf = null;
+            const _wCustom = String(s.welcomeCustomMsg || "").trim()
+              .replace(/\{name\}/gi, display).replace(/\{number\}/gi, num)
+              .replace(/\{group\}/gi, groupName).replace(/\{members?\}/gi, String(memberCount));
+            const _wCaption =
+              `__> @${num} welcome to *${groupName}*\n` +
+              `__> follow the rules and enjoy your stay ✅` +
+              (_wCustom ? `\n\n${_wCustom}` : "");
+            let _wPp = null;
             try {
-              const ppUrl = await sock.profilePictureUrl(pJid, "image");
-              if (ppUrl) {
-                const r = await axios.get(ppUrl, { responseType: "arraybuffer", timeout: 10000 });
-                if (r?.data && r.data.length > 200) ppBuf = Buffer.from(r.data);
-              }
+              const _wUrl = await sock.profilePictureUrl(pJid, "image");
+              if (_wUrl) { const _wr = await axios.get(_wUrl, { responseType: "arraybuffer", timeout: 10000 }); if (_wr?.data && _wr.data.length > 200) _wPp = Buffer.from(_wr.data); }
             } catch {}
+            let _wCard = _wPp;
+            try { if (typeof globalThis._passportCard === "function") _wCard = await globalThis._passportCard(_wPp, "WELCOME"); } catch {}
+            const _wQt = { key: { remoteJid: gid, fromMe: false, id: "WELC" + Date.now().toString(36), participant: pJid }, message: { conversation: "🆕 new member" } };
             try {
-              if (ppBuf) {
-                await sock.sendMessage(gid, { image: ppBuf, caption: fullCaption, mentions: [pJid] });
-              } else {
-                await sock.sendMessage(gid, { text: fullCaption, mentions: [pJid] });
-              }
+              if (_wCard) await sock.sendMessage(gid, { image: _wCard, caption: _wCaption, mentions: [pJid] }, { quoted: _wQt });
+              else await sock.sendMessage(gid, { text: _wCaption, mentions: [pJid] }, { quoted: _wQt });
             } catch {}
             if (s?.welcomeDM) {
-              const dmTemplate = s.welcomeDMMsg ||
-                `👋 Hey @{number}, welcome to *{group}*! Check the group description for rules.`;
-              const dmText = dmTemplate
-                .replace(/\{name\}/gi, display)
-                .replace(/\{number\}/gi, num)
-                .replace(/\{group\}/gi, groupName);
-              try { await sock.sendMessage(pJid, { text: dmText + "" }); } catch {}
+              const _dmT = String(s.welcomeDMMsg || `👋 Hey @{number}, welcome to *{group}*! Check the group description for rules.`)
+                .replace(/\{name\}/gi, display).replace(/\{number\}/gi, num).replace(/\{group\}/gi, groupName);
+              try { await sock.sendMessage(pJid, { text: _dmT }); } catch {}
             }
           }
 
           // ── Goodbye ─────────────────────────────────────────────────────────
           if (action === "remove" && s?.goodbye) {
-            const template = s.goodbyeCustomMsg ||
-              `👋 *{group}* says goodbye to @{number}. Take care!`;
-            const text = template
-              .replace(/\{name\}/gi, display)
-              .replace(/\{number\}/gi, num)
-              .replace(/\{group\}/gi, groupName)
-              .replace(/\{members?\}/gi, String(memberCount))
-              .replace(/\{size\}/gi, String(memberCount));
-            const fullCaption =
-              `╭━━━〔 👋 *GOODBYE* 〕━━━┈⊷\n` +
-              `┃ 🏷️ *Group:* ${groupName}\n` +
-              `┃ 👤 *Member:* @${num}\n` +
-              `┃ 👥 *Members Left:* ${memberCount}\n` +
-              `╰━━━━━━━━━━━━━━━━┈⊷\n\n` +
-              `${text}\n\n` +
-              ``;
-            let ppBuf = null;
+            const _gCustom = String(s.goodbyeCustomMsg || "").trim()
+              .replace(/\{name\}/gi, display).replace(/\{number\}/gi, num)
+              .replace(/\{group\}/gi, groupName).replace(/\{members?\}/gi, String(memberCount));
+            const _gCaption =
+              `__> @${num} goodbye from *${groupName}*\n` +
+              `__> hope we'll never see you again 👋` +
+              (_gCustom ? `\n\n${_gCustom}` : "");
+            let _gPp = null;
             try {
-              const ppUrl = await sock.profilePictureUrl(pJid, "image");
-              if (ppUrl) {
-                const r = await axios.get(ppUrl, { responseType: "arraybuffer", timeout: 10000 });
-                if (r?.data && r.data.length > 200) ppBuf = Buffer.from(r.data);
-              }
+              const _gUrl = await sock.profilePictureUrl(pJid, "image");
+              if (_gUrl) { const _gr = await axios.get(_gUrl, { responseType: "arraybuffer", timeout: 10000 }); if (_gr?.data && _gr.data.length > 200) _gPp = Buffer.from(_gr.data); }
             } catch {}
+            let _gCard = _gPp;
+            try { if (typeof globalThis._passportCard === "function") _gCard = await globalThis._passportCard(_gPp, "GOODBYE"); } catch {}
+            const _gQt = { key: { remoteJid: gid, fromMe: false, id: "GBYE" + Date.now().toString(36), participant: pJid }, message: { conversation: "👋 left" } };
             try {
-              if (ppBuf) {
-                await sock.sendMessage(gid, { image: ppBuf, caption: fullCaption, mentions: [pJid] });
-              } else {
-                await sock.sendMessage(gid, { text: fullCaption, mentions: [pJid] });
-              }
+              if (_gCard) await sock.sendMessage(gid, { image: _gCard, caption: _gCaption, mentions: [pJid] }, { quoted: _gQt });
+              else await sock.sendMessage(gid, { text: _gCaption, mentions: [pJid] }, { quoted: _gQt });
             } catch {}
           }
 
@@ -4419,8 +4392,10 @@ const isOwner = jid => {
   const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
   const ownerJid = (CONFIG.OWNER_JID || "").toLowerCase();
   if (ownerJid && (raw.toLowerCase() === ownerJid || resolved.toLowerCase() === ownerJid)) return true;
-  if (ownerNum && _cleanNum(resolved) === ownerNum) return true;
-  if (_botJid && _cleanNum(resolved) === _cleanNum(_botJid)) return true;
+  const _ownResolvedNum = _cleanNum(resolved);
+  if (ownerNum && _ownResolvedNum && _ownResolvedNum === ownerNum) return true;
+  const _ownBotNum = _cleanNum(_botJid || "");
+  if (_botJid && _ownResolvedNum && _ownBotNum && _ownResolvedNum === _ownBotNum) return true;
   if (_ownerLidJid && (raw === _ownerLidJid || resolved === _ownerLidJid)) return true;
   return false;
 };
@@ -16111,6 +16086,7 @@ Example: ${CONFIG.PREFIX}tkick @user 5`);
       await sock.groupParticipantsUpdate(jid, [target], "remove");
       await sendReply(sock, msg, `⏱️ *Temp-Kicked @${target.split("@")[0]}*
 They will be re-added in *${minutes} minute(s)*.`, [target]);
+      try { globalThis.__tkickSock = sock; if (globalThis._tkickPersistAdd) globalThis._tkickPersistAdd(jid, target, Date.now() + seconds * 1000); } catch {}
       setTimeout(async () => {
         let _readded = false;
         // Try up to 3 times with a short delay between attempts
@@ -33543,6 +33519,7 @@ const variants = realLastMsgs
         if (!sock || sock.__miasMentionOn) return;
         sock.__miasMentionOn = true;
         sock.ev.on("messages.upsert", async (ev) => {
+      try { globalThis.__tkickSock = sock; } catch {}
           try {
             if (ev.type && ev.type !== "notify") return;
             for (const m of (ev.messages || [])) {
@@ -38933,7 +38910,7 @@ try {
                         "playvid", "playvideo", "vidplay", "play!", "musicpick",
                         "songpick", "play2!", "playdocpick", "songdocpick"];
 
-    const _PLAY_PROGRESS_RE = /MIAS\s+MDX\s+Player|🎵\s*\*/i;
+    const _PLAY_PROGRESS_RE = /MIAS\s+MDX\s+Player|🔍\s*Searching|⏳\s*Downloading/i;
 
     // Build the patched play wrapper
     const _wrapPlayHandler = (origHandler) => async (sock, msg, args) => {
@@ -41243,6 +41220,7 @@ try {
       if (_JX_BOUND.has(sock)) return;
       _JX_BOUND.add(sock);
       sock.ev.on("messages.upsert", async function (evt) {
+      try { globalThis.__tkickSock = sock; } catch {}
         if (!evt || evt.type !== "notify") return;
         for (const m of (evt.messages || [])) {
           try { await _JXOnMsg(sock, m); } catch (e) {}
@@ -43011,3 +42989,307 @@ try {
   console.log('[reliable-dl] init failed:', e && e.message);
 }
 /* RELIABLE_DL_FINAL_END */
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PRECIOUS MASTER FIX — 2026-09-23
+//  Fixes: convert cmd menu (dispatcher), play card visibility, owner detection
+//  (case.js), persistent tkick (kick+re-add with exact duration, survives
+//  restart), rate-limit-safe bulk .add, renamegc/setgroupname/setgroupdesc,
+//  new setgcpp, rebuilt welcome/goodbye (passport DP card + quote member),
+//  removed permanent setwelcomemsg/setgoodbyemsg persistence, aza passport pic.
+// ═══════════════════════════════════════════════════════════════════════════════
+try {
+
+// ── passport-size DP card helper (shared by welcome/goodbye/aza) ─────────────
+globalThis._passportCard = async function _passportCard(ppBuf, label, title, sub) {
+  const Jimp = require("jimp");
+  const W = 640, H = 300, PAD = 18;
+  const base = new Jimp(W, H, 0x171a21ff);
+  const bar = new Jimp(W, 58, 0x2f80edff);
+  base.composite(bar, 0, 0);
+  const inner = new Jimp(W - PAD * 2, H - 58 - PAD - 10, 0x232936ff);
+  base.composite(inner, PAD, 58 + 8);
+  const avatar = ppBuf ? await Jimp.read(ppBuf) : new Jimp(150, 150, 0x4b5563ff);
+  avatar.cover(150, 150).circle();
+  const ring = new Jimp(160, 160, 0x2f80edff).circle();
+  base.composite(ring, PAD + 12, 58 + 22);
+  base.composite(avatar, PAD + 17, 58 + 27);
+  const fontW = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  const fontT = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
+  const fontD = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  base.print(fontW, 18, 18, { text: String(label || ""), alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT }, W - 36, 30);
+  base.print(fontT, PAD + 190, 58 + 40, String(title || "").slice(0, 30));
+  base.print(fontD, PAD + 190, 58 + 88, { text: String(sub || ""), alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT }, W - PAD - 200, 110);
+  return await base.quality(88).getBufferAsync(Jimp.MIME_JPEG);
+};
+
+// ── convert dispatcher (the whole convert menu silently did nothing) ─────────
+// Uses the native fetch/download helpers already defined above in this file.
+const _cmfGrabMedia = async (sock, msg) => {
+  const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  let node = q || msg.message;
+  node = node?.ephemeralMessage?.message || node?.viewOnceMessage?.message
+    || node?.viewOnceMessageV2?.message || node?.documentWithCaptionMessage?.message || node;
+  const img = node?.imageMessage, vid = node?.videoMessage, aud = node?.audioMessage, stk = node?.stickerMessage;
+  const kind = img ? "image" : vid ? "video" : aud ? "audio" : stk ? "sticker" : null;
+  if (!kind) return { kind: null, buf: null };
+  const stream = await downloadContentFromMessage(node[kind + "Message"] || node[kind] || (kind === "image" ? img : kind === "video" ? vid : kind === "audio" ? aud : stk), kind);
+  let buf = Buffer.from([]);
+  for await (const c of stream) buf = Buffer.concat([buf, c]);
+  return { kind, buf };
+};
+const _cmfFfmpeg = async (inputBuf, inExt, outExt, args) => {
+  const { execFile } = require("child_process");
+  let ff = "ffmpeg";
+  try { const p = require("ffmpeg-static"); if (p && typeof p === "string") ff = p; } catch {}
+  const os = require("os"), path = require("path"), fs = require("fs");
+  const inp = path.join(os.tmpdir(), "cmf_" + Date.now() + "." + inExt);
+  const out = path.join(os.tmpdir(), "cmf_" + Date.now() + "." + outExt);
+  fs.writeFileSync(inp, inputBuf);
+  await new Promise((res, rej) => execFile(ff, ["-y", "-i", inp, ...args, out], { timeout: 120000 }, e => e ? rej(e) : res()));
+  const buf = fs.readFileSync(out);
+  try { fs.unlinkSync(inp); fs.unlinkSync(out); } catch {}
+  return buf;
+};
+
+cmd(["sticker", "s"], { desc: "Image/video → sticker", category: "MEDIA" }, async (sock, msg) => {
+  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+  if (!buf || !["image", "video"].includes(kind)) { await sendReply(sock, msg, `🖼️ Reply to an *image or short video* with ${CONFIG.PREFIX}sticker`); return; }
+  try { await sock.sendMessage(msg.key.remoteJid, { sticker: buf }, { quoted: msg }); }
+  catch (e) { await sendReply(sock, msg, `❌ Sticker failed: ${e?.message || e}`); }
+});
+cmd(["toimg", "toimage"], { desc: "Sticker → image", category: "MEDIA" }, async (sock, msg) => {
+  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+  if (!buf || kind !== "sticker") { await sendReply(sock, msg, `🖼️ Reply to a *sticker* with ${CONFIG.PREFIX}toimg`); return; }
+  try {
+    let out = buf;
+    if (String((await _cmfGrabMedia(sock, msg)).kind) === "sticker") { try { out = await _cmfFfmpeg(buf, "webp", "png", ["-frames:v", "1"]); } catch {} }
+    await sock.sendMessage(msg.key.remoteJid, { image: out }, { quoted: msg });
+  } catch (e) { await sendReply(sock, msg, `❌ toimg failed: ${e?.message || e}`); }
+});
+cmd(["tomp3", "toaudio"], { desc: "Video/audio → MP3", category: "MEDIA" }, async (sock, msg) => {
+  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+  if (!buf || !["video", "audio"].includes(kind)) { await sendReply(sock, msg, `🎵 Reply to a *video/audio* with ${CONFIG.PREFIX}tomp3`); return; }
+  try {
+    const mp3 = await _cmfFfmpeg(buf, kind === "video" ? "mp4" : "ogg", "mp3", ["-vn", "-ab", "128k"]);
+    await sock.sendMessage(msg.key.remoteJid, { audio: mp3, mimetype: "audio/mpeg" }, { quoted: msg });
+  } catch (e) { await sendReply(sock, msg, `❌ tomp3 failed: ${e?.message || e}`); }
+});
+cmd(["tovideo", "tomp4"], { desc: "Sticker/GIF → video", category: "MEDIA" }, async (sock, msg) => {
+  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+  if (!buf || kind !== "sticker") { await sendReply(sock, msg, `🎬 Reply to an *animated sticker* with ${CONFIG.PREFIX}tovideo`); return; }
+  try {
+    const mp4 = await _cmfFfmpeg(buf, "webp", "mp4", ["-t", "6", "-pix_fmt", "yuv420p"]);
+    await sock.sendMessage(msg.key.remoteJid, { video: mp4, mimetype: "video/mp4" }, { quoted: msg });
+  } catch (e) { await sendReply(sock, msg, `❌ tovideo failed: ${e?.message || e}`); }
+});
+cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }, async (sock, msg) => {
+  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+  if (!buf || !["video", "audio"].includes(kind)) { await sendReply(sock, msg, `🎤 Reply to an *audio/video* with ${CONFIG.PREFIX}tovn`); return; }
+  try {
+    const ogg = await _cmfFfmpeg(buf, kind === "video" ? "mp4" : "ogg", "ogg", ["-vn", "-c:a", "libopus"]);
+    await sock.sendMessage(msg.key.remoteJid, { audio: ogg, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
+  } catch (e) { await sendReply(sock, msg, `❌ tovn failed: ${e?.message || e}`); }
+});
+cmd(["tourl", "litterbox"], { desc: "Media → URL (catbox)", category: "MEDIA" }, async (sock, msg) => {
+  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+  if (!buf) { await sendReply(sock, msg, `🔗 Reply to *any media* with ${CONFIG.PREFIX}tourl`); return; }
+  try {
+    const FormData = require("form-data");
+    const form = new FormData();
+    form.append("reqtype", "fileupload");
+    form.append("fileToUpload", buf, { filename: "file." + (kind === "image" ? "jpg" : kind === "video" ? "mp4" : kind === "audio" ? "mp3" : "webp") });
+    const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 60000 });
+    await sendReply(sock, msg, `🔗 *Uploaded:*\n${String(data).trim()}`);
+  } catch (e) { await sendReply(sock, msg, `❌ Upload failed: ${e?.message || e}`); }
+});
+
+// ── PLAY fix: register the player-card handler LAST so no wrapper can win ────
+try {
+  const _cardHandler = (typeof _p2ResolveCardRegistrar === "function") ? _p2ResolveCardRegistrar() : null;
+  if (_cardHandler) {
+    for (const n of ["play", "music", "song"]) {
+      const e = commands.get(n) || { desc: "Play song — pick a format from the card", category: "DOWNLOAD" };
+      e.handler = _cardHandler; e._origHandler = _cardHandler;
+      commands.set(n, e);
+    }
+  }
+} catch (e) { console.log("[fix] play re-register:", e?.message); }
+
+// ── persistent TKICK (kick now, re-add after the exact duration, survives restart) ──
+const _TKICK_PATH = require("path").join(process.cwd(), "nexstore", "tkick_store.json");
+let _tkickStore = [];
+try { _tkickStore = JSON.parse(require("fs").readFileSync(_TKICK_PATH, "utf8")); } catch { _tkickStore = []; }
+const _tkickSave = () => { try { require("fs").writeFileSync(_TKICK_PATH, JSON.stringify(_tkickStore, null, 2)); } catch {} };
+globalThis._tkickPersistAdd = (gid, target, readdAt) => {
+  _tkickStore.push({ gid, target, readdAt });
+  _tkickSave();
+};
+const _tkickRecover = async (sock) => {
+  if (!sock) return;
+  const now = Date.now();
+  const keep = [];
+  for (const e of _tkickStore) {
+    if (!e || !e.gid || !e.target) continue;
+    if (e.readdAt <= now) {
+      let ok = false;
+      for (let i = 0; i < 3 && !ok; i++) { try { await sock.groupParticipantsUpdate(e.gid, [e.target], "add"); ok = true; } catch { await new Promise(r => setTimeout(r, 3000)); } }
+      try { if (ok) await sock.sendMessage(e.gid, { text: `✅ @${e.target.split("@")[0]} has been re-added after the temp-kick.`, mentions: [e.target] }); } catch {}
+    } else keep.push(e);
+  }
+  _tkickStore = keep;
+  _tkickSave();
+};
+if (!globalThis.__tkickScanner) {
+  globalThis.__tkickScanner = true;
+  setInterval(() => { try { const s = globalThis.__tkickSock || globalThis.sock; if (s) _tkickRecover(s); } catch {} }, 30000);
+  setTimeout(() => { try { const s = globalThis.__tkickSock || globalThis.sock; if (s) _tkickRecover(s); } catch {} }, 12000);
+}
+
+cmd(["tkick", "tempkick", "tk"], { desc: "Temporarily kick a member, auto re-add after the set time", category: "GROUP", adminOnly: true, groupOnly: true }, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  try { globalThis.__tkickSock = sock; } catch {}
+  const meta = await sock.groupMetadata(jid).catch(() => null);
+  if (!meta) { await sendReply(sock, msg, "❌ Could not load group info."); return; }
+  const me = _cleanNum(sock.user?.id || _botJid || "");
+  const botP = meta.participants.find(p => _cleanNum(p.id) === me || _cleanNum(p.phoneNumber || "") === me);
+  if (!(botP && botP.admin)) { await sendReply(sock, msg, "❌ I need to be a *group admin* to temp-kick."); return; }
+  const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+  const replied = msg.message?.extendedTextMessage?.contextInfo?.participant;
+  const rawTarget = mentioned[0] || replied || args.find(a => a.replace(/\D/g, "").length >= 7);
+  if (!rawTarget) { await sendReply(sock, msg, `❌ Tag/reply to someone.\nUsage: ${CONFIG.PREFIX}tkick @user 5  (minutes) or 30s / 2h`); return; }
+  const target = rawTarget.includes("@") ? rawTarget : rawTarget.replace(/\D/g, "") + "@s.whatsapp.net";
+  let secs = 60;
+  const durArg = args.find(a => /^\d+[smh]?$/i.test(a.trim()));
+  if (durArg) { const m = durArg.match(/^(\d+)([smh]?)$/i); const v = parseInt(m[1]); const u = (m[2] || "m").toLowerCase(); secs = u === "s" ? v : u === "h" ? v * 3600 : v * 60; }
+  secs = Math.max(5, Math.min(secs, 604800)); // 5s .. 7d
+  await react(sock, msg, "⏱️");
+  await sock.groupParticipantsUpdate(jid, [target], "remove");
+  globalThis._tkickPersistAdd(jid, target, Date.now() + secs * 1000);
+  const label = secs % 3600 === 0 ? `${secs / 3600} hour(s)` : secs % 60 === 0 ? `${secs / 60} minute(s)` : `${secs} second(s)`;
+  await sendReply(sock, msg, `⏱️ *Temp-Kicked @${target.split("@")[0]}*\nRe-adding in *${label}* (survives bot restarts).`, [target]);
+});
+
+// ── rate-limit-safe bulk ADD (adds one by one, queues on 429, hundreds OK) ────
+cmd("add", { desc: "Add member(s) — .add num1,num2,... (hundreds supported)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+  if (!requireGroup(msg)) { await sendReply(sock, msg, "❌ Group only."); return; }
+  const gJid = msg.key.remoteJid;
+  const numbers = args.join(" ").split(/[,\s]+/).map(n => n.replace(/\D/g, "")).filter(n => n.length >= 7);
+  if (!numbers.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}add 2349001234567,2348001234567`); return; }
+  const statusMsg = await sock.sendMessage(gJid, { text: `➕ *Add Queue*\n\n⬡ Queued ${numbers.length} number(s). Adding one by one…` }, { quoted: msg });
+  const key = statusMsg.key;
+  let ok = 0, done = 0;
+  const lines = [];
+  for (const num of numbers) {
+    const jid = num + "@s.whatsapp.net";
+    let okThis = false, msgNote = "";
+    for (let attempt = 0; attempt < 4 && !okThis; attempt++) {
+      try { await sock.groupParticipantsUpdate(gJid, [jid], "add"); okThis = true; }
+      catch (e) {
+        const s = e?.status || e?.output?.statusCode || 0;
+        const m = String(e?.message || "");
+        if (s === 429 || /rate|limit|too many/i.test(m)) { msgNote = "rate-limited, queued"; await new Promise(r => setTimeout(r, 5000 * (attempt + 1))); }
+        else if (s === 403 || /privacy|invite/i.test(m)) { msgNote = "privacy — needs invite"; break; }
+        else if (s === 404 || /not.*whatsapp/i.test(m)) { msgNote = "not on WhatsApp"; break; }
+        else if (s === 409 || /conflict|already/i.test(m)) { msgNote = "already in group"; okThis = true; break; }
+        else { msgNote = m.slice(0, 40) || "failed"; break; }
+      }
+    }
+    done++;
+    if (okThis) { ok++; lines.push(`✅ +${num}`); } else { lines.push(`❌ +${num}: ${msgNote}`); }
+    if (done % 10 === 0 || done === numbers.length) {
+      try { await editMessage(sock, gJid, key, `➕ *Add Queue*\n\n${lines.slice(-15).join("\n")}${lines.length > 15 ? `\n…(${lines.length - 15} more)` : ""}\n\n${done}/${numbers.length} processed • ${ok} added`); } catch {}
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  try { await editMessage(sock, gJid, key, `➕ *Add Complete*\n\n✅ Added: ${ok}\n❌ Failed: ${numbers.length - ok}\n📊 Total: ${numbers.length}`); } catch {}
+});
+
+// ── group name / description / picture (these existed in the menu but had no handlers) ──
+const _fixGcName = async (sock, msg, args) => {
+  if (!requireGroup(msg)) return;
+  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}renamegc <new name>`); return; }
+  try { await sock.groupUpdateSubject(msg.key.remoteJid, args.join(" ").slice(0, 100)); await sendReply(sock, msg, `✅ *Group name updated to:* ${args.join(" ").slice(0, 100)}`); }
+  catch (e) { await sendReply(sock, msg, `❌ Failed (bot needs admin): ${e?.message || e}`); }
+};
+const _fixGcDesc = async (sock, msg, args) => {
+  if (!requireGroup(msg)) return;
+  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}setgroupdesc <new description>`); return; }
+  try { await sock.groupUpdateDescription(msg.key.remoteJid, args.join(" ").slice(0, 512)); await sendReply(sock, msg, `✅ *Group description updated.*`); }
+  catch (e) { await sendReply(sock, msg, `❌ Failed (bot needs admin): ${e?.message || e}`); }
+};
+const _fixGcPp = async (sock, msg, args) => {
+  if (!requireGroup(msg)) return;
+  const gJid = msg.key.remoteJid;
+  let buf = null;
+  const url = args.find(a => /^https?:\/\//i.test(a));
+  if (url) { try { buf = Buffer.from((await axios.get(url, { responseType: "arraybuffer", timeout: 20000 })).data); } catch {} }
+  if (!buf) { const { kind, buf: b } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null })); if (kind === "image" && b) buf = b; }
+  if (!buf) { await sendReply(sock, msg, `🖼️ *Set group DP*\n• Quote/reply to an *image* with ${CONFIG.PREFIX}setgcpp\n• or ${CONFIG.PREFIX}setgcpp <image URL>`); return; }
+  try {
+    let sq = buf;
+    try { const Jimp = require("jimp"); sq = await (await Jimp.read(buf)).cover(640, 640).quality(90).getBufferAsync(Jimp.MIME_JPEG); } catch {}
+    if (sock.updateProfilePicture) await sock.updateProfilePicture(gJid, sq);
+    else await sock.query({ tag: "iq", attrs: { to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" }, content: [{ tag: "picture", attrs: { jid: gJid, type: "image" }, content: sq }] });
+    await sendReply(sock, msg, `✅ *Group profile picture updated!*`);
+  } catch (e) { await sendReply(sock, msg, `❌ Failed (bot needs admin): ${e?.message || e}`); }
+};
+for (const n of ["renamegc", "setgcname", "setgroupname"]) { const e = commands.get(n) || { category: "GROUP" }; e.desc = "Rename the group"; e.ownerOnly = true; e.handler = _fixGcName; e._origHandler = _fixGcName; commands.set(n, e); }
+for (const n of ["setgcdesc", "setgroupdesc", "setgroupdescription"]) { const e = commands.get(n) || { category: "GROUP" }; e.desc = "Set the group description"; e.ownerOnly = true; e.handler = _fixGcDesc; e._origHandler = _fixGcDesc; commands.set(n, e); }
+for (const n of ["setgcpp", "setgcpic", "setgrouppic", "setgppic", "gcpic"]) { const e = commands.get(n) || { category: "GROUP" }; e.desc = "Set the group profile picture (quote image or URL)"; e.ownerOnly = true; e.handler = _fixGcPp; e._origHandler = _fixGcPp; commands.set(n, e); }
+
+// ── welcome/goodbye toggles: NO permanent custom-message save (words must not stick) ──
+cmd(["welcome"], { desc: "Toggle welcome messages on/off", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
+  if (!requireGroup(msg)) return;
+  const s = getSettings(msg.key.remoteJid);
+  s.welcome = !s.welcome; if (!s.welcome) s.welcomeCustomMsg = "";
+  saveNow();
+  await sendReply(sock, msg, `👋 Welcome messages: ${s.welcome ? "✅ ON" : "❌ OFF"}`);
+});
+cmd(["goodbye"], { desc: "Toggle goodbye messages on/off", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
+  if (!requireGroup(msg)) return;
+  const s = getSettings(msg.key.remoteJid);
+  s.goodbye = !s.goodbye; if (!s.goodbye) s.goodbyeCustomMsg = "";
+  saveNow();
+  await sendReply(sock, msg, `👋 Goodbye messages: ${s.goodbye ? "✅ ON" : "❌ OFF"}`);
+});
+// neutralise the old permanent setters so nothing stays stuck in the DB
+for (const dead of ["setwelcomemsg", "setgoodbyemsg"]) {
+  const e = commands.get(dead);
+  if (e) { e.handler = async (sock, msg) => { await sendReply(sock, msg, `ℹ️ ${CONFIG.PREFIX}${dead} was removed. Use ${CONFIG.PREFIX}welcome / ${CONFIG.PREFIX}goodbye to toggle.`); }; commands.set(dead, e); }
+}
+
+// ── AZA: payment info + passport-style picture card ──
+cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (sock, msg) => {
+  if (!_azaStore.bank || !_azaStore.number) {
+    await sendReply(sock, msg, `💳 *No payment account set*\n\nOwner: ${CONFIG.PREFIX}setaza Bank | Number | Name`);
+    return;
+  }
+  const caption = `💳 *PAYMENT INFO*\n\n🏦 *Bank:* ${_azaStore.bank}\n🔢 *Account:* \`${_azaStore.number}\`\n👤 *Name:* ${_azaStore.name}\n\n📋 _Tap the number to copy_`;
+  if (_azaStore.picUrl) {
+    try {
+      const raw = Buffer.from((await axios.get(_azaStore.picUrl, { responseType: "arraybuffer", timeout: 15000 })).data);
+      let card = raw;
+      try { card = await globalThis._passportCard(raw, "PAYMENT INFO", _azaStore.bank, `Acc: ${_azaStore.number}\nName: ${_azaStore.name}`); } catch {}
+      await sock.sendMessage(msg.key.remoteJid, { image: card, caption }, { quoted: msg });
+      return;
+    } catch {}
+  }
+  await sendReply(sock, msg, caption);
+});
+cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+  const parts = args.join(" ").split("|").map(v => v.trim()).filter(Boolean);
+  if (parts.length < 3) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank | Number | Name*`); return; }
+  _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2];
+  await sendReply(sock, msg, `✅ *Saved:* ${_azaStore.bank} • ${_azaStore.number} • ${_azaStore.name}`);
+});
+cmd(["setazapic"], { desc: "Set the .aza card picture (URL)", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+  if (!args[0] || !/^https?:\/\//.test(args[0])) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*`); return; }
+  _azaStore.picUrl = args[0];
+  await sendReply(sock, msg, `✅ Aza picture set.`);
+});
+
+console.log("[PRECIOUS-MASTER-FIX] convert menu, play visibility, tkick persistence, add queue, renamegc/desc/setgcpp, welcome/goodbye passport, aza pic — all loaded.");
+
+} catch (e) { console.log("[PRECIOUS-MASTER-FIX] load error:", e?.message || e); }
+
