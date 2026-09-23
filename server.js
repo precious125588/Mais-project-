@@ -30,7 +30,7 @@ try {
     'precious-fixes-v27.cjs', 'precious-fixes-v28.cjs', 'precious-fixes-v29.cjs',
     'mias/index.js', 'mias/precious-fixes-v20.cjs', 'mias/precious-fixes-v21.cjs',
     'mias/precious-fixes-v24.cjs', 'mias/precious-gst-picker.cjs',
-    'mias/precious-tt-quote-fix.cjs', 'mias/precious-anime-edits.cjs',
+    'mias/precious-anime-edits.cjs', // tt-quote-fix module is not in this repo (optional)
     'patches/precious-fixes-v23-rc.cjs',
     'lib/crash-shield.cjs', 'mias/lib/playv2-deliver.cjs', 'mias/lib/portableVideo.cjs',
   ];
