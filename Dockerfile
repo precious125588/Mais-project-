@@ -79,7 +79,9 @@ RUN bash scripts/robust-install.sh mias
 # so the installs above survive this COPY).
 COPY . .
 
-
+# v37: stamp the exact files in THIS build, so the stale-guard always checks
+# against the latest pushed code (no hand-edited hashes going out of date).
+RUN node scripts/write-build-stamp.cjs && node -e "require('./lib/precious-stale-guard.cjs').verify({name:'docker-build'})"
 
 # Verify the sticker engine really works in every workspace. A build that
 # can't make a sticker should fail here, not silently disable the feature.
