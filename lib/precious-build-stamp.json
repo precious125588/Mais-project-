@@ -1,9 +1,9 @@
 {
-  "buildId": "v36-20260923-065333",
-  "builtAt": "2026-09-23T06:53:33.973136Z",
+  "buildId": "auto-20260923-184624",
+  "builtAt": "2026-09-23T18:46:24.443Z",
   "files": {
     "server.js": "fa4952c48db880f4dd21141223209c63bd7a85de5a4b9646deb2a88a95bf0156",
-    "mias/index.js": "0b4e49edf2db6766eacd8cfac699d54e6075cfa0190bcd5850c9123f2789b3e1",
+    "mias/index.js": "5f703cac355109934f1d2ce508f3df1a281baf0a93661f1f42a551962e0ca6a5",
     "lib/precious-cache-clear.cjs": "f40cc625a9b807157d2227861632eaf51708d51dcbb50f963dbc3d47c4230284",
     "lib/precious-stale-guard.cjs": "c705fb882808523cb9b66d711657517cc3654989ee40e2fee37c66f33babc05f"
   },
