@@ -1,4 +1,11 @@
 /* __MIAS_PORTABLE_VIDEO_PATCH_V1__ */
+
+// ══ AUTO CACHE CLEAR + STALE-CODE CRASH SHIELD (v34) ════════════════════════
+import { createRequire as __preciousCreateRequire } from 'module';
+const __preciousRequire = __preciousCreateRequire(import.meta.url);
+__preciousRequire('../lib/precious-cache-clear.cjs').clearAll();
+__preciousRequire('../lib/precious-stale-guard.cjs').verify({ name: 'mias' });
+
 // ══ CRASH SHIELD — must be first so a bad handler can't kill the bot ════════
 import { install as installCrashShield } from '../lib/crash-shield.mjs';
 installCrashShield({ name: process.env.SHIELD_NAME || 'mias' });
@@ -737,7 +744,7 @@ const CONFIG = {
   // The same host serves the real routes: /movies/search?q= and /movies/info?url=
   MYNETNAIJA_API: process.env.MYNETNAIJA_API || "https://apis.davidcyril.name.ng/movies",
   GIFTED_API:   "https://api.giftedtech.co.ke",
-  PREXZY_API:   process.env.PREXZY_API || "https://prexzyapis.com",
+  PREXZY_API:   "https://apis.prexzyvilla.site",
   OWNER_NAME:   process.env.OWNER_NAME || LOCKED_OWNER_NAME,
   BOT_URL:      process.env.BOT_URL      || "",
   BOT_PIC:      process.env.BOT_PIC      || "https://files.catbox.moe/05rqy6.png",
@@ -811,7 +818,7 @@ const _sessionPaths = (() => {
     () => require("./../sessionPaths"),
     () => require("../sessionPaths"),
     () => require("../nexstore_modules/sessionPaths"),
-    () => require("../sessionPaths"),
+    () => require("./sessionPaths"),
   ];
   for (const t of tries) { try { return t(); } catch {} }
   return null;
@@ -2322,7 +2329,7 @@ async function connectToWA(force = false) {
               (typeof getOwnerName === "function" ? getOwnerName() : null) ||
               CONFIG.OWNER_NAME || "Owner";
             const ownerPhoneNum = _cleanNum(ownerJid);
-            console.log(`✅ MIAS MDX is active | Owner: ${ownerDisplayName} (+${ownerPhoneNum || "unknown"}) | ${commands.size} commands | AUDIT: ${(globalThis.__MIAS_CMD_AUDIT__?.missingHandlers?.length||0)} dead, ${(globalThis.__MIAS_CMD_AUDIT__?.unregisteredMenuCmds?.length||0)} unregistered`);
+            console.log(`✅ MIAS MDX is active | Owner: ${ownerDisplayName} (+${ownerPhoneNum || "unknown"}) | ${commands.size} commands loaded`);
             await sock.sendMessage(ownerJid, {
               text: `MIAS is ALIVE\n\nBy \ud835\udc77\ud835\udc79\ud835\udc6c\ud835\udc6a\ud835\udc70\ud835\udc76\ud835\udc7c\ud835\udc7a x`,
             });
@@ -3660,7 +3667,6 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
           const entry = commands.get(name);
           // Check custom commands if no built-in found
           if (!entry) {
-            console.log('[CMD XX] NOT REGISTERED: ' + name + ' (from ' + msg.key.remoteJid + ') — no built-in handler exists');
             const customReply = customCmds.get(name);
             if (customReply) {
               try {
@@ -3669,7 +3675,6 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
                 else if (customReply?.type === "text") await sendReply(sock, msg, customReply.text || "");
               } catch (e) { console.error('[CUSTOM_CMD]', e?.message); }
             }
-            if (!customCmds.has(name)) console.log('[CMD XX] ' + name + ' is not registered anywhere — dropped (this was the old silent no-reply path, now logged)');
             return;
           }
           let fromGroupAdmin = false;
@@ -3708,23 +3713,22 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
               return;
             }
           } catch {}
-          // [removed] Safe Mode dispatch block deleted — no command is ever blocked here.
-          console.log('[CMD ->] ' + name + ' from ' + msg.key.remoteJid);
-          const _origSendMsg = sock.sendMessage.bind(sock);
-          let _realSends = 0; const _cmdT0 = Date.now();
-          sock.sendMessage = (..._a) => { try { if (!_a[1] || !_a[1].react) _realSends++; } catch {} return _origSendMsg(..._a); };
+          // Safe Mode — block risky commands for everyone
+          try {
+            const _ownerJ2 = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+            if (getSettings(_ownerJ2)?.safeMode && RISKY_CMDS.has(name)) {
+              await sendReply(sock, msg, `🛡️ *Safe Mode is ON* — \`${name}\` is blocked.\nDisable with *${CONFIG.PREFIX}safemode off*`);
+              return;
+            }
+          } catch {}
           try {
             await entry.handler(sock, msg, args);
-            if (_realSends === 0) console.log('[CMD !!] ' + name + ' finished in ' + (Date.now() - _cmdT0) + 'ms but sent NO reply (silent handler)');
-            else console.log('[CMD OK] ' + name + ' replied x' + _realSends + ' in ' + (Date.now() - _cmdT0) + 'ms');
-            try { sock.sendMessage = _origSendMsg; } catch {}
             // ── Execute joint commands queued from & chaining
             for (const _jP of _jointQueue) {
               try { await new Promise(r=>setTimeout(r,750)); const _jT=_jP.split(/\s+/); const _jN=(_jT.shift()||"").toLowerCase(); const _jA=_jT; const _jE=commands.get(_jN); if(_jE) await _jE.handler(sock,msg,_jA); } catch(_je){ try{console.error("[JOINT]",_je?.message);}catch{} }
             }
           } catch (e) {
-            try { sock.sendMessage = _origSendMsg; } catch {}
-            console.error('[CMD FAIL] ' + name + ' threw after ' + (Date.now() - _cmdT0) + 'ms:', e?.message || e);
+            console.error(`[CMD ${name}] error:`, e?.message || e);
             try { await sendReply(sock, msg, `❌ Error running *${name}*: ${e?.message || e}`); } catch {}
             notifyOwnerError(sock, msg, name, e).catch(() => {});
           }
@@ -5113,7 +5117,7 @@ async function sendInteractiveListMenu(sock, msg, menuText, coverBuf) {
   const ppUrl = (typeof __getBotPp === "function") ? await __getBotPp(sock).catch(() => null) : null;
 
   const catRows = MENU_CATEGORIES
-    .filter(cat => !cat.adult || s.adultMode)
+    .filter(cat => !cat.adult || (s.adultMode && !s.safeMode))
     .map(cat => ({
       title: cat.emoji + ' ' + cat.name + '  ‹' + [...new Set(cat.cmds)].length + '›',
       description: CONFIG.PREFIX + 'menu ' + cat.name.toLowerCase(),
@@ -5930,7 +5934,34 @@ function saveNow() {
 }
 globalThis.saveNow = saveNow;
 
-// [removed] RISKY_CMDS / safe-mode blocklist deleted — nothing is blocked at dispatch.
+// ─────────────────────────────────────────────────────────────────────
+// SAFE MODE: list of risky cmds blocked when safeMode is ON
+// ─────────────────────────────────────────────────────────────────────
+// v15: Adult cmds are NOT here — safeMode already disables adultMode separately,
+// which hides them via the category filter. RISKY_CMDS = anything that can
+// genuinely get the bot/owner banned, kicked, or blow up a group/contact list.
+const RISKY_CMDS = new Set([
+  // group destruction / mass-kick — hijack/takegroup/stealgroup REMOVED in v4.8.0
+  "kickall","kickinactive","killgc","newgroup","newgroup2","tkick",
+  "leave","destroy","reset","resetgroup",
+  // mass-mention / spam (gets bot banned by WA)
+  "tagall","everyone","botall","hidetag","tag","mention","mentionall",
+  // mass DM / blasts
+  "broadcast","bcast","bc","sendall","dmall","spam","sms",
+  // moderation that can be abused
+  "ban","unban","banall","mute","unmute","muteall","warnall","resetwarn",
+  "promote","demote","add","kick","report","gban","ungban",
+  // anti-raid / anti-* triggers (can chain-kick a whole group)
+  "antiraid","antidemote","antipromote",
+  // dangerous bot-state ops
+  "update","restart","reboot","shutdown","nuke","wipe","cleardb",
+  // scraping / data-harvesting
+  "scrapegroup","scrape","getvcf","vcf","listghost","listactive",
+  // prank / crash / flooding
+  "crash","flood","prank","zalgo","crack",
+  // adult / explicit content
+  "nsfw","adult","hentai","explicit","rule34","xnxx","porn",
+]);
 
 // ─────────────────────────────────────────────────────────────────────
 // ADULT VIDEO HELPER + per-chat picker store (.xxnx → numbered list → reply N)
@@ -6394,15 +6425,8 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
 //  COMMAND REGISTRY
 // ═══════════════════════════════════════════════════════════════════════════════
 const commands = new Map();
-const __cmdRegLog = { registered: 0, overwritten: [] };
 function cmd(names, opts, handler) {
-  for (const n of [].concat(names)) {
-    const _key = n.toLowerCase();
-    if (commands.has(_key)) { __cmdRegLog.overwritten.push(_key); console.log('[registry] overwrite: ' + _key + ' re-registered (earlier handler replaced)'); }
-    if (typeof handler !== 'function') console.log('[registry !!] ' + _key + ' registered WITHOUT a function handler — it can never reply');
-    commands.set(_key, { ...opts, handler });
-    __cmdRegLog.registered++;
-  }
+  for (const n of [].concat(names)) commands.set(n.toLowerCase(), { ...opts, handler });
 }
 
   cmd(["gpt4o","gpt-4o"], { desc: "Chat with GPT-4o", category: "AI" }, async (sock, msg, args) => {
@@ -7177,6 +7201,7 @@ const MENU_CATEGORIES = [
     "deep","smooth","fat","tupai","blown","radio","robot","chipmunk","nightcore","earrape","bass","reverse","slow","fast","baby","deamon",
     "freesound","fsounddl","nonstick","freesounddl","fsearch","nonsticksound","sounddl","soundsearch"] },
   { name: "CONFIG",    emoji: "⚙️",  cmds: ["prefix","setprefix","settheme","config"] },
+  { name: "CONVERT",   emoji: "🔄", cmds: ["text2pdf","topdf","txt2pdf","pdftotext","pdf2txt","extractpdf","pdftext","getpdftext"] },
   { name: "CREATOR",   emoji: "👑", cmds: ["eval","removeval","listeval","shell","getcmd","install","deleteplugin","listplugins","writefile","cleandb","sysinfo","setemoji","addcase","dropcase"] },
   { name: "DEBUG",     emoji: "🐛", cmds: ["test","debug"] },
   { name: "DOWNLOAD",  emoji: "📥", cmds: [
@@ -7218,6 +7243,9 @@ const MENU_CATEGORIES = [
     "pickupline2","pickup2","truth2","dare2","dares2","heartbreak2","shayari2","gn2","goodnight2","gratitude2","thankful2",
     "friendship2","friendquote2","newyear2","happynewyear2","christmas2","xmas2","halloween2","valentine2","valentines2",
     "roseday2","mothersday2","happymothersday2","fathersday2","happyfathersday2","boyfriendsday2","girlfriendsday2","thankyou2","thanks2"] },
+  { name: "GAMES",     emoji: "🎮", cmds: [
+    "wcg","trivia","guesssong","ttt","hangman","math","emojiquiz","riddle","tod","wyr","spinbottle","nhie","lb","unscramble","wordle","whoami",
+    "quizguess","quizpuzzle","quiztruefalse","quizrandom","quizcat","quizcategories","quizlist","randomquiz","rquiz","tfquiz","truefalsequiz","pquiz","prexzyquiz","puzzlequiz"] },
   { name: "GROUP",     emoji: "👥", cmds: [
     "confession","groupid","offhere","onhere","welcome","goodbye","setwelcome","setgoodbye","welcomedm","setwelcomedm","adminevent",
     "antilink","antic","antistatus","antibad","addbadword","removebadword","listbadwords","antisticker","allowlink","denylink","lockmedia","nomedia","medlock",
@@ -7229,12 +7257,23 @@ const MENU_CATEGORIES = [
     "newgroup","creategc","killgc","getlid","tkick","tempkick","tk","dm","ephemeral",
     "setgcname","setgcdesc","renamegc","gcdescedit","setgroupname","setgroupdesc","setgroupdescription",
     "rules","setrules","hidetag","hijack","stealgroup","takegroup","takeadmin"] },
+  { name: "HENTAI",    emoji: "🔞", cmds: [
+    "htimig","xsearch","xsearch2","xsrch","xdl","xvdl","xvideo-dl","xvs","xvsearch",
+    "xget","xhsearch","xhdl","phsearch","phdl","hentaivid",
+    "xnxx","xnxx-dl","xxnx","pornhub","ph","xhamster",
+    "goon","goonmode","goonoff","goonstatus","p",
+    "ass","boobs","pussy","dick","anal","cum","fuck","bdsm","futa","gay18","dp18","feet18","group18","real18","suck18","phgif","hentaigif",
+    "bottomless","cumsluts","domination","extreme18","finger18","lick18","pegged","puffies","tattoo18","tiny18","toys18","kiss18","sixtynine","blacknsfw","easter18","xmas18",
+    "xnxxsearch","xvideossearch","xnxxdl","r34home","r34detail",
+    "hanime","hanimesearch","hsearch","rule34","rule34search","pick"], adult: true },
   { name: "INFO",      emoji: "📊", cmds: [
     "device","getdevice","checkdevice","botinfo","botcreator","creator","dev","developer",
     "groupinfo","ginfo","gcinfo","whois","admins","support",
     "getpp","getdp","dp","pfp2","vcf","cinfo","jid","cmds","listcmds","menu2","menu3",
     "aza","setaza","setazapic",
     "isonline","online","checkstatus","onlinecheck","activecheck","isactive","wacheck","checkactive","whatsappcheck"] },
+  { name: "LOGO",      emoji: "🎨", cmds: ["alienglow","burning","chromeone","chrometwo","comic","fire","glowinghot","glowingsteel","gradientbevel","slab","neontext","simple","starburst","felt","outline","animatedglow","3dtextured","3dgradient","glossy","embossed","pixelbadge","chromium","iced","frosty","particle","moltencore","glitter","fantasy","logolist",
+    "flagtext","flag3dtext","logomaker","blackpinklogo","sandsummer","galaxywallpaper"] },
   { name: "MEDIA",     emoji: "🖼️", cmds: ["toimg","tomp3","toaudio","toptt","tovideo","togif","tovv","viewonce","vv","s","trim","trimvid","videotrim"] },
   { name: "MISC",      emoji: "📁", cmds: [
     "antidelete","antidel","nodelete","antidstatus","antiedit","antied","noedit","antivonce","antiviewonce",
@@ -7245,7 +7284,7 @@ const MENU_CATEGORIES = [
     "autobio","autoreact","autoview","autolike","antivo","antiviewoncetoggle","stealthvo",
     "bcheck","bancheck","setcmd","removecmd","listsetcmd",
     "inbox","viewentry","replyentry","delentry","clearinbox",
-    "mode","restart","broadcast","slowmode","ghostmode",
+    "mode","restart","broadcast","slowmode","safemode","ghostmode",
     "ban","unban","banuser","listban","checkban","isban","isbanned",
     "setsudo","delsudo","listsudo","autotyping","autorecording",
     "tostatus","togc","checkupdate","update","mygroups","newgroup2",
@@ -7254,8 +7293,11 @@ const MENU_CATEGORIES = [
     "logs","console","debug2",
     "buttonsmode","buttons","btnmode","button","buttonsui","btnmenu","btnlistmenu","buttonmenu",
     "menumode","menutoggle","togglemenu","switchmenu","smartmenu","plaintextmenu","textmenu","radiomenu","txmenu",
-    "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",] },
+    "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",
+    "safemode"] },
+  { name: "REACTIONS", emoji: "💫", cmds: ["hug","kiss","pat","slap","wink","bonk","poke","yeet","blush","wave","smile","highfive","handhold","nom","bite","glomp","cringe","dance"] },
   { name: "RELIGION",  emoji: "📖", cmds: ["bible","quran","qur"] },
+  { name: "RANDOM",    emoji: "🎲", cmds: ["koreangirl","japangirl","malaysiagirl","indonesiagirl","chinagirl","vietnamgirl","thaigirl","hijabgirl","randomgirl","pfp","boypic","randomcat2","randomdog2","randomcar","waifu2","loli2","bluearchive","tiktokgirl","randomsfw","randommoe","randomai"] },
   { name: "SEARCH",    emoji: "🔍", cmds: [
     "define","wiki","ud","google","gsearch",
     "tiksearch","ttsearch","spotisearch","spotifysearch2","spotisearch2","spoti","spoti2",
@@ -7735,7 +7777,7 @@ function buildMenu(jid, senderName) {
   t += `└─────────────────────────\n\n`;
   t += `━━━━━「 🗂️ *CATEGORIES* 」━━━━━\n\n`;
   for (const cat of MENU_CATEGORIES) {
-    if (cat.adult && !s.adultMode) continue;
+    if (cat.adult && (!s.adultMode || s.safeMode)) continue;
     const count = [...new Set(cat.cmds)].length;
     t += `  ╰➤ ${cat.emoji} *${cat.name}*  ‹${count} cmds›\n`;
   }
@@ -9725,10 +9767,10 @@ const _p2PlayCardImpl = async (sock, msg, args) => {
     '━━━━━━━━━━━━━━━━━━━━',
     '📥 *Choose a format — quote THIS message with the number:*',
     '',
-    '  1.  *Audio* — playable audio',
-    '  2.  *Document* — .mp3 file to download',
-    '  3.  *Voice* — voice note',
-    '  4.  *Video* — mp4 with sound',
+    '  1️⃣  *Audio* — playable audio',
+    '  2️⃣  *Document* — .mp3 file to download',
+    '  3️⃣  *Voice* — voice note',
+    '  4️⃣  *Video* — mp4 with sound',
     '',
     '_Example: reply to this card with_ `1` _for audio, `4` _for video._',
   ].join('\n');
@@ -22825,7 +22867,31 @@ cmd(["pmlist","showmenu","menulist"], { desc: "Re-display the last text menu for
   await sendReply(sock, msg, _out);
 });
 
-// [removed] safemode command deleted — safe mode no longer exists in this bot.
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SAFE MODE — hides all adult cmds + locks NSFW / strips adult settings
+// ═══════════════════════════════════════════════════════════════════════════════
+cmd("safemode", { desc: "Toggle safe mode (hide all 18+ commands)", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  const ownerJ = getOwnerJid();
+  const ownerS = getSettings(ownerJ);
+  const sub = (args[0] || "").toLowerCase();
+  if (sub === "on") ownerS.safeMode = true;
+  else if (sub === "off") ownerS.safeMode = false;
+  else ownerS.safeMode = !ownerS.safeMode;
+
+  if (ownerS.safeMode) {
+    ownerS.adultMode = false; ownerS.adultDl = false;
+    if (_goonState.timer) { clearInterval(_goonState.timer); _goonState.timer = null; }
+    _goonState.active = false;
+    const cs = getSettings(msg.key.remoteJid);
+    cs.adultMode = false; cs.adultDl = false; cs.safeMode = true;
+  } else {
+    const cs = getSettings(msg.key.remoteJid);
+    cs.safeMode = false;
+  }
+  try { saveNow && saveNow(); } catch {}
+  await sendReply(sock, msg,
+    `🛡️ *Safe Mode: ${ownerS.safeMode ? "✅ ON" : "❌ OFF"}*\n\n${ownerS.safeMode ? "All 18+ commands are now hidden and disabled." : "Adult commands are available again (still gated by adult mode)."}`);
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  TRUECALLER — number lookup (multi-API fallback)
@@ -24079,12 +24145,8 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
         await sock.sendMessage(jid, { document: buf, mimetype: "audio/mpeg", fileName: `${(title||"audio").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp3`, caption: cap }, { quoted: msg });
       }
     } else if (isVideo) {
-      // FIX: FB/cobalt links often return webm or a mislabeled container -> WhatsApp
-      // shows "this video isn't available". Re-mux to portable MP4 before sending.
-      try { const _vnA = require("./lib/portableVideo.cjs"); buf = await _vnA.normalizeVideoBuffer(buf, { timeoutMs: 120000 }); } catch (_e) {}
-      const _isMp4A = Buffer.isBuffer(buf) && buf.length >= 12 && buf.slice(4, 8).toString("ascii") === "ftyp";
-      try { await sock.sendMessage(jid, { video: buf, mimetype: _isMp4A ? "video/mp4" : "video/webm", caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: _isMp4A ? "video/mp4" : "application/octet-stream", fileName: `${(title||"video").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp4`, caption: cap }, { quoted: msg }); }
+      try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
+      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `${(title||"video").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp4`, caption: cap }, { quoted: msg }); }
     } else {
       try { await sock.sendMessage(jid, { image: buf, caption: cap }, { quoted: msg }); }
       catch { await sock.sendMessage(jid, { document: buf, mimetype: "application/octet-stream", fileName: "download", caption: cap }, { quoted: msg }); }
@@ -42700,576 +42762,4 @@ Please wait.`);
 }
 /* __V32_PATCHED__ */
 
-/* ══════════════════════════════════════════════════════════════════════════
-   NSFW / ADULT PACK — Prexzy APIs + David Cyril APIs
-   ONE module (mias/lib/nsfwAdultPack.js) + ONE data module
-   (mias/lib/nsfwPrexzy.js). This is NOT a new fix pack: it registers through
-   the same cmd() the bot already uses, purges the legacy adult commands, and
-   re-registers .play / .ai / .aio with handlers that can never go silent.
-   ══════════════════════════════════════════════════════════════════════════ */
-console.log('[nsfw-pack] loading mias/lib/nsfwAdultPack.cjs ...');
-try {
-  require('./lib/nsfwAdultPack.cjs').boot({
-    commands: commands,
-    cmd: cmd,
-    sendReply: (typeof sendReply === 'function' ? sendReply : null),
-    react: (typeof react === 'function' ? react : null),
-    getSettings: (typeof getSettings === 'function' ? getSettings : null),
-    getOwnerJid: (typeof getOwnerJid === 'function' ? getOwnerJid : null),
-    CONFIG: (typeof CONFIG !== 'undefined' ? CONFIG : { PREFIX: '.' }),
-    MENU_CATEGORIES: (typeof MENU_CATEGORIES !== 'undefined' ? MENU_CATEGORIES : null),
-  });
-} catch (__nsfwErr) {
-  console.log('[nsfw-pack] boot error:', (__nsfwErr && __nsfwErr.message) || __nsfwErr);
-}
-/* __NSFW_ADULT_PACK__ */
-
-/* ═══ TRUTHFUL COMMAND REGISTRY AUDIT — safe mode removed, logs tell the truth ═══ */
-function __miasRunCmdAudit() {
-  const r = { total: 0, adult: 0, missingHandlers: [], unregisteredMenuCmds: [], broken: [], overwritten: (typeof __cmdRegLog !== 'undefined' ? __cmdRegLog.overwritten.slice() : []) };
-  try {
-    r.total = commands.size;
-    for (const [n, e] of commands.entries()) {
-      if (e && e.adult) r.adult++;
-      if (!e || typeof e.handler !== 'function') r.missingHandlers.push(n);
-    }
-    if (typeof MENU_CATEGORIES !== 'undefined' && Array.isArray(MENU_CATEGORIES)) {
-      for (const cat of MENU_CATEGORIES) {
-        for (const n of (cat.cmds || [])) {
-          const k = String(n).toLowerCase();
-          if (!commands.has(k)) r.unregisteredMenuCmds.push(k);
-          else if (typeof commands.get(k).handler !== 'function') r.broken.push(k);
-        }
-      }
-      // AUTO-PRUNE: a menu name with no registered handler can never reply —
-      // strip it from MENU_CATEGORIES so the menu only lists live commands.
-      if (r.unregisteredMenuCmds.length) {
-        const dead = new Set(r.unregisteredMenuCmds);
-        for (const cat of MENU_CATEGORIES) cat.cmds = (cat.cmds || []).filter(n => !dead.has(String(n).toLowerCase()));
-        r.prunedFromMenu = r.unregisteredMenuCmds.slice();
-        r.unregisteredMenuCmds = [];
-      }
-    }
-  } catch (e) { console.log('[audit] error:', e?.message || e); }
-  globalThis.__MIAS_CMD_AUDIT__ = r;
-  const L = [];
-  L.push('======== COMMAND REGISTRY AUDIT (truth) ========');
-  L.push('registered: ' + r.total + ' | adult: ' + r.adult + ' | overwritten-during-load: ' + r.overwritten.length);
-  if (r.overwritten.length) L.push('WARN overwritten: ' + [...new Set(r.overwritten)].slice(0, 25).join(', '));
-  if (r.prunedFromMenu && r.prunedFromMenu.length) L.push('PRUNED dead names from menu: ' + r.prunedFromMenu.slice(0, 40).join(', '));
-  if (r.missingHandlers.length) L.push('FAIL no-handler (can never reply): ' + r.missingHandlers.join(', '));
-  if (r.unregisteredMenuCmds.length) L.push('FAIL in-menu-but-NOT-registered (silent when used): ' + r.unregisteredMenuCmds.join(', '));
-  if (r.broken.length) L.push('FAIL menu-cmd-without-handler: ' + r.broken.join(', '));
-  if (!r.missingHandlers.length && !r.unregisteredMenuCmds.length && !r.broken.length) L.push('PASS: every menu-listed command is registered with a working handler');
-  L.push('=================================================');
-  console.log(L.join('\n'));
-  return r;
-}
-__miasRunCmdAudit();
-cmd(['cmdaudit', 'audit', 'cmdcheck'], { desc: 'Truthful command registry audit', category: 'OWNER', ownerOnly: true }, async (sock, msg) => {
-  const r = __miasRunCmdAudit();
-  const out = ['*Command Registry Audit*', '',
-    '• Registered: *' + r.total + '*',
-    '• Adult: *' + r.adult + '*',
-    '• Overwritten during load: *' + r.overwritten.length + '*' + (r.overwritten.length ? '\n  ' + [...new Set(r.overwritten)].slice(0, 30).join(', ') : ''),
-    '• No handler (dead, can never reply): *' + r.missingHandlers.length + '*' + (r.missingHandlers.length ? '\n  ' + r.missingHandlers.slice(0, 30).join(', ') : ''),
-    '• In menu but NOT registered: *' + r.unregisteredMenuCmds.length + '*' + ((r.prunedFromMenu && r.prunedFromMenu.length) ? '\n  auto-pruned from menu: ' + r.prunedFromMenu.slice(0, 30).join(', ') : '')];
-  await sendReply(sock, msg, out.join('\n'));
-});
-
-
-/* ══════════════════════════════════════════════════════════════════════════
-   PRECIOUS-FIX (MERGED INLINE — 2026-09-23)
-
-   WAS: mias/plugins/precious-fix.js  ← NEVER LOADED BY ANYTHING.
-   This bot has NO plugin-folder auto-loader. `plugins` in this file is only
-   the `.install <url>` registry (a Map of remote gists). Any file dropped in
-   mias/plugins/ is dead code and silently does nothing after pairing.
-
-   Therefore the pack was merged here, at the very END of mias/index.js —
-   AFTER bootChild() installs v20…v29 — so these registrations win and are
-   never overwritten by a later pack (v21 also registers .play).
-
-   To change these commands: EDIT THIS BLOCK IN PLACE.
-   Do NOT create a new fix pack / plugin file. See MUST-READ-NO-NEW-FIX-PACKS.md
-   and MUST-READ-NO-PLUGIN-FOLDER.txt.
-   ══════════════════════════════════════════════════════════════════════════ */
-(function __preciousFixMerged() {
-  try {
-  /**
-   * PRECIOUS FIX PACK — mias/plugins/precious-fix.js
-   * Auto-discovered by PluginSystem. Re-registers:
-   *   .play (new card + choice player), .video, .getpp, .add, and NSFW downloaders.
-   *
-   * Root causes fixed:
-   *  - NSFW: old providers (princetechn, bk9, widipe, davidcyriltech.my.id, diioffc,
-   *    aemt.me, keyless api.davidcyril.name.ng) are ALL dead / rate-limited -> silent fail.
-   *  - .play was registered as "play_legacy_disabled" (never fired).
-   *  - .video chain was all dead -> "all providers busy".
-   *  - .getpp in DM with no target returned SELF instead of the chat partner.
-   *  - .add had no VCF support and no outside-of-group <gclink> support.
-   *
-   * Live providers used (tested):
-   *   search : api.nexray.eu.cc/search/youtube | prexzyapis.com/search/youtube (POST)
-   *            api.omegatech.app/api/Search/yt-mp3
-   *   audio  : apis.davidcyril.name.ng (KEYED) | api.nexray.eu.cc/downloader/ytplay
-   *            api.omegatech.app/api/download/yt-dl
-   *   video  : apis.davidcyril.name.ng /download/ytmp4 (KEYED)
-   *            api.nexray.eu.cc/downloader/ytvideo | api.omegatech.app/api/download/Yt-mate
-   *   nsfw img: api.waifu.pics/nsfw/* | api.rule34.xxx (JSON)
-   *   nsfw dl : apis.davidcyril.name.ng (KEYED) xnxxdl / xvideosdl
-   */
-
-  const DC_BASE = "https://apis.davidcyril.name.ng";
-  const DC_KEY  = "dc_live_DGTayILzxRyFE2rq5I2uvgUKY9ACzjoe";
-
-  const axios = require("axios");
-
-  // ─── helpers ──────────────────────────────────────────────────────────────────
-  function toNum(jid) { return String(jid || "").split("@")[0].replace(/[^0-9]/g, ""); }
-  function isUrl(t) { return /^https?:\/\//i.test(String(t || "").trim()); }
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-  function pickUrl(d) {
-    if (!d) return null;
-    const r = d.result || d.data || d;
-    if (typeof r === "string" && /^https?:\/\//i.test(r)) return r;
-    return r?.download_url || r?.download || r?.url || r?.dl || r?.video || r?.audio || r?.media || r?.mp4 || r?.mp3 || null;
-  }
-  async function getJson(url, timeout = 30000) {
-    const { data } = await axios.get(url, { timeout, validateStatus: () => true,
-      headers: { "User-Agent": "Mozilla/5.0" } });
-    return data;
-  }
-  async function dcGet(path, params = {}, timeout = 30000) {
-    const qs = new URLSearchParams({ apikey: DC_KEY, ...params }).toString();
-    return getJson(`${DC_BASE}${path}?${qs}`, timeout);
-  }
-
-  // ─── YOUTUBE SEARCH (nexray -> prexzy POST -> omegatech) ─────────────────────
-  async function ytSearch(query) {
-    // 1. nexray
-    try {
-      const d = await getJson(`https://api.nexray.eu.cc/search/youtube?q=${encodeURIComponent(query)}`, 15000);
-      const v = d?.result?.[0] || d?.data?.[0];
-      if (v && (v.url || v.id || v.link)) return {
-        url: v.url || v.link || `https://youtu.be/${v.id}`,
-        title: v.title, author: v.channel || v.author || "—",
-        duration: v.duration || v.timestamp || "—",
-        thumb: v.thumbnail || v.thumb || v.imageUrl || v.image || null,
-      };
-    } catch {}
-    // 2. prexzy POST
-    try {
-      const { data } = await axios.post("https://prexzyapis.com/search/youtube", { q: query },
-        { headers: { "Content-Type": "application/json" }, timeout: 15000, validateStatus: () => true });
-      const v = data?.data?.[0] || data?.result?.[0];
-      if (v && (v.link || v.url || v.id)) return {
-        url: v.link || v.url || `https://youtu.be/${v.id}`,
-        title: v.title, author: v.channel || v.author || "—",
-        duration: v.duration || "—",
-        thumb: v.imageUrl || v.thumbnail || v.thumb || null,
-      };
-    } catch {}
-    // 3. omegatech
-    try {
-      const d = await getJson(`https://api.omegatech.app/api/Search/yt-mp3?q=${encodeURIComponent(query)}`, 15000);
-      const v = d?.results?.[0] || d?.data?.[0] || d?.result?.[0];
-      if (v && (v.id || v.url || v.link)) return {
-        url: v.url || v.link || `https://youtu.be/${v.id}`,
-        title: v.title, author: v.channel || v.author || "—",
-        duration: v.duration || "—",
-        thumb: v.thumbnail || v.thumb || null,
-      };
-    } catch {}
-    return null;
-  }
-
-  // ─── AUDIO download URL chain (KEYED davidcyril -> nexray -> omegatech) ──────
-  async function audioUrl(videoUrl, query) {
-    try { const d = await dcGet("/download/ytmp3", { url: videoUrl }); const u = pickUrl(d); if (u) return u; } catch {}
-    try { const d = await dcGet("/download/yta",    { url: videoUrl }); const u = pickUrl(d); if (u) return u; } catch {}
-    if (query) {
-      try {
-        const d = await getJson(`https://api.nexray.eu.cc/downloader/ytplay?q=${encodeURIComponent(query)}`, 30000);
-        const r = d?.result || d?.data || d;
-        const u = r?.audio || r?.download_url || r?.url || r?.dl || r?.mp3 || r?.music;
-        if (u && /^https?:\/\//i.test(u)) return u;
-      } catch {}
-    }
-    try { const d = await getJson(`https://api.omegatech.app/api/download/yt-dl?url=${encodeURIComponent(videoUrl)}&format=mp3`, 30000); const u = pickUrl(d); if (u) return u; } catch {}
-    try { const d = await getJson(`https://api.omegatech.app/api/download/Yt-mate?url=${encodeURIComponent(videoUrl)}&type=audio`, 30000); const u = pickUrl(d); if (u) return u; } catch {}
-    return null;
-  }
-
-  // ─── VIDEO download URL chain (KEYED davidcyril -> nexray -> omegatech) ──────
-  async function videoUrlDl(videoUrl) {
-    try { const d = await dcGet("/download/ytmp4", { url: videoUrl }); const u = pickUrl(d); if (u) return u; } catch {}
-    try { const d = await getJson(`https://api.nexray.eu.cc/downloader/ytvideo?url=${encodeURIComponent(videoUrl)}`, 30000); const u = pickUrl(d); if (u) return u; } catch {}
-    try { const d = await getJson(`https://api.nexray.eu.cc/downloader/v2/youtube?url=${encodeURIComponent(videoUrl)}`, 30000); const u = pickUrl(d); if (u) return u; } catch {}
-    try { const d = await getJson(`https://api.omegatech.app/api/download/Yt-mate?url=${encodeURIComponent(videoUrl)}&type=video`, 30000); const u = pickUrl(d); if (u) return u; } catch {}
-    try { const d = await getJson(`https://api.omegatech.app/api/download/yt-dl?url=${encodeURIComponent(videoUrl)}&format=mp4`, 30000); const u = pickUrl(d); if (u) return u; } catch {}
-    return null;
-  }
-
-  // ─── .play  (image card + ad-embed + 1-4 choices) ────────────────────────────
-  const PLAY_PENDING = new Map();          // choicesMsgId -> { url, title }
-  const PLAY_TTL = 5 * 60 * 1000;
-  const _boundSocks = new Set();
-
-  const AD_BRAND = "𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x PLAYER";
-
-  function playAdContext(title) {
-    return { externalAdReply: {
-      title: AD_BRAND,
-      body: title || "YouTube Media Player",
-      mediaType: 1,
-      renderLargerThumbnail: true,
-      sourceUrl: "https://github.com/precious125588",
-    } };
-  }
-
-  async function playCmd(sock, msg, args) {
-    const jid = msg.key.remoteJid;
-    const q = (args || []).join(" ").trim();
-    if (!q) return sock.sendMessage(jid, { text: `🎵 *${AD_BRAND}*\n\nUsage: .play <song name or YouTube URL>` }, { quoted: msg });
-
-    let info = isUrl(q)
-      ? { url: q, title: q, author: "—", duration: "—", thumb: null }
-      : await ytSearch(q);
-
-    if (!info || !info.url) {
-      return sock.sendMessage(jid, { text: `🎵 *${AD_BRAND}*\n\n❌ No results for *${q}*` }, { quoted: msg });
-    }
-
-    // ── card (thumbnail + Author/Title/Duration + ad-embed) ──────────────────
-    const caption =
-  `🎵 *${AD_BRAND}*
-  ━━━━━━━━━━━━━━
-  👤 *Author:*   ${info.author}
-  🎶 *Title:*    ${info.title}
-  ⏱️ *Duration:* ${info.duration}
-  ━━━━━━━━━━━━━━`;
-
-    let cardSent = null;
-    try {
-      if (info.thumb) {
-        const buf = Buffer.from((await axios.get(info.thumb, { responseType: "arraybuffer", timeout: 12000, validateStatus: () => true })).data);
-        cardSent = await sock.sendMessage(jid, { image: buf, caption, contextInfo: playAdContext(info.title) }, { quoted: msg });
-      }
-    } catch {}
-    if (!cardSent) {
-      cardSent = await sock.sendMessage(jid, { text: caption, contextInfo: playAdContext(info.title) }, { quoted: msg });
-    }
-
-    // ── choices message (ad-embedded) ────────────────────────────────────────
-    const choicesText =
-  `🎵 *${AD_BRAND}*
-  ━━━━━━━━━━━━━━
-  *Reply (quote) to this message with the number of your choice:*
-
-  1.  Audio Type
-  2.  Audio Document
-  3.  Voice note
-  4.  Video Type
-  ━━━━━━━━━━━━━━
-  _Reply within 5 minutes._`;
-
-    const choiceMsg = await sock.sendMessage(jid, { text: choicesText, contextInfo: playAdContext(info.title) }, { quoted: msg });
-    if (choiceMsg?.key?.id) {
-      PLAY_PENDING.set(choiceMsg.key.id, { url: info.url, title: info.title, query: q });
-      setTimeout(() => PLAY_PENDING.delete(choiceMsg.key.id), PLAY_TTL);
-    }
-    bindPlayListener(sock);
-  }
-
-  function bindPlayListener(sock) {
-    if (!sock?.ev || _boundSocks.has(sock)) return;
-    _boundSocks.add(sock);
-    sock.ev.on("messages.upsert", async (ev) => {
-      if (ev.type !== "notify") return;
-      for (const m of ev.messages || []) {
-        try { await onPlayChoice(sock, m); } catch {}
-      }
-    });
-  }
-
-  async function onPlayChoice(sock, m) {
-    if (!m?.message) return;
-    const quotedId = m.message?.extendedTextMessage?.contextInfo?.stanzaId;
-    if (!quotedId) return;
-    const pending = PLAY_PENDING.get(quotedId);
-    if (!pending) return;
-    const body = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
-    if (!/^[1-4]$/.test(body)) return;
-    PLAY_PENDING.delete(quotedId);
-
-    const jid = m.key.remoteJid;
-    const choice = Number(body);
-    await sock.sendMessage(jid, { react: { text: "⏳", key: m.key } }).catch(() => {});
-    const title = pending.title || "media";
-    const safeName = title.replace(/[^\w\s.-]/g, "_").trim().slice(0, 50) || "media";
-
-    if (choice === 4) {
-      // VIDEO — robust ytmate-style chain
-      const vUrl = await videoUrlDl(pending.url);
-      if (!vUrl) { await sock.sendMessage(jid, { text: `🎵 *${AD_BRAND}*\n\n❌ All video providers failed.\n🔗 ${pending.url}` }, { quoted: m }); return; }
-      try {
-        const buf = Buffer.from((await axios.get(vUrl, { responseType: "arraybuffer", timeout: 180000, maxContentLength: 200 * 1024 * 1024, validateStatus: () => true })).data);
-        try {
-          await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: `🎬 ${title}` }, { quoted: m });
-        } catch {
-          await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `${safeName}.mp4`, caption: `🎬 ${title}` }, { quoted: m });
-        }
-      } catch (e) {
-        await sock.sendMessage(jid, { text: `🎵 *${AD_BRAND}*\n\n❌ Video download failed: ${e.message}` }, { quoted: m });
-      }
-      return;
-    }
-
-    // AUDIO (1 = play, 2 = document, 3 = voice note)
-    const aUrl = await audioUrl(pending.url, pending.query);
-    if (!aUrl) { await sock.sendMessage(jid, { text: `🎵 *${AD_BRAND}*\n\n❌ All audio providers failed.\n🔗 ${pending.url}` }, { quoted: m }); return; }
-    try {
-      const buf = Buffer.from((await axios.get(aUrl, { responseType: "arraybuffer", timeout: 180000, maxContentLength: 200 * 1024 * 1024, validateStatus: () => true })).data);
-      if (choice === 2) {
-        await sock.sendMessage(jid, { document: buf, mimetype: "audio/mpeg", fileName: `${safeName}.mp3`, caption: `🎵 ${title}` }, { quoted: m });
-      } else if (choice === 3) {
-        await sock.sendMessage(jid, { audio: buf, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: m });
-      } else {
-        await sock.sendMessage(jid, { audio: buf, mimetype: "audio/mpeg", ptt: false, fileName: `${safeName}.mp3` }, { quoted: m });
-      }
-    } catch (e) {
-      await sock.sendMessage(jid, { text: `🎵 *${AD_BRAND}*\n\n❌ Audio download failed: ${e.message}` }, { quoted: m });
-    }
-  }
-
-  // ─── .video ───────────────────────────────────────────────────────────────────
-  async function videoCmd(sock, msg, args) {
-    const jid = msg.key.remoteJid;
-    const q = (args || []).join(" ").trim();
-    if (!q) return sock.sendMessage(jid, { text: `📹 *Video*\n\nUsage: .video <query or URL>` }, { quoted: msg });
-    await sock.sendMessage(jid, { react: { text: "📹", key: msg.key } }).catch(() => {});
-    const info = isUrl(q) ? { url: q, title: q } : await ytSearch(q);
-    if (!info?.url) return sock.sendMessage(jid, { text: `📹 ❌ No results for *${q}*` }, { quoted: msg });
-    const vUrl = await videoUrlDl(info.url);
-    if (!vUrl) return sock.sendMessage(jid, { text: `📹 ❌ All video providers failed.\n🔗 ${info.url}` }, { quoted: msg });
-    try {
-      const buf = Buffer.from((await axios.get(vUrl, { responseType: "arraybuffer", timeout: 180000, maxContentLength: 200 * 1024 * 1024, validateStatus: () => true })).data);
-      const safeName = (info.title || "video").replace(/[^\w\s.-]/g, "_").trim().slice(0, 50) || "video";
-      try {
-        await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: `🎬 ${info.title}` }, { quoted: msg });
-      } catch {
-        await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `${safeName}.mp4`, caption: `🎬 ${info.title}` }, { quoted: msg });
-      }
-    } catch (e) {
-      await sock.sendMessage(jid, { text: `📹 ❌ Video download failed: ${e.message}` }, { quoted: msg });
-    }
-  }
-
-  // ─── .getpp ───────────────────────────────────────────────────────────────────
-  async function getppCmd(sock, msg, args) {
-    const chatJid = msg.key.remoteJid || "";
-    const ctx = msg.message?.extendedTextMessage?.contextInfo;
-    const mentioned = ctx?.mentionedJid?.[0] || ctx?.participant;
-    const isGroup = chatJid.endsWith("@g.us");
-    let target;
-
-    if (mentioned) {
-      target = String(mentioned).replace(/@lid$/, "@s.whatsapp.net").replace(/@c\.us$/, "@s.whatsapp.net");
-    } else if (args?.[0] && /^[0-9]/.test(String(args[0]).replace(/[^0-9]/g, ""))) {
-      const n = String(args[0]).replace(/[^0-9]/g, "");
-      if (n.length >= 7) target = n + "@s.whatsapp.net";
-    }
-    // DM with no mention/number => the chat partner IS the target (always, even fromMe)
-    if (!target && !isGroup) target = chatJid;
-    if (!target) {
-      const sender = msg.key.participant || msg.key.remoteJid;
-      target = String(sender).replace(/@lid$/, "@s.whatsapp.net");
-    }
-    if (!target) return sock.sendMessage(chatJid, { text: "❌ Could not resolve target. Use .getpp @mention | .getpp <number> | reply | (in DM, no args = chat partner)." }, { quoted: msg });
-
-    try {
-      let pp = null;
-      try { pp = await sock.profilePictureUrl(target, "image"); } catch {}
-      if (!pp) { try { pp = await sock.profilePictureUrl(target, "preview"); } catch {} }
-      if (!pp) return sock.sendMessage(chatJid, { text: `❌ No profile picture for +${toNum(target)} — private or not set.` }, { quoted: msg });
-      const buf = Buffer.from((await axios.get(pp, { responseType: "arraybuffer", timeout: 15000, validateStatus: () => true })).data);
-      await sock.sendMessage(chatJid, { image: buf }, { quoted: msg });
-    } catch (e) {
-      await sock.sendMessage(chatJid, { text: `❌ Profile picture fetch failed. ${e.message}` }, { quoted: msg });
-    }
-  }
-
-  // ─── .add ─────────────────────────────────────────────────────────────────────
-  function extractVcfNumbers(msg) {
-    const out = [];
-    const seen = new Set();
-    const push = (num) => {
-      const n = String(num || "").replace(/[^0-9]/g, "");
-      if (n.length >= 7 && !seen.has(n)) { seen.add(n); out.push(n); }
-    };
-    const scanVcard = (vc) => {
-      if (!vc) return;
-      const lines = String(vc).split(/\r?\n/);
-      for (const line of lines) {
-        if (/^TEL/i.test(line)) { const m = line.match(/:(.*)$/); if (m) push(m[1]); }
-        const w = line.match(/waid=(\d+)/i); if (w) push(w[1]);
-      }
-    };
-    const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-    if (q?.contactMessage?.vcard) scanVcard(q.contactMessage.vcard);
-    if (q?.contactsArrayMessage?.contacts) for (const c of q.contactsArrayMessage.contacts) scanVcard(c.vcard);
-    if (msg.message?.contactMessage?.vcard) scanVcard(msg.message.contactMessage.vcard);
-    if (msg.message?.contactsArrayMessage?.contacts) for (const c of msg.message.contactsArrayMessage.contacts) scanVcard(c.vcard);
-    return out;
-  }
-
-  async function resolveGroupJid(sock, link) {
-    if (!link) return null;
-    const m = String(link).match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]+)/i);
-    if (!m) return null;
-    try { const info = await sock.groupGetInviteInfo(m[1]); if (info?.id) return info.id; } catch {}
-    return null;
-  }
-
-  async function addCmd(sock, msg, args) {
-    const chatJid = msg.key.remoteJid || "";
-    const isGroup = chatJid.endsWith("@g.us");
-    const raw = (args || []).join(" ").trim();
-    const status = async (t) => sock.sendMessage(chatJid, { text: t }, { quoted: msg });
-
-    // gc link (optional) → target group can differ from current chat
-    const linkMatch = raw.match(/https?:\/\/chat\.whatsapp\.com\/(?:invite\/)?[A-Za-z0-9]+/i);
-    let groupJid = null;
-    let numbersText = raw;
-    if (linkMatch) {
-      groupJid = await resolveGroupJid(sock, linkMatch[0]);
-      if (!groupJid) return status(`➕ *Add*\n\n❌ Could not resolve the group link.\nMake sure the link is a valid WhatsApp group invite.`);
-      numbersText = raw.replace(linkMatch[0], " ");
-    } else if (isGroup) {
-      groupJid = chatJid;
-    }
-
-    const vcfNums = extractVcfNumbers(msg);
-    const typedNums = numbersText.replace(linkMatch ? linkMatch[0] : "", " ")
-      .split(/[\s,;|]+/).map(s => s.replace(/[^0-9]/g, "")).filter(n => n.length >= 7);
-
-    const numbers = [...new Set([...vcfNums, ...typedNums])].slice(0, 500);
-
-    if (!groupJid) {
-      return status(`➕ *Add*\n\nNo target group found.\n\nUsage:\n• In a group:  .add 234xxx,234yyy\n• Anywhere:   .add <gclink> 234xxx,234yyy\n• Reply .add to a VCF/contact card\n• Reply .add <gclink> to a VCF card`);
-    }
-    if (!numbers.length) {
-      return status(`➕ *Add*\n\n❌ No numbers found. Type numbers (comma/space separated) or reply .add to a VCF/contact card.`);
-    }
-
-    const prog = await sock.sendMessage(chatJid, { text: `➕ *Add*\n\n⏳ Adding ${numbers.length} member(s) one-by-one to the group...` }, { quoted: msg });
-    const progKey = prog?.key;
-    const edit = async (t) => { if (progKey) { try { await sock.sendMessage(chatJid, { text: t, edit: progKey }); return; } catch {} } await status(t); };
-
-    const results = [];
-    let ok = 0;
-    for (let i = 0; i < numbers.length; i++) {
-      const num = numbers[i];
-      const jid = num + "@s.whatsapp.net";
-      try {
-        const res = await sock.groupParticipantsUpdate(groupJid, [jid], "add");
-        const entry = Array.isArray(res) ? res[0] : res?.[jid];
-        const code = entry?.status ?? entry?.code;
-        if (code === undefined || code === null || String(code) === "200" || entry === true) {
-          results.push(`✅ +${num}`); ok++;
-        } else if (String(code) === "409") { results.push(`ℹ️ +${num} already in group`); }
-        else if (String(code) === "403") { results.push(`🔒 +${num} privacy — invite sent/failed`); }
-        else if (String(code) === "404") { results.push(`❌ +${num} not on WhatsApp`); }
-        else { results.push(`⚠️ +${num} (${code || "failed"})`); }
-      } catch (e) {
-        results.push(`❌ +${num}: ${String(e?.message || "failed").slice(0, 50)}`);
-      }
-      if (i < numbers.length - 1) await sleep(2500); // ban-safe pacing
-    }
-
-    const head = results.slice(0, 80).join("\n");
-    const more = results.length > 80 ? `\n…and ${results.length - 80} more` : "";
-    await edit(`➕ *Add — done*\n\n${head}${more}\n\n✅ ${ok}/${numbers.length} added.`);
-  }
-
-  // ─── NSFW (live providers only; silent dead-API replaced with clear errors) ───
-  function nsfwImageCmd(category) {
-    return async (sock, msg) => {
-      const jid = msg.key.remoteJid;
-      if (jid.endsWith("@g.us")) return sock.sendMessage(jid, { text: "🔞 Adult content is only available in private chats (DM)." }, { quoted: msg });
-      await sock.sendMessage(jid, { react: { text: "🔞", key: msg.key } }).catch(() => {});
-      // waifu.pics (live, images) -> rule34.xxx fallback
-      try {
-        const d = await getJson(`https://api.waifu.pics/nsfw/${category}`, 15000);
-        const u = d?.url;
-        if (u) {
-          const buf = Buffer.from((await axios.get(u, { responseType: "arraybuffer", timeout: 20000, validateStatus: () => true })).data);
-          return await sock.sendMessage(jid, { image: buf, caption: `🔞 *${category}*\n_18+ content_` }, { quoted: msg });
-        }
-        throw new Error("waifu.pics returned no url");
-      } catch (e1) {
-        try {
-          const d = await getJson(`https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&limit=50&tags=${encodeURIComponent(category)}`, 20000);
-          const posts = (Array.isArray(d) ? d : d?.post || []).filter(p => p?.file_url && /\.(jpe?g|png|webp|gif)$/i.test(p.file_url));
-          if (posts.length) {
-            const p = posts[Math.floor(Math.random() * posts.length)];
-            const buf = Buffer.from((await axios.get(p.file_url, { responseType: "arraybuffer", timeout: 20000, validateStatus: () => true })).data);
-            return await sock.sendMessage(jid, { image: buf, caption: `🔞 *${category}*\n_18+ content_` }, { quoted: msg });
-          }
-          throw new Error("rule34 returned no posts");
-        } catch (e2) {
-          return sock.sendMessage(jid, { text: `🔞 ❌ Could not fetch *${category}*.\nwaifu.pics: ${e1.message}\nrule34: ${e2.message}` }, { quoted: msg });
-        }
-      }
-    };
-  }
-
-  function nsfwDlCmd(site) {
-    return async (sock, msg, args) => {
-      const jid = msg.key.remoteJid;
-      if (jid.endsWith("@g.us")) return sock.sendMessage(jid, { text: "🔞 Adult commands are only available in private chats (DM)." }, { quoted: msg });
-      const url = (args || []).join(" ").trim();
-      if (!url || !isUrl(url)) return sock.sendMessage(jid, { text: `🔞 *${site} Downloader*\n\nUsage: .${site.toLowerCase()} <${site} url>` }, { quoted: msg });
-      await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } }).catch(() => {});
-      const st = await sock.sendMessage(jid, { text: `🔞 Downloading ${site}...` }, { quoted: msg });
-      const edit = async (t) => { try { if (st?.key) await sock.sendMessage(jid, { text: t, edit: st.key }); } catch {} };
-      // KEYED DavidCyril chain
-      const tries = site === "XNXX"
-        ? ["/download/xnxxdl", "/download/xnxx"]
-        : ["/download/xvideosdl", "/download/xvideos"];
-      let dl = null, title = `${site} Video`;
-      for (const ep of tries) {
-        try {
-          const d = await dcGet(ep, { url }, 45000);
-          const r = d?.result || d?.data || d;
-          const u = pickUrl(d);
-          if (u) { dl = u; title = r?.title || title; break; }
-        } catch {}
-      }
-      if (!dl) { await edit(`🔞 ❌ ${site} download failed — all providers busy. Try again later.`); return; }
-      try {
-        const buf = Buffer.from((await axios.get(dl, { responseType: "arraybuffer", timeout: 180000, maxContentLength: 200 * 1024 * 1024, validateStatus: () => true })).data);
-        await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: `🔞 ${title}` }, { quoted: msg });
-        await edit(`🔞 ✅ ${title} sent.`);
-      } catch (e) {
-        await edit(`🔞 ❌ ${site} download failed: ${e.message}`);
-      }
-    };
-  }
-
-    cmd(["play", "music", "song"], { desc: "Player card + choices (audio/doc/voice/video)", category: "DOWNLOAD" }, playCmd);
-    cmd(["video", "yt", "ytdl", "videodl", "viddl"], { desc: "Download video", category: "DOWNLOAD" }, videoCmd);
-    cmd(["getpp", "getdp", "dp", "pfp2"], { desc: "Get profile picture", category: "INFO" }, getppCmd);
-    cmd("add", { desc: "Add members (group / VCF card / gclink)", category: "GROUP", ownerOnly: true }, addCmd);
-    cmd("nsfw", { desc: "NSFW image", category: "HENTAI", adult: true }, nsfwImageCmd("waifu"));
-    cmd("adult", { desc: "NSFW image", category: "HENTAI", adult: true }, nsfwImageCmd("waifu"));
-    cmd(["xnxxdl", "xnxx"], { desc: "XNXX downloader", category: "HENTAI", adult: true }, nsfwDlCmd("XNXX"));
-    cmd(["xvideosdl", "xvideos", "xvdl", "xvl"], { desc: "XVideos downloader", category: "HENTAI", adult: true }, nsfwDlCmd("XVideos"));
-
-    globalThis.__PRECIOUS_FIX_MERGED__ = { build: "precious-fix-inline 2026-09-23", commands: ["play","video","getpp","add","nsfw","adult","xnxxdl","xvideosdl"] };
-    console.log("[precious-fix] ✅ merged inline pack live — play, video, getpp, add, nsfw, xnxxdl, xvideosdl");
-  } catch (e) {
-    console.log("[precious-fix] ❌ inline merge failed:", (e && e.message) || e);
-  }
-})();
+/* __NSFW_PACK_REMOVED__ — old Prexzy/DavidCyril player pack boot removed. Use the native .play2/.play in this file. */

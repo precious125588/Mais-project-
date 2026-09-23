@@ -1,0 +1,30 @@
+WHY YOUR PUSHED FIXES AREN'T APPLYING (read this)
+
+Your deploy runs: node server.js  ->  spawns the bot  ->  mias/index.js
+
+1) The bot has NO file hot-reload for command modules.
+   mias/index.js is loaded ONCE at process start. Pushing new code to GitHub
+   does NOT change the running process. You MUST redeploy/restart.
+
+2) If you host on Railway/Render/Heroku and just `git push`, the running
+   container keeps old code until a new deploy is triggered.
+   -> Trigger a fresh deploy AND a rebuild (clear build cache).
+
+3) The verify hook prints the live build 20s & 120s after boot.
+   Watch your logs for:
+     [packs-verify:20s] installed: v20, v21, ...
+   If that build date is older than your push, the deploy did NOT pick it up.
+
+4) In WhatsApp send:  .fixcheck
+   The bot replies with the live build date. If it predates your deploy,
+   you are running stale code.
+
+HOW TO FIX (Railway):
+   - Railway dashboard -> your service -> "Redeploy" (and enable
+     "Clear build cache" the first time), OR
+   - push an empty commit:  git commit --allow-empty -m "redeploy" && git push
+   - confirm Settings -> Source is on the SAME branch you push (main),
+     and auto-deploy is ON.
+
+The old player was overriding .play at runtime. It is now removed, so the
+native .play2 / .play in mias/index.js is the only one that runs.

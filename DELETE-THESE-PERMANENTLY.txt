@@ -1,0 +1,8 @@
+DELETE these files from your server/repo. They are the OLD player that prints:
+  "❌ Download failed ... prexzy/ytmp3 ... Try .play2 yala"
+
+  mias/lib/nsfwAdultPack.cjs     <-- THE OLD PLAYER (delete this)
+  mias/lib/nsfwPrexzy.cjs        <-- its data module (delete this)
+  patches/patch-nsfw.cjs         <-- old patch that re-loads it (delete this)
+
+Then replace mias/index.js and server.js with the versions in this zip.
