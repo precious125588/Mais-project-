@@ -7213,7 +7213,7 @@ const MENU_CATEGORIES = [
     "instagram","ig","igdl","igstory","instastory","ighighlights","instahighlights",
     "play","play2","ytv","video","yt","ytdl","videodl","viddl",
     "snapchat","snap","snapdl","capcut","threads","threadsdl","threadsdl2","threadsv2",
-    "music","song","songs","songdoc","savetube","moviedl","trending","trending2",
+    "music","song","songs","songdoc","savetube","trending","trending2",
     "pinterest","pin2","pinsearch","pindl","pindlv2","pinterestdl2","pinterest2","pin2dl",
     "mediafire","mediafiredl","mfdl","mediafire2","mfdl2",
     "soundcloud","sc","scdl","apk","reddit","redditdl","pdf","aio","alldl","unzip","extract","zipextract","fileextract",
@@ -7306,7 +7306,7 @@ const MENU_CATEGORIES = [
     "lyrics","lyrics2","weather","currency",
     "github","githubuser","ghuser","guser","githubrepo","grepo","ghrepos","githubissues","ghissues","gissue","githubcode","ghcode",
     "news","sportsnews","sports2","football","basketball","basketballscore","nba","othersports",
-    "movie","moviesearch2","moviefind","imdbsearch","imdb2","movieinfo","movieinfo2","movieinfo3","moviedetail","filmdetail","filmfind","filmrec","movierecommend","movietrendings",
+    "imdbsearch","imdb2","movieinfo","filmdetail","filmfind","filmrec",
     "ftball","recommend",
     "apksearch","apkfind","android1","fdroidsearch","fdroidapp",
     "scsearch","scloud","soundcloudsearch","sc2",
@@ -11924,7 +11924,7 @@ async function _sendMovieDocumentFromPath(sock, jid, filePath, {
   }
 }
 
-cmd("movie", { desc: "Search & download movies", category: "SEARCH" }, async (sock, msg, args) => {
+cmd( { desc: "Search & download movies", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}movie <name>`); return; }
   await react(sock, msg, "🎬");
   const q = args.join(" ");
@@ -12068,7 +12068,7 @@ cmd("movieinfo", { desc: "Get movie details", category: "SEARCH" }, async (sock,
   }
   await sendReply(sock, msg, t);
 });
-cmd("moviedl", { desc: "Get movie download links — .moviedl <title or IMDB ID>", category: "DOWNLOAD" }, async (sock, msg, args) => {
+cmd( { desc: "Get movie download links — .moviedl <title or IMDB ID>", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args[0]) { await sendReply(sock, msg, `📥 *Movie Download*\n\nUsage: ${CONFIG.PREFIX}moviedl <title or IMDB ID>\nExample: ${CONFIG.PREFIX}moviedl Avengers Endgame`); return; }
   await react(sock, msg, "📥");
   const query = args.join(" ");
@@ -24464,7 +24464,7 @@ cmd(["manga","mangasearch","mangafind"], { desc: "Search for manga — .manga <t
 });
 
 // .moviesearch2 — movie search via prexzyvilla
-cmd(["moviesearch2","moviefind","filmfind"], { desc: "Search movies (prexzyvilla) — .moviesearch2 <title>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["filmfind"], { desc: "Search movies (prexzyvilla) — .moviesearch2 <title>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}moviesearch2 <movie title>*`); return; }
   await react(sock, msg, "🎬");
@@ -26247,7 +26247,7 @@ cmd(["trendings","trending2","movietrendings"], { desc: "Trending movies/series 
 });
 
 // ── Movie Detail ──────────────────────────────────────────────────
-cmd(["moviedetail","filmdetail","movieinfo3"], { desc: "Get movie detail — .moviedetail <title>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["filmdetail","movieinfo3"], { desc: "Get movie detail — .moviedetail <title>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}moviedetail <title>*`); return; }
   await react(sock, msg, "🎬");
@@ -26280,7 +26280,7 @@ cmd(["moviedetail","filmdetail","movieinfo3"], { desc: "Get movie detail — .mo
 });
 
 // ── Movie Recommendations ─────────────────────────────────────────
-cmd(["movierecommend","filmrec","recommend"], { desc: "Get movie recommendations — .movierecommend <title>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["filmrec","recommend"], { desc: "Get movie recommendations — .movierecommend <title>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}movierecommend <title>*`); return; }
   await react(sock, msg, "🎬");
@@ -30748,7 +30748,7 @@ cmd(["dcmovie","moviedc","dcmoviesearch"], { desc: "Search movies via DC — .dc
 });
 
 // ─── Movies: Nkiri ───────────────────────────────────────────────────────────
-cmd(["dcnkiri","nkiridc","nkirisearch"], { desc: "Search Nkiri movies via DC — .dcnkiri <title>", category: "INFO" }, async (sock, msg, args) => {
+cmd(["nkirisearch"], { desc: "Search Nkiri movies via DC — .dcnkiri <title>", category: "INFO" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}dcnkiri <movie title>`); return; }
   await react(sock, msg, "🎬");
   const q = args.join(" ");
@@ -41845,7 +41845,7 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
 
   // ══ 7. MOVIE / NKIRI — accept quoted text as the query ════════════════
   globalThis.__v26WrapMovieNkiri = function () {
-    for (const n of ["movie", "nkiri"]) {
+    for (const n of [ "nkiri"]) {
       const ex = commands.get(n);
       if (ex?.handler && !ex.__v26Quote) {
         const orig = ex.handler;
@@ -42144,8 +42144,8 @@ function __v30AddQuoteInput(names) {
   }
 }
 __v30AddQuoteInput([
-  "nkiri", "dcnkiri", "nkiridc", "nkirisearch",
-  "savetube", "movie", "moviedl", "boost6",
+     
+  "savetube",   "boost6",
   "tiktok", "tt", "ttdl", "play", "song", "video",
 ]);
 console.log("[v30] quote-reply input enabled for:", globalThis.__V30__.quote.join(", ") || "(none found)");
@@ -42391,7 +42391,7 @@ function __v31WrapCommand(name) {
   globalThis.__V31__.wrapped.push(name);
   return true;
 }
-const __V31_CMDS = ["nkiri", "dcnkiri", "nkiridc", "nkirisearch", "savetube", "movie", "moviedl", "boost6", "tiktok", "tt", "ttdl", "play", "song", "video"];
+const __V31_CMDS = [    "savetube",   "boost6", "tiktok", "tt", "ttdl", "play", "song", "video"];
 for (const _n31 of __V31_CMDS) __v31WrapCommand(_n31);
 console.log("[v31] never-silent + quote-reply wrap:", globalThis.__V31__.wrapped.join(", ") || "(none found)");
 if (globalThis.__V31__.missing.length) console.log("[v31] NOT registered (cannot wrap):", globalThis.__V31__.missing.join(", "));
@@ -42763,3 +42763,244 @@ Please wait.`);
 /* __V32_PATCHED__ */
 
 /* __NSFW_PACK_REMOVED__ — old Prexzy/DavidCyril player pack boot removed. Use the native .play2/.play in this file. */
+
+/* RELIABLE_DL_FINAL_START — 2026-09-23
+   PERMANENT replacement (not a fix pack):
+   1. .play/.music/.song → ad-style card (externalAdReply + showAdAttribution,
+      i.e. the "play with ads" look) with reply 1-4 picker.
+   2. Picker + .video use lib/reliableDl.js ONLY — princetechn (live-verified)
+      → audius/deezer/itunes → ytdl-core. Dead dcGet/gifted/cobalt chains bypassed.
+   3. movie / nkiri / dcnkiri / nkiridc / nkirisearch / moviedl DELETED.
+   Runs last in this file, so it wins over every earlier registration. */
+try {
+  const __RDL = __preciousRequire('../lib/reliableDl.js');
+
+  // ── 1. DELETE movie / nkiri commands ─────────────────────────────────────
+  for (const __n of ['movie', 'nkiri', 'dcnkiri', 'nkiridc', 'nkirisearch', 'moviedl']) {
+    try { commands.delete(__n); } catch (_) {}
+  }
+
+  // ── 2. play picker state ─────────────────────────────────────────────────
+  const __RDL_TTL = 20 * 60 * 1000;
+  const __RDL_PENDING = new Map();   // cardId -> { jid, user, meta, ts }
+  const __RDL_BOUND = new WeakSet();
+  try { globalThis.__RDL_PENDING__ = __RDL_PENDING; } catch (_) {}
+
+  function __rdlNorm(j) { return String(j || '').replace(/:\d+(?=@)/, ''); }
+  function __rdlNum(j) { return __rdlNorm(j).replace(/[^0-9]/g, ''); }
+  function __rdlSame(a, b) { const x = __rdlNum(a), y = __rdlNum(b); return x && y ? x === y : __rdlNorm(a) === __rdlNorm(b); }
+  function __rdlSender(m) { try { return typeof getSender === 'function' ? String(getSender(m) || '') : ''; } catch (_) { return ''; } }
+  function __rdlText(m) {
+    return String(m?.message?.conversation || m?.message?.extendedTextMessage?.text || '').trim();
+  }
+  function __rdlSweep() {
+    const now = Date.now();
+    for (const [k, v] of __RDL_PENDING) { if (!v || now - v.ts > __RDL_TTL) __RDL_PENDING.delete(k); }
+  }
+  function __rdlFmtDur(s) {
+    s = Number(s) || 0; if (!s) return '—';
+    return Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
+  }
+  function __rdlFmtViews(v) {
+    v = Number(v) || 0; if (!v) return '—';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+    return String(v);
+  }
+
+  // ── 3. delivery (media only, like the working JINX flow) ─────────────────
+  async function __rdlDeliver(sock, entry, n, replyMsg) {
+    const jid = entry.jid;
+    const meta = entry.meta || {};
+    const safe = String(meta.title || 'audio').replace(/[^\w\s.-]/g, '_').trim().slice(0, 60) || 'audio';
+    if (n === 4) {
+      const v = await __RDL.resolveVideo(meta);
+      try {
+        await sock.sendMessage(jid, { video: v.buf, mimetype: 'video/mp4', fileName: safe + '.mp4', caption: '🎬 *' + String(v.title || meta.title || 'video').slice(0, 80) + '*' }, { quoted: replyMsg });
+      } catch (_) {
+        await sock.sendMessage(jid, { document: v.buf, mimetype: 'video/mp4', fileName: safe + '.mp4' }, { quoted: replyMsg });
+      }
+      return;
+    }
+    const a = await __RDL.resolveAudio(meta);
+    let buf = a.buf, mime = a.mime || 'audio/mpeg', ext = a.ext || '.mp3';
+    if (n === 3) {
+      try {
+        if (typeof __preciousVoiceBuffer === 'function' && ext !== '.ogg') {
+          buf = await __preciousVoiceBuffer(buf, ext.replace(/^\./, '') || 'mp3');
+        }
+        mime = 'audio/ogg; codecs=opus'; ext = '.ogg';
+      } catch (_) { /* send as-is if ffmpeg missing */ }
+      await sock.sendMessage(jid, { audio: buf, mimetype: mime, ptt: true }, { quoted: replyMsg });
+    } else if (n === 2) {
+      await sock.sendMessage(jid, { document: buf, mimetype: mime, fileName: safe + ext }, { quoted: replyMsg });
+    } else {
+      await sock.sendMessage(jid, { audio: buf, mimetype: mime, ptt: false, fileName: safe + ext }, { quoted: replyMsg });
+    }
+  }
+
+  function __rdlBind(sock) {
+    if (!sock || !sock.ev || __RDL_BOUND.has(sock)) return;
+    __RDL_BOUND.add(sock);
+    sock.ev.on('messages.upsert', async (up) => {
+      try {
+        const msgs = (up && up.messages) || [];
+        for (const m of msgs) {
+          if (!m || !m.message || m.key?.remoteJid === 'status@broadcast') continue;
+          const t = __rdlText(m);
+          if (!/^[1-4]$/.test(t)) continue;
+          __rdlSweep();
+          const jid = m.key.remoteJid;
+          // match by quoted card first, else latest pending card in this chat
+          let entry = null;
+          const ctx = m.message?.extendedTextMessage?.contextInfo;
+          if (ctx?.stanzaId && __RDL_PENDING.has(ctx.stanzaId)) {
+            const cand = __RDL_PENDING.get(ctx.stanzaId);
+            if (cand && __rdlSame(cand.jid, jid)) entry = { id: ctx.stanzaId, ...cand };
+          }
+          if (!entry) {
+            let latest = null;
+            for (const [k, v] of __RDL_PENDING) {
+              if (v && __rdlSame(v.jid, jid) && (!latest || v.ts > latest.ts)) latest = { id: k, ...v };
+            }
+            entry = latest;
+          }
+          if (!entry) continue;
+          if (entry.user && __rdlSender(m) && entry.user !== __rdlSender(m) && !__rdlSame(entry.user, __rdlSender(m))) continue;
+          __RDL_PENDING.delete(entry.id);
+          try { await sock.sendMessage(jid, { react: { text: '⏳', key: m.key } }); } catch (_) {}
+          try {
+            await __rdlDeliver(sock, entry, Number(t), m);
+            try { await sock.sendMessage(jid, { react: { text: '✅', key: m.key } }); } catch (_) {}
+          } catch (e) {
+            try { await sock.sendMessage(jid, { react: { text: '❌', key: m.key } }); } catch (_) {}
+            try { await sendReply(sock, m, '❌ Download failed: ' + (e?.message || e)); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  // ── 4. .play — ad-style card (the "play with ads" look) + 1-4 picker ─────
+  async function __rdlPlayCard(sock, msg, args) {
+    const jid = msg.key.remoteJid;
+    const query = (args && args.length ? args.join(' ') : '').trim()
+      || (() => { try { const qt = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage; const t = qt?.conversation || qt?.extendedTextMessage?.text || ''; return String(t).trim(); } catch (_) { return ''; } })();
+    if (!query) return sendReply(sock, msg, '───── 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 × PLAYER ─────\n\nUsage: ' + (CONFIG.PREFIX || '.') + 'play <song name or link>');
+    try { await react(sock, msg, '⏳'); } catch (_) {}
+    const status = await sock.sendMessage(jid, { text: '───── 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 × PLAYER ─────\n🔍 Searching "' + query + '" ...' }, { quoted: msg }).catch(() => null);
+    try {
+      let meta = await __RDL.searchYouTube(query);
+      meta = await __RDL.enrichAuthor(meta);
+      const title = String(meta.title || query).slice(0, 80);
+      const author = meta.author || 'Unknown';
+      const cardText = [
+        '───── 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 × PLAYER ─────',
+        '',
+        'TITLE    : ' + title,
+        'AUTHOR   : ' + author,
+        'DURATION : ' + __rdlFmtDur(meta.duration),
+        'VIEWS    : ' + __rdlFmtViews(meta.views),
+        '',
+        'Reply here with a number:',
+        '1 - Audio',
+        '2 - Document (.mp3)',
+        '3 - Voice note',
+        '4 - Video (.mp4)',
+      ].join('\n');
+      let thumbBuf = null;
+      try { if (meta.thumb) thumbBuf = await __RDL.fetchBuf(meta.thumb, 10000); } catch (_) {}
+      // "play with ads": externalAdReply card WITH ad attribution restored.
+      const ad = {
+        title: title.slice(0, 60),
+        body: [author, __rdlFmtDur(meta.duration)].filter(Boolean).join(' • '),
+        mediaType: 1,
+        renderLargerThumbnail: true,
+        showAdAttribution: true,
+        sourceUrl: meta.url || undefined,
+      };
+      if (thumbBuf && thumbBuf.length > 100) ad.thumbnail = thumbBuf;
+      const sent = await sock.sendMessage(jid, { text: cardText, contextInfo: { externalAdReply: ad } }, { quoted: msg }).catch(() => null);
+      if (status && status.key) { try { await sock.sendMessage(jid, { delete: status.key }); } catch (_) {} }
+      if (!sent || !sent.key || !sent.key.id) { await sendReply(sock, msg, '❌ Could not send the player card for *' + title + '*.'); return; }
+      __rdlSweep();
+      __RDL_PENDING.set(sent.key.id, { jid: __rdlNorm(jid), user: __rdlSender(msg), meta, ts: Date.now() });
+      const timer = setTimeout(() => { __RDL_PENDING.delete(sent.key.id); }, __RDL_TTL);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+      __rdlBind(sock);
+      try { await react(sock, msg, '✅'); } catch (_) {}
+    } catch (e) {
+      if (status && status.key) { try { await sock.sendMessage(jid, { delete: status.key }); } catch (_) {} }
+      try { await react(sock, msg, '❌'); } catch (_) {}
+      await sendReply(sock, msg, '❌ Play failed: ' + (e?.message || e));
+    }
+  }
+
+  const __rdlPlayHandler = async (sock, msg, args) => __rdlPlayCard(sock, msg, args);
+  for (const n of ['play', 'music', 'song']) {
+    const e = commands.get(n) || { category: 'DOWNLOAD' };
+    e.handler = __rdlPlayHandler;
+    e._origHandler = __rdlPlayHandler;
+    e.desc = 'Play song — public reliable pipeline (ad card, reply 1-4)';
+    e.category = 'DOWNLOAD';
+    commands.set(n, e);
+  }
+
+  // ── 5. .video — same pipeline, no more "providers are busy" ──────────────
+  const __rdlVideoHandler = async (sock, msg, args) => {
+    const jid = msg.key.remoteJid;
+    if (!args || !args.length) {
+      return sendReply(sock, msg, '📹 *Video Download*\n\nUsage: *' + CONFIG.PREFIX + 'video <query or URL>*\nOptions: mp4 (default) • doc • audio');
+    }
+    const flags = ['mp4', 'doc', 'audio', 'hd'];
+    let fmt = 'mp4'; const qa = [...args];
+    if (flags.includes(String(qa[qa.length - 1] || '').toLowerCase())) fmt = qa.pop().toLowerCase();
+    const query = qa.join(' ').trim();
+    if (!query) return sendReply(sock, msg, '❌ Usage: ' + CONFIG.PREFIX + 'video <query or URL>');
+    try { await react(sock, msg, '📹'); } catch (_) {}
+    const status = await sock.sendMessage(jid, { text: '📹 *' + CONFIG.BOT_NAME + ' Video*\n🔍 "' + query + '" ...' }, { quoted: msg }).catch(() => null);
+    try {
+      let meta = await __RDL.searchYouTube(query);
+      meta = await __RDL.enrichAuthor(meta);
+      if (fmt === 'audio') {
+        const a = await __RDL.resolveAudio(meta);
+        const safe = String(a.title || 'audio').replace(/[^\w\s.-]/g, '_').trim().slice(0, 60) || 'audio';
+        await sock.sendMessage(jid, { audio: a.buf, mimetype: a.mime || 'audio/mpeg', ptt: false, fileName: safe + (a.ext || '.mp3') }, { quoted: msg });
+      } else {
+        const v = await __RDL.resolveVideo(meta);
+        const safe = String(v.title || 'video').replace(/[^\w\s.-]/g, '_').trim().slice(0, 60) || 'video';
+        if (fmt === 'doc') {
+          await sock.sendMessage(jid, { document: v.buf, mimetype: 'video/mp4', fileName: safe + '.mp4' }, { quoted: msg });
+        } else {
+          try {
+            await sock.sendMessage(jid, { video: v.buf, mimetype: 'video/mp4', fileName: safe + '.mp4', caption: '🎬 *' + String(v.title || 'video').slice(0, 80) + '*' }, { quoted: msg });
+          } catch (_) {
+            await sock.sendMessage(jid, { document: v.buf, mimetype: 'video/mp4', fileName: safe + '.mp4' }, { quoted: msg });
+          }
+        }
+      }
+      if (status && status.key) { try { await sock.sendMessage(jid, { delete: status.key }); } catch (_) {} }
+      try { await react(sock, msg, '✅'); } catch (_) {}
+    } catch (e) {
+      if (status && status.key) {
+        try { await editMessage(sock, jid, status.key, '📹 *' + CONFIG.BOT_NAME + ' Video*\n\n❌ ' + (e?.message || 'Download failed') + '\nTry again shortly, or use *' + CONFIG.PREFIX + 'play* → option *4*.'); } catch (_) {}
+      } else {
+        try { await sendReply(sock, msg, '❌ Video failed: ' + (e?.message || e)); } catch (_) {}
+      }
+      try { await react(sock, msg, '❌'); } catch (_) {}
+    }
+  };
+  for (const n of ['video', 'yt', 'ytdl', 'videodl', 'viddl']) {
+    const e = commands.get(n) || { category: 'DOWNLOAD' };
+    e.handler = __rdlVideoHandler;
+    e._origHandler = __rdlVideoHandler;
+    e.desc = 'Download video — public reliable pipeline';
+    e.category = 'DOWNLOAD';
+    commands.set(n, e);
+  }
+
+  console.log('[reliable-dl] ACTIVE: play ad-card + 1-4 picker (princetechn→audius→deezer→itunes), video cmd rewired, movie/nkiri deleted.');
+} catch (e) {
+  console.log('[reliable-dl] init failed:', e && e.message);
+}
+/* RELIABLE_DL_FINAL_END */
