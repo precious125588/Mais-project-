@@ -515,14 +515,22 @@ function isTikTokUrl(value) {
   }
 }
 
+// vm.tiktok.com / vt.tiktok.com / tiktok.com/t/ are SHORT LINKS to a single
+// video. Every downloader in the chain follows the 302 redirect to the
+// canonical /@user/video/<id> URL on its own, so these must be classified as
+// VIDEO urls. Treating them as "pages" was the VM-source expectation
+// mismatch: the page scraper compared a redirect stub against video metadata
+// and rejected every VM source.
+function isTikTokShortLink(url) {
+  return /^(vm|vt|m)\.tiktok\.com$/i.test(url.hostname)
+    || (/(^|\.)tiktok\.com$/i.test(url.hostname) && /^\/t\//i.test(url.pathname));
+}
+
 function isConfiguredVideoUrl(value) {
   if (!isTikTokUrl(value)) return false;
   try {
     const url = new URL(String(value).trim());
-    // A vm.tiktok.com link is a share/profile landing page in the supplied
-    // list, not a reliable downloadable video URL. Treat it as a page and
-    // inspect the page's own post metadata instead of sending the landing
-    // page to a downloader.
+    if (isTikTokShortLink(url)) return true;
     return /\/@[^/]+\/video(?:\/|$)/i.test(url.pathname)
       || /\/video\/\d+/i.test(url.pathname);
   } catch {
@@ -550,7 +558,11 @@ function decodeHtml(value) {
 function videoMetadataFromObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const videoId = value.video_id || value.aweme_id || value.awemeId
-    || value.item_id || value.itemId || value.videoId;
+    || value.item_id || value.itemId || value.videoId
+    // TikTok's own SIGI_STATE / rehydration pages name the field just "id".
+    // Accept it only when it is a real numeric aweme id so random page
+    // objects never slip through.
+    || (/^\d{10,25}$/.test(String(value.id || "")) ? value.id : undefined);
   const author = value.author?.unique_id
     || value.author?.uniqueId
     || value.author?.nickname
@@ -558,7 +570,10 @@ function videoMetadataFromObject(value) {
     || value.authorInfo?.uniqueId
     || value.authorInfo?.nickname
     || value.unique_id
-    || value.uniqueId;
+    || value.uniqueId
+    // SIGI item rows expose the author as a plain username string.
+    || (typeof value.author === "string" ? value.author : undefined)
+    || value.nickname;
   const title = String(
     value.title
       || value.desc
