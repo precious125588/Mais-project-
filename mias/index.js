@@ -2446,41 +2446,36 @@ async function connectToWA(force = false) {
 
         if (isUnauthorized) {
           unauthorizedStreak++;
-          const MAX_401_RETRIES = Math.max(2, parseInt(process.env.MAX_401_RETRIES || "4", 10));
-          const stillRecoverable =
-            !isExplicitUnlink &&
-            (handoffSettling || sessionIsYoung || unauthorizedStreak < MAX_401_RETRIES);
-
-          if (stillRecoverable) {
-            const delay = Math.min(60000, 8000 * unauthorizedStreak);
-            console.log(`🛡️ 401 (${errMsg || "no message"}) #${unauthorizedStreak} — NOT wiping the session; retrying in ${Math.round(delay / 1000)}s.`);
-            scheduleReconnect(`recoverable-401-${unauthorizedStreak}`, delay);
+          // Only wipe/quarantine if WhatsApp explicitly notified that the user unlinked/removed the device from their phone
+          if (isExplicitUnlink) {
+            clearReconnectTimer();
+            console.log("🚪 Device explicitly removed from WhatsApp. Quarantining session.");
+            try {
+              const _logoutNotiDir = path.join(__dirname, "..", "nexstore", "logout_notifications");
+              if (!fs.existsSync(_logoutNotiDir)) fs.mkdirSync(_logoutNotiDir, { recursive: true });
+              const _myNum = String(sock?.user?.id || "").split(":")[0].split("@")[0].replace(/[^0-9]/g, "") ||
+                String(path.basename(AUTH_DIR) || "").split("@")[0].replace(/[^0-9]/g, "") || "unknown";
+              const _notiFile = path.join(_logoutNotiDir, `${_myNum}_${Date.now()}.json`);
+              fs.writeFileSync(_notiFile, JSON.stringify({
+                number: _myNum,
+                jid: sock?.user?.id || "",
+                name: sock?.user?.name || "",
+                ts: Date.now(),
+                reason: errMsg || "device removed from WhatsApp",
+                authDir: AUTH_DIR,
+              }));
+            } catch {}
+            cleanupLoggedOutRecords(sock?.user?.id || path.basename(AUTH_DIR));
+            try { require('../sessionPaths').quarantineDir(AUTH_DIR, 'confirmed logout — quarantined, never deleted'); } catch {}
+            console.log('🧹 Session quarantined after a confirmed logout.');
             return;
           }
 
-          clearReconnectTimer();
-          console.log("🚪 Confirmed logout — the linked device was removed. Quarantining session.");
-          // ── Notify via Telegram logout request file ─────────────────────
-          try {
-            const _logoutNotiDir = path.join(__dirname, "..", "nexstore", "logout_notifications");
-            if (!fs.existsSync(_logoutNotiDir)) fs.mkdirSync(_logoutNotiDir, { recursive: true });
-            const _myNum = String(sock?.user?.id || "").split(":")[0].split("@")[0].replace(/[^0-9]/g, "") ||
-              String(path.basename(AUTH_DIR) || "").split("@")[0].replace(/[^0-9]/g, "") || "unknown";
-            const _notiFile = path.join(_logoutNotiDir, `${_myNum}_${Date.now()}.json`);
-            fs.writeFileSync(_notiFile, JSON.stringify({
-              number: _myNum,
-              jid: sock?.user?.id || "",
-              name: sock?.user?.name || "",
-              ts: Date.now(),
-              reason: isExplicitUnlink
-                ? (errMsg || "device removed from WhatsApp")
-                : `${errMsg || `code=${code}`} (after ${unauthorizedStreak} reconnect attempts)`,
-              authDir: AUTH_DIR,
-            }));
-          } catch {}
-          cleanupLoggedOutRecords(sock?.user?.id || path.basename(AUTH_DIR));
-          try { require('../sessionPaths').quarantineDir(AUTH_DIR, 'confirmed logout — quarantined, never deleted'); } catch {}
-          console.log('🧹 Session quarantined after a confirmed logout.');
+          // Otherwise, it is a transient 401 / connection desync — NEVER wipe or quarantine the session!
+          // Use bounded exponential backoff (up to 90s) and continue retrying so the session recovers automatically.
+          const delay = Math.min(90000, 10000 * Math.min(unauthorizedStreak, 9));
+          console.log(`🛡️ 401 (${errMsg || "temporary auth desync"}) #${unauthorizedStreak} — preserving session on disk; retrying in ${Math.round(delay / 1000)}s.`);
+          scheduleReconnect(`recoverable-401-${unauthorizedStreak}`, delay);
           return;
         }
 

@@ -1739,8 +1739,7 @@ async function startpairing(nexusDevNumber, options = {}) {
                     if (pairingStillPending) tracker.pairingError = 'Pairing request failed after multiple retries. Please try again.';
                 }
             } else if (reason === DisconnectReason.badSession) {
-                console.log(chalk.red(`❌ Invalid Session for ${nexusDevNumber}`));
-                forceCleanupSession(nexusDevNumber);
+                console.log(chalk.red(`❌ Bad/Stale Session event for ${nexusDevNumber} — preserving files and retrying`));
                 tracker.disconnected = true;
                 if (pairingStillPending) tracker.pairingError = 'Invalid pairing session. Please try again.';
             } else if (reason === DisconnectReason.loggedOut) {
