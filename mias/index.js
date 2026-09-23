@@ -6426,7 +6426,14 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
 // ═══════════════════════════════════════════════════════════════════════════════
 const commands = new Map();
 function cmd(names, opts, handler) {
-  for (const n of [].concat(names)) commands.set(n.toLowerCase(), { ...opts, handler });
+  // Defensive: a malformed registration must never abort module evaluation.
+  if (typeof names === "object" && names !== null && !Array.isArray(names)) {
+    handler = opts; opts = names; names = [];
+  }
+  for (const n of [].concat(names || [])) {
+    if (typeof n !== "string" || !n.trim()) { console.warn("[cmd] skipped invalid command name:", n, opts && opts.desc); continue; }
+    commands.set(n.toLowerCase(), { ...opts, handler });
+  }
 }
 
   cmd(["gpt4o","gpt-4o"], { desc: "Chat with GPT-4o", category: "AI" }, async (sock, msg, args) => {
@@ -11924,7 +11931,7 @@ async function _sendMovieDocumentFromPath(sock, jid, filePath, {
   }
 }
 
-cmd( { desc: "Search & download movies", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["movie"], { desc: "Search & download movies", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}movie <name>`); return; }
   await react(sock, msg, "🎬");
   const q = args.join(" ");
@@ -12068,7 +12075,7 @@ cmd("movieinfo", { desc: "Get movie details", category: "SEARCH" }, async (sock,
   }
   await sendReply(sock, msg, t);
 });
-cmd( { desc: "Get movie download links — .moviedl <title or IMDB ID>", category: "DOWNLOAD" }, async (sock, msg, args) => {
+cmd(["moviedl"], { desc: "Get movie download links — .moviedl <title or IMDB ID>", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args[0]) { await sendReply(sock, msg, `📥 *Movie Download*\n\nUsage: ${CONFIG.PREFIX}moviedl <title or IMDB ID>\nExample: ${CONFIG.PREFIX}moviedl Avengers Endgame`); return; }
   await react(sock, msg, "📥");
   const query = args.join(" ");
