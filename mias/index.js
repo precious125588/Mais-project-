@@ -4029,7 +4029,7 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
     sock.ev.on("group-participants.update", async (event) => {
       try { globalThis.__tkickSock = sock; } catch {}
       try {
-        if (isBotPrivateModeActive()) return;
+        // Allow group automations (welcome/goodbye/antiraid) to run regardless of private mode
         const { id: gid, participants: rawParticipants, action } = event;
         const s = getSettings(gid);
         let meta;
@@ -4083,11 +4083,23 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
             } catch {}
             let _wCard = _wPp;
             try { if (typeof globalThis._passportCard === "function") _wCard = await globalThis._passportCard(_wPp, "WELCOME"); } catch {}
-            const _wQt = { key: { remoteJid: gid, fromMe: false, id: "WELC" + Date.now().toString(36), participant: pJid }, message: { conversation: "🆕 new member" } };
             try {
-              if (_wCard) await sock.sendMessage(gid, { image: _wCard, caption: _wCaption, mentions: [pJid] }, { quoted: _wQt });
-              else await sock.sendMessage(gid, { text: _wCaption, mentions: [pJid] }, { quoted: _wQt });
-            } catch {}
+              console.log(`[WELCOME] Sending welcome for ${num} in ${groupName}`);
+              let _sent = false;
+              if (_wCard) {
+                try {
+                  await sock.sendMessage(gid, { image: _wCard, caption: _wCaption, mentions: [pJid] });
+                  _sent = true;
+                } catch (e1) {
+                  console.error("[WELCOME] Card send failed, falling back to text:", e1?.message);
+                }
+              }
+              if (!_sent) {
+                await sock.sendMessage(gid, { text: _wCaption, mentions: [pJid] });
+              }
+            } catch (e) {
+              console.error("[WELCOME] Error sending welcome message:", e?.message);
+            }
             if (s?.welcomeDM) {
               const _dmT = String(s.welcomeDMMsg || `👋 Hey @{number}, welcome to *{group}*! Check the group description for rules.`)
                 .replace(/\{name\}/gi, display).replace(/\{number\}/gi, num).replace(/\{group\}/gi, groupName);
@@ -4111,11 +4123,23 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
             } catch {}
             let _gCard = _gPp;
             try { if (typeof globalThis._passportCard === "function") _gCard = await globalThis._passportCard(_gPp, "GOODBYE"); } catch {}
-            const _gQt = { key: { remoteJid: gid, fromMe: false, id: "GBYE" + Date.now().toString(36), participant: pJid }, message: { conversation: "👋 left" } };
             try {
-              if (_gCard) await sock.sendMessage(gid, { image: _gCard, caption: _gCaption, mentions: [pJid] }, { quoted: _gQt });
-              else await sock.sendMessage(gid, { text: _gCaption, mentions: [pJid] }, { quoted: _gQt });
-            } catch {}
+              console.log(`[GOODBYE] Sending goodbye for ${num} in ${groupName}`);
+              let _sent = false;
+              if (_gCard) {
+                try {
+                  await sock.sendMessage(gid, { image: _gCard, caption: _gCaption, mentions: [pJid] });
+                  _sent = true;
+                } catch (e1) {
+                  console.error("[GOODBYE] Card send failed, falling back to text:", e1?.message);
+                }
+              }
+              if (!_sent) {
+                await sock.sendMessage(gid, { text: _gCaption, mentions: [pJid] });
+              }
+            } catch (e) {
+              console.error("[GOODBYE] Error sending goodbye message:", e?.message);
+            }
           }
 
           // ── Anti-Promote (auto-demote unauthorized promotions) ───────────────
@@ -7271,7 +7295,7 @@ const MENU_CATEGORIES = [
     "deep","smooth","fat","tupai","blown","radio","robot","chipmunk","nightcore","earrape","bass","reverse","slow","fast","baby","deamon",
     "freesound","fsounddl","nonstick","freesounddl","fsearch","nonsticksound","sounddl","soundsearch"] },
   { name: "CONFIG",    emoji: "⚙️",  cmds: ["prefix","setprefix","settheme","config"] },
-  { name: "CONVERT",   emoji: "🔄", cmds: ["text2pdf","topdf","txt2pdf","pdftotext","pdf2txt","extractpdf","pdftext","getpdftext"] },
+  { name: "CONVERT",   emoji: "🔄", cmds: ["convert","sticker","toimg","tomp3","tovideo","tovn","tourl","text2pdf","topdf","txt2pdf","pdftotext","pdf2txt","extractpdf"] },
   { name: "CREATOR",   emoji: "👑", cmds: ["eval","removeval","listeval","shell","getcmd","install","deleteplugin","listplugins","writefile","cleandb","sysinfo","setemoji","addcase","dropcase"] },
   { name: "DEBUG",     emoji: "🐛", cmds: ["test","debug"] },
   { name: "DOWNLOAD",  emoji: "📥", cmds: [
@@ -43365,38 +43389,179 @@ cmd(["tkick", "tempkick", "tk"], { desc: "Temporarily kick a member, auto re-add
 });
 
 // ── rate-limit-safe bulk ADD (adds one by one, queues on 429, hundreds OK) ────
+
+// ── Heavy Task Pipeline (Never blocks socket or event loop, handles errors gracefully) ──
+globalThis._heavyTaskPipeline = globalThis._heavyTaskPipeline || {
+  _running: false,
+  _queue: [],
+  enqueue(taskFn) {
+    this._queue.push(taskFn);
+    if (!this._running) this._runNext();
+  },
+  async _runNext() {
+    if (this._queue.length === 0) {
+      this._running = false;
+      return;
+    }
+    this._running = true;
+    const task = this._queue.shift();
+    try {
+      await task();
+    } catch (err) {
+      console.error("[TASK-PIPELINE] Task error:", err?.message || err);
+    } finally {
+      setTimeout(() => this._runNext(), 100);
+    }
+  }
+};
+
+// Global unhandled error absorption so heavy background tasks can never kill the bot process
+if (!globalThis.__heavyCrashProtector) {
+  globalThis.__heavyCrashProtector = true;
+  process.on("unhandledRejection", (reason) => {
+    console.error("[CRASH-PROTECT] Handled unhandledRejection:", reason?.message || reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[CRASH-PROTECT] Handled uncaughtException:", err?.message || err);
+  });
+}
+
+// ── Convert Category Command Menu ──
+cmd(["convert", "convertmenu"], { desc: "Show conversion tools & commands", category: "CONVERT" }, async (sock, msg) => {
+  const text = `🔄 ━━━ *CONVERT MENU* ━━━ 🔄\n\n` +
+    `  ╰➤ *${CONFIG.PREFIX}sticker* (or *${CONFIG.PREFIX}s*) — Reply to image/video to make sticker\n` +
+    `  ╰➤ *${CONFIG.PREFIX}toimg* — Reply to sticker to convert to image\n` +
+    `  ╰➤ *${CONFIG.PREFIX}tomp3* — Reply to video/audio to convert to MP3\n` +
+    `  ╰➤ *${CONFIG.PREFIX}tovideo* — Reply to animated sticker/GIF to make MP4\n` +
+    `  ╰➤ *${CONFIG.PREFIX}tovn* — Reply to audio/video to convert to voice note\n` +
+    `  ╰➤ *${CONFIG.PREFIX}tourl* — Reply to any media to upload to direct URL\n` +
+    `  ╰➤ *${CONFIG.PREFIX}text2pdf <text>* — Convert text to downloadable PDF\n` +
+    `  ╰➤ *${CONFIG.PREFIX}pdftotext* — Reply to PDF document to extract text\n\n` +
+    `━━━━━━━━━━━━━━━━━━━`;
+  await sendReply(sock, msg, text);
+});
+
+// Simple text to PDF and PDF to text converters
+cmd(["text2pdf", "topdf", "txt2pdf"], { desc: "Convert text to PDF file", category: "CONVERT" }, async (sock, msg, args) => {
+  const content = args.join(" ").trim() || (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation || "");
+  if (!content) {
+    await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}text2pdf Your text here* or reply to a text message.`);
+    return;
+  }
+  try {
+    const lines = content.split("\n");
+    let stream = "BT /F1 12 Tf 50 750 Td 15 TL ";
+    for (const line of lines.slice(0, 45)) {
+      const sanitized = line.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+      stream += "(" + sanitized + ") ' ";
+    }
+    stream += "ET";
+    const pdfStr = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length " + stream.length + " >>\nstream\n" + stream + "\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000244 00000 n \n0000000305 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n385\n%%EOF";
+    const pdfBuf = Buffer.from(pdfStr);
+    await sock.sendMessage(msg.key.remoteJid, {
+      document: pdfBuf,
+      mimetype: "application/pdf",
+      fileName: "converted.pdf"
+    }, { quoted: msg });
+  } catch (err) {
+    await sendReply(sock, msg, `❌ PDF conversion failed: ${err?.message || err}`);
+  }
+});
+
+cmd(["pdftotext", "pdf2txt", "extractpdf"], { desc: "Extract text from PDF", category: "CONVERT" }, async (sock, msg) => {
+  const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const doc = quoted?.documentMessage || quoted?.documentWithCaptionMessage?.message?.documentMessage;
+  if (!doc) {
+    await sendReply(sock, msg, `📄 Reply to a *PDF document* with ${CONFIG.PREFIX}pdftotext`);
+    return;
+  }
+  try {
+    const stream = await downloadContentFromMessage(doc, "document");
+    let buf = Buffer.from([]);
+    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+    const str = buf.toString("utf8");
+    const matches = str.match(/\((.*?)\)/g) || [];
+    const extracted = matches.map(m => m.slice(1, -1)).filter(t => t.trim().length > 1).join(" ").slice(0, 1500);
+    if (!extracted) {
+      await sendReply(sock, msg, `ℹ️ Could not extract plain text from this PDF (it may be scanned/image-based).`);
+      return;
+    }
+    await sendReply(sock, msg, `📄 *Extracted Text:*\n\n${extracted}`);
+  } catch (e) {
+    await sendReply(sock, msg, `❌ Failed to read PDF: ${e?.message || e}`);
+  }
+});
+
 cmd("add", { desc: "Add member(s) — .add num1,num2,... (hundreds supported)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
   if (!requireGroup(msg)) { await sendReply(sock, msg, "❌ Group only."); return; }
   const gJid = msg.key.remoteJid;
   const numbers = args.join(" ").split(/[,\s]+/).map(n => n.replace(/\D/g, "")).filter(n => n.length >= 7);
   if (!numbers.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}add 2349001234567,2348001234567`); return; }
-  const statusMsg = await sock.sendMessage(gJid, { text: `➕ *Add Queue*\n\n⬡ Queued ${numbers.length} number(s). Adding one by one…` }, { quoted: msg });
+
+  const statusMsg = await sock.sendMessage(gJid, { text: `➕ *Add Queue*\n\n⬡ Queued ${numbers.length} number(s) in background pipeline…` }, { quoted: msg });
   const key = statusMsg.key;
-  let ok = 0, done = 0;
-  const lines = [];
-  for (const num of numbers) {
-    const jid = num + "@s.whatsapp.net";
-    let okThis = false, msgNote = "";
-    for (let attempt = 0; attempt < 4 && !okThis; attempt++) {
-      try { await sock.groupParticipantsUpdate(gJid, [jid], "add"); okThis = true; }
-      catch (e) {
-        const s = e?.status || e?.output?.statusCode || 0;
+
+  // Offload to background pipeline so the message handler is freed immediately
+  globalThis._heavyTaskPipeline.enqueue(async () => {
+    let ok = 0, done = 0;
+    const lines = [];
+    for (const num of numbers) {
+      const jid = num + "@s.whatsapp.net";
+      let okThis = false, msgNote = "";
+      try {
+        // Enforce an 8-second timeout per add call so a hanging WA query can never stall the bot
+        const res = await Promise.race([
+          sock.groupParticipantsUpdate(gJid, [jid], "add"),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000))
+        ]);
+        const itemRes = Array.isArray(res) ? res[0] : res;
+        const status = String(itemRes?.status || "200");
+        if (status === "200") {
+          okThis = true;
+        } else if (status === "403") {
+          msgNote = "privacy (needs invite)";
+        } else if (status === "409") {
+          msgNote = "already in group";
+          okThis = true;
+        } else if (status === "408") {
+          msgNote = "timed out";
+        } else {
+          msgNote = `code ${status}`;
+        }
+      } catch (e) {
         const m = String(e?.message || "");
-        if (s === 429 || /rate|limit|too many/i.test(m)) { msgNote = "rate-limited, queued"; await new Promise(r => setTimeout(r, 5000 * (attempt + 1))); }
-        else if (s === 403 || /privacy|invite/i.test(m)) { msgNote = "privacy — needs invite"; break; }
-        else if (s === 404 || /not.*whatsapp/i.test(m)) { msgNote = "not on WhatsApp"; break; }
-        else if (s === 409 || /conflict|already/i.test(m)) { msgNote = "already in group"; okThis = true; break; }
-        else { msgNote = m.slice(0, 40) || "failed"; break; }
+        if (/timeout/i.test(m)) {
+          msgNote = "timeout";
+        } else if (/403|privacy/i.test(m)) {
+          msgNote = "privacy settings";
+        } else if (/409|already/i.test(m)) {
+          msgNote = "already added";
+          okThis = true;
+        } else {
+          msgNote = m.slice(0, 30) || "error";
+        }
       }
+
+      done++;
+      if (okThis) { ok++; lines.push(`✅ +${num}`); }
+      else { lines.push(`❌ +${num}: ${msgNote}`); }
+
+      // Update progress every 2 items or on completion
+      if (done % 2 === 0 || done === numbers.length) {
+        try {
+          await editMessage(sock, gJid, key, `➕ *Add Queue (In Progress)*\n\n${lines.slice(-10).join("\n")}\n\n📊 ${done}/${numbers.length} processed (${ok} added)`);
+        } catch {}
+      }
+      // Brief pause between requests to prevent aggressive rate limits
+      await new Promise(r => setTimeout(r, 1200));
     }
-    done++;
-    if (okThis) { ok++; lines.push(`✅ +${num}`); } else { lines.push(`❌ +${num}: ${msgNote}`); }
-    if (done % 10 === 0 || done === numbers.length) {
-      try { await editMessage(sock, gJid, key, `➕ *Add Queue*\n\n${lines.slice(-15).join("\n")}${lines.length > 15 ? `\n…(${lines.length - 15} more)` : ""}\n\n${done}/${numbers.length} processed • ${ok} added`); } catch {}
+
+    try {
+      await editMessage(sock, gJid, key, `➕ *Add Complete*\n\n✅ Added: ${ok}\n❌ Failed: ${numbers.length - ok}\n📊 Total: ${numbers.length}\n\n${lines.slice(-12).join("\n")}`);
+    } catch {
+      try { await sendReply(sock, msg, `➕ *Add Complete* — ${ok}/${numbers.length} added successfully.`); } catch {}
     }
-    await new Promise(r => setTimeout(r, 1500));
-  }
-  try { await editMessage(sock, gJid, key, `➕ *Add Complete*\n\n✅ Added: ${ok}\n❌ Failed: ${numbers.length - ok}\n📊 Total: ${numbers.length}`); } catch {}
+  });
 });
 
 // ── group name / description / picture (these existed in the menu but had no handlers) ──
