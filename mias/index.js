@@ -9725,10 +9725,10 @@ const _p2PlayCardImpl = async (sock, msg, args) => {
     '━━━━━━━━━━━━━━━━━━━━',
     '📥 *Choose a format — quote THIS message with the number:*',
     '',
-    '  1️⃣  *Audio* — playable audio',
-    '  2️⃣  *Document* — .mp3 file to download',
-    '  3️⃣  *Voice* — voice note',
-    '  4️⃣  *Video* — mp4 with sound',
+    '  1.  *Audio* — playable audio',
+    '  2.  *Document* — .mp3 file to download',
+    '  3.  *Voice* — voice note',
+    '  4.  *Video* — mp4 with sound',
     '',
     '_Example: reply to this card with_ `1` _for audio, `4` _for video._',
   ].join('\n');
@@ -42967,10 +42967,10 @@ cmd(['cmdaudit', 'audit', 'cmdcheck'], { desc: 'Truthful command registry audit'
   ━━━━━━━━━━━━━━
   *Reply (quote) to this message with the number of your choice:*
 
-  1️⃣  Audio Type
-  2️⃣  Audio Document
-  3️⃣  Voice note
-  4️⃣  Video Type
+  1.  Audio Type
+  2.  Audio Document
+  3.  Voice note
+  4.  Video Type
   ━━━━━━━━━━━━━━
   _Reply within 5 minutes._`;
 
