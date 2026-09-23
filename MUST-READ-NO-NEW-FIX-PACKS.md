@@ -34,3 +34,7 @@ Boot log must show, in order:
 And in WhatsApp, send **.fixcheck** — the bot replies with the live build and
 which v30 fixes are armed. If the build date predates your deploy, the deploy
 did not pick up the new files.
+
+> **Also read `MUST-READ-NO-PLUGIN-FOLDER.txt`** — there is no plugin-folder
+> loader; `mias/plugins/*.js` is dead code. The old `mias/plugins/precious-fix.js`
+> was merged into the bottom of `mias/index.js` on 2026-09-23 and deleted.

@@ -1,0 +1,88 @@
+⚠️  MUST READ BEFORE YOU "FIX" ANYTHING  —  2026-09-23
+=======================================================
+READ THIS TOGETHER WITH  MUST-READ-NO-NEW-FIX-PACKS.md
+
+
+1. THERE IS NO PLUGIN FOLDER LOADER. mias/plugins/ IS DEAD.
+--------------------------------------------------------------------
+There is NO PluginSystem, NO auto-discovery, NO readdirSync() over
+mias/plugins/ anywhere in this repository. Verified:
+
+    rg -n "readdirSync" | grep -i plugin      ->  no results
+
+The identifier `plugins` inside mias/index.js (line ~16856) is ONLY the
+registry Map for the `.install <gist-url>` owner command. It is a list of
+remote URLs — it never reads the mias/plugins/ directory.
+
+=> Any file you drop into mias/plugins/ is never required, never executed,
+   registers nothing, prints nothing, and fails SILENTLY. After pairing the
+   bot the commands simply do not exist. That is exactly what happened with
+   mias/plugins/precious-fix.js (now merged and deleted).
+
+DO NOT create mias/plugins/*.js. DO NOT create another "fix pack".
+
+
+2. WHERE COMMAND FIXES ACTUALLY GO
+--------------------------------------------------------------------
+Load order at runtime:
+
+    server.js / index.js
+      -> precious-master-fix-boot.cjs bootParent()
+      -> mias/index.js            (all cmd(...) registrations run here)
+           ...
+           bootChild()            (installs v20 -> v21 -> gst-picker ->
+                                   v23-rc -> playv2 -> watermark -> v24 ->
+                                   v27 -> v28 -> v29 -> tt-quote)
+           v30 FINAL BLOCK
+           PRECIOUS-FIX MERGED INLINE BLOCK   <= last writer wins
+
+LAST REGISTRATION WINS. cmd() overwrites any earlier handler with the same
+name and logs "[registry] overwrite: <name>".
+
+This matters: precious-fixes-v21.cjs registers .play at bootChild time. Any
+.play registered earlier in mias/index.js is destroyed. That is why the
+merged block sits at the very BOTTOM of mias/index.js — after bootChild().
+
+To change .play / .video / .getpp / .add / .nsfw / .xnxxdl / .xvideosdl:
+    EDIT THE BLOCK `(function __preciousFixMerged() {...})()`
+    AT THE END OF mias/index.js — IN PLACE.
+For anything else: edit the owning module (mias/precious-fixes-vXX.cjs) in
+place. Never add a new file.
+
+
+3. WHY THE OLD PLUGIN COULD NEVER HAVE WORKED EVEN IF IT WERE LOADED
+--------------------------------------------------------------------
+Its exports did:      handler: nsfwImageCmd("waifu")
+but nsfwImageCmd was declared `async`, so that expression is a PROMISE, not
+a function. cmd() would have logged
+"[registry !!] nsfw registered WITHOUT a function handler — it can never
+reply". Both factories are now plain (non-async) functions in the merged
+block. Keep them that way.
+
+
+4. HOW TO VERIFY A DEPLOY REALLY PICKED THIS UP
+--------------------------------------------------------------------
+Boot log must contain, as one of the LAST lines:
+
+    [precious-fix] ✅ merged inline pack live — play, video, getpp, add,
+    nsfw, xnxxdl, xvideosdl
+
+and in Node:  globalThis.__PRECIOUS_FIX_MERGED__.build
+              -> "precious-fix-inline 2026-09-23"
+
+If that line is missing, the deploy is running an OLD mias/index.js —
+the code is not "broken", the build is stale. Redeploy, do not write a
+new fix.
+
+Also run the built-in audit (.cmdaudit in WhatsApp) — play/video/getpp/add/
+nsfw must appear as registered with a working handler.
+
+
+5. RULES, SHORT VERSION
+--------------------------------------------------------------------
+  ✗ no new fix pack files
+  ✗ no mias/plugins/*.js
+  ✗ no runtime file patchers
+  ✓ edit the owning module / the merged block in place
+  ✓ put anything that must beat bootChild() at the END of mias/index.js
+  ✓ prove it with the boot log line above before saying "fixed"
