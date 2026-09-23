@@ -9782,6 +9782,9 @@ function _p2Bind(sock) {
 /* ── .play ─────────────────────────────────────────────────────────────────── */
 
 const _p2PlayCardImpl = async (sock, msg, args) => {
+  if (typeof __rdlPlayCard === 'function') {
+    return __rdlPlayCard(sock, msg, args);
+  }
   const jid = msg.key.remoteJid;
   if (!args || !args.length) {
     await sendReply(sock, msg,
@@ -9912,7 +9915,7 @@ cmd(["play_legacy_disabled", "music_legacy_disabled", "song_legacy_disabled"], {
 
 // Registrar used by the late re-registration block near the end of the file,
 // which is what actually makes the card handler win over older overrides.
-function _p2ResolveCardRegistrar() { return _p2PlayCardImpl; }
+function _p2ResolveCardRegistrar() { return (typeof __rdlPlayHandler === "function") ? __rdlPlayHandler : _p2PlayCardImpl; }
 
 cmd(["playvid","playvideo","vidplay"], { desc: "Download song as video (mp4)", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `❌ Usage: ${CONFIG.PREFIX}playvid <song name or YouTube URL>`); return; }
@@ -40929,7 +40932,7 @@ for (const name of ["play", "music", "song"]) {
 // list available as an explicit fallback (${CONFIG.PREFIX}playsearch <song>).
 try {
   const _card = commands.get("play") && commands.get("play").__playCardHandler;
-  const _cardHandler = (typeof _p2ResolveCardRegistrar === "function") ? _p2ResolveCardRegistrar() : null;
+  const _cardHandler = (typeof __rdlPlayHandler === "function") ? __rdlPlayHandler : ((typeof _p2ResolveCardRegistrar === "function") ? _p2ResolveCardRegistrar() : null);
   if (_cardHandler) {
     for (const name of ["play", "music", "song"]) {
       const entry = commands.get(name) || { category: "DOWNLOAD" };

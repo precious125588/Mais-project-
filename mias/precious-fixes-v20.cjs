@@ -379,19 +379,9 @@ function install(ctx) {
 
   if (try_(() => { ctx.setDeliver(playDeliver); return true; }, 'play-deliver')) report.play = true;
 
-  // Pin .play/.music/.song back to the 4-format card (kills the view-once card)
-  if (try_(() => {
-    const card = ctx._p2PlayCardImpl;
-    if (typeof card !== 'function') throw new Error('4-format card handler not found');
-    for (const name of ['play', 'music', 'song']) {
-      const e = ctx.commands.get(name) || { category: 'DOWNLOAD' };
-      e.handler = card;
-      e.desc = 'Play a song — card + reply 1 audio / 2 document / 3 voice / 4 video';
-      e.category = 'DOWNLOAD';
-      ctx.commands.set(name, e);
-    }
-    return true;
-  }, 'play-card')) report.playViewOnce = true;
+  // .play/.music/.song is handled by the main ads player (__rdlPlayCard) in mias/index.js
+  // Legacy card rebinding disabled permanently to prevent JINX card override.
+  report.playViewOnce = true;
 
   /* ══════════════════════════════════════════════════════════════════════
      FIX 4 — .setting  (native picker embedded, quoted reply works)

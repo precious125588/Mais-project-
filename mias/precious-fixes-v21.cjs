@@ -1438,7 +1438,7 @@ function install(ctx) {
       _jxPlayLatestByChat.delete(jid);
       return safeReact(sock, msg, '👍');
     };
-    hardBind(['play', 'music', 'song'], { desc: 'Play song — native picker with working local media delivery', category: 'DOWNLOAD' }, playSearch);
+    // hardBind(['play', 'music', 'song']) removed: main ads player (__rdlPlayCard) in mias/index.js is authoritative
     hardBind(['jxplaypick'], { desc: 'Internal: player format pick', category: 'DOWNLOAD' }, playPick);
     hardBind(['jxplaycancel'], { desc: 'Internal: player cancel', category: 'DOWNLOAD' }, playCancel);
     report.play = true;
