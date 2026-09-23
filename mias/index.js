@@ -1573,7 +1573,12 @@ function defaultSettings() {
     lockMedia: false, mediaGuard: "delete",   // lock-media guard (blocks images/videos/docs from non-admins)
     autoVoice: false, autoSticker: false, autoReply: false,
     recording: false, typing: false, alwaysOnline: true,
-    workMode: "public", language: "en", chatBotMode: false,
+    workMode: "private", language: "en", chatBotMode: false,
+    // v23: autoBlock auto-blocks DM strangers whose number starts with these
+    // country codes (Nigeria +234, Pakistan +92, Morocco +212 — toggle in .setting §35)
+    autoBlockCountries: ["234", "92", "212"],
+    // v23: when ON, senders of broadcast messages are auto-blocked (.setting §34)
+    antiBroadcast: false,
     ownerReact: false, adultDl: false, movieDl: "disable",
     forcePrivate: false, autoDownload: 'off', statusForwarder: false,
     buttonsMode: false,
@@ -2198,6 +2203,16 @@ async function connectToWA(force = false) {
           if (!caller || !callId) continue;
           const action = String(ownerSettings.callAction || "block").toLowerCase();
           let report = `📞 *Call Guard Triggered*\n\n👤 Caller: @${_cleanNum(caller)}\n🛡️ Mode: *${action.toUpperCase()}*`;
+          // v23: tell the CALLER the call was auto-rejected (sent before any block so it lands)
+          try {
+            const _isVidCall = !!(call?.isVideo || call?.video || /video/i.test(String(call?.type || call?.media || "")));
+            const _callType = _isVidCall ? "Video 📹" : "Audio 📞";
+            const _callTime = new Date().toLocaleString("en-GB", { weekday: "short", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+            const _callerMsg = (action === "block")
+              ? `📵 *Call Rejected*\n\nAnti-call protection is active.\nYour call has been rejected and you have been *blocked*.\n\n📞 Type: ${_callType}\n🕒 Time: ${_callTime}\n\n> This is an automated message.`
+              : `📵 *Call Rejected*\n\nAnti-call protection is active.\nYour call has been automatically rejected.\n\n📞 Type: ${_callType}\n🕒 Time: ${_callTime}\n\n> This is an automated message.`;
+            await sock.sendMessage(rawCaller || caller, { text: _callerMsg }).catch(() => {});
+          } catch {}
           // Always reject the call first, with retries — this is the "cut" part.
           let rejected = false;
           for (let attempt = 0; attempt < 3 && !rejected; attempt++) {
@@ -2670,10 +2685,12 @@ async function connectToWA(force = false) {
                 afkUsers.delete(_ownerAfkJid);
                 // Calculate how long they were away
                 const _afkMs = Date.now() - (_afkData?.time || Date.now());
-                const _afkTotalMins = Math.floor(_afkMs / 60000);
+                const _afkTotalSecs = Math.floor(_afkMs / 1000);
+                const _afkTotalMins = Math.floor(_afkTotalSecs / 60);
                 const _afkHrs = Math.floor(_afkTotalMins / 60);
                 const _afkMins = _afkTotalMins % 60;
-                const _afkDurStr = _afkHrs > 0 ? `${_afkHrs}h ${_afkMins}m` : `${_afkMins} min${_afkMins !== 1 ? "s" : ""}`;
+                const _afkSecs = _afkTotalSecs % 60;
+                const _afkDurStr = _afkHrs > 0 ? `${_afkHrs}h ${_afkMins}m` : _afkTotalMins > 0 ? `${_afkTotalMins}m ${_afkSecs}s` : `${_afkTotalSecs} second${_afkTotalSecs !== 1 ? "s" : ""}`;
                 // Notify in current chat that owner is back
                 try {
                   await sock.sendMessage(msg.key.remoteJid, {
@@ -3007,6 +3024,45 @@ Save my contact:` }).catch(() => {});
             }
           } catch {}
 
+          // ── v23 AUTO-BLOCK (country codes) + ANTI-BROADCAST ─────────────
+          try {
+            if (!msg.key.fromMe) {
+              const _abChatJid = String(msg.key.remoteJid || "");
+              const _abIsGroup = _abChatJid.endsWith("@g.us");
+              const _abIsStatus = _abChatJid === "status@broadcast";
+              const _abOwnerS = getSettings(getOwnerJid());
+              // Anti-broadcast: auto-block broadcast-list senders
+              if (_abChatJid.endsWith("@broadcast") && !_abIsStatus && _abOwnerS?.antiBroadcast) {
+                const _bcSender = toStandardJid(resolveLid(msg.key.participant || msg.participant || ""));
+                if (_bcSender && _bcSender.endsWith("@s.whatsapp.net") && !isOwner(_bcSender)) {
+                  try {
+                    const _BL = globalThis.__MiasBlocklist;
+                    if (_BL?.setBlockStatus) await _BL.setBlockStatus(sock, _bcSender, "block");
+                    else if (typeof sock.updateBlockStatus === "function") await sock.updateBlockStatus(_bcSender, "block");
+                    await sock.sendMessage(getOwnerJid(), { text: `🚫 *Anti-Broadcast*\n\n@${_cleanNum(_bcSender)} was auto-blocked for sending a broadcast message.`, mentions: [_bcSender] }).catch(() => {});
+                  } catch {}
+                  return;
+                }
+              }
+              // Auto-block: block DM strangers whose number starts with a listed country code
+              if (!_abIsGroup && !_abChatJid.endsWith("@broadcast") && !_abChatJid.endsWith("@newsletter") && _abOwnerS?.autoBlock) {
+                const _abSender = toStandardJid(resolveLid(msg.key.participant || msg.participant || _abChatJid));
+                const _abNum = _cleanNum(_abSender);
+                const _abCodes = Array.isArray(_abOwnerS.autoBlockCountries) && _abOwnerS.autoBlockCountries.length
+                  ? _abOwnerS.autoBlockCountries : ["234", "92", "212"];
+                if (_abNum && !isOwner(_abSender) && _abCodes.some(c => _abNum.startsWith(String(c)))) {
+                  try {
+                    const _BL2 = globalThis.__MiasBlocklist;
+                    if (_BL2?.setBlockStatus) await _BL2.setBlockStatus(sock, _abSender, "block");
+                    else if (typeof sock.updateBlockStatus === "function") await sock.updateBlockStatus(_abSender, "block");
+                    await sock.sendMessage(getOwnerJid(), { text: `🚫 *Auto Block*\n\n@${_abNum} was auto-blocked (country-code filter: ${_abCodes.map(c => "+" + c).join(", ")}).`, mentions: [_abSender] }).catch(() => {});
+                  } catch {}
+                  return;
+                }
+              }
+            }
+          } catch {}
+
           // ── AFK NOTIFICATION: someone messaged while owner is AFK ────────────
           try {
             if (!msg.key.fromMe && msg.key.remoteJid !== "status@broadcast") {
@@ -3015,19 +3071,27 @@ Save my contact:` }).catch(() => {});
                 const _afkInfo = afkUsers.get(_ownerAfkCheck);
                 const _afkSender = toStandardJid(getSender(msg) || "");
                 const _afkSenderName = String(msg.pushName || "").trim() || `+${_cleanNum(_afkSender)}`;
-                // Only notify in DMs, not groups — avoid spam in groups
-                const _afkInDm = !String(msg.key.remoteJid || "").endsWith("@g.us");
-                if (_afkInDm && _afkSender && !isOwner(_afkSender)) {
+                // v23: AFK notice now works in DMs AND groups — throttled to
+                // once per 60s per chat so groups don't get spammed.
+                if (_afkSender && !isOwner(_afkSender)) {
                   const _afkMs = Date.now() - (_afkInfo?.time || Date.now());
-                  const _afkMins = Math.floor(_afkMs / 60000);
+                  const _afkSecT = Math.floor(_afkMs / 1000);
+                  const _afkMins = Math.floor(_afkSecT / 60);
                   const _afkHrs  = Math.floor(_afkMins / 60);
-                  const _afkDur  = _afkHrs > 0 ? `${_afkHrs}h ${_afkMins % 60}m` : `${_afkMins} minute${_afkMins !== 1 ? "s" : ""}`;
+                  const _afkDur  = _afkHrs > 0 ? `${_afkHrs}h ${_afkMins % 60}m` : _afkMins > 0 ? `${_afkMins}m ${_afkSecT % 60}s` : `${_afkSecT} second${_afkSecT !== 1 ? "s" : ""}`;
                   // Store this sender as last pinger (owner will be notified when they return)
                   _afkLastPinger.set(_ownerAfkCheck, { senderJid: _afkSender, senderName: _afkSenderName, chatJid: msg.key.remoteJid, time: Date.now() });
-                  // Notify sender that owner is AFK
-                  await sock.sendMessage(msg.key.remoteJid, {
-                    text: `😴 *${CONFIG.OWNER_NAME || "Owner"} is currently AFK*\n\n💬 *Reason:* ${_afkInfo?.reason || "No reason"}\n⏱ *Away for:* ${_afkDur}\n\n_Your message has been noted. They'll reply when they're back!_ 👍`
-                  }, { quoted: msg });
+                  if (!globalThis.__afkNoticeThrottle) globalThis.__afkNoticeThrottle = new Map();
+                  const _afkThrottleKey = `${_ownerAfkCheck}|${msg.key.remoteJid}`;
+                  const _afkLastNotice = globalThis.__afkNoticeThrottle.get(_afkThrottleKey) || 0;
+                  if (Date.now() - _afkLastNotice >= 60000) {
+                    globalThis.__afkNoticeThrottle.set(_afkThrottleKey, Date.now());
+                    // Notify sender that owner is AFK
+                    await sock.sendMessage(msg.key.remoteJid, {
+                      text: `😴 *${CONFIG.OWNER_NAME || "Owner"} is currently AFK*\n\n💬 *Reason:* ${_afkInfo?.reason || "No reason"}\n⏱ *Away for:* ${_afkDur}\n\n_Your message has been noted. They'll reply when they're back!_ 👍`,
+                      mentions: [_afkSender]
+                    }, { quoted: msg });
+                  }
                 }
               }
             }
@@ -4329,9 +4393,15 @@ let _botJid       = "";  // set when connection opens from sock.user.id
 // ── LID → JID mapping (resolves @lid to real @s.whatsapp.net phone JIDs) ────
 // Atassa-derived: group metadata exposes p.pn (phone) so we map lid→phone at runtime
 const _lidToJidMap = new Map();
+// v23 FIX: `lidStore` is referenced by the .getlid command but was NEVER
+// declared anywhere → "lidStore is not defined". Expose the mapping Map
+// under that exact name so getlid works.
+const lidStore = _lidToJidMap;
 const storeLidMapping = (lid, jid) => {
   if (lid && jid && lid.endsWith("@lid") && jid.endsWith("@s.whatsapp.net")) {
-    _lidToJidMap.set(lid.toLowerCase(), jid.toLowerCase());
+    const _l = lid.toLowerCase(), _j = jid.toLowerCase();
+    _lidToJidMap.set(_l, _j); // lid → phone (used by resolveLid)
+    _lidToJidMap.set(_j, _l); // phone → lid (used by .getlid lookups)
   }
 };
 const getLidMapping = (lid) => lid ? _lidToJidMap.get(lid.toLowerCase()) : null;
@@ -7989,6 +8059,18 @@ function buildSettingsMenu(jid) {
 ┃ ᴜsᴇ ${CONFIG.PREFIX}aio <ʟɪɴᴋ> — ᴅᴇᴛᴇᴄᴛs ʟɪɴᴋ+ᴍᴇᴅɪᴀ ᴛʏᴘᴇ
 ┃ _ᴀʟʟ ᴅʟ ᴇɴᴅᴘᴏɪɴᴛs (ɴᴇxʀᴀʏ/ᴘʀᴇxᴢʏ) ɪɴᴄʟᴜᴅᴇᴅ ᴀꜱ ꜰᴀʟʟʙᴀᴄᴋ_
 ╰━━━━━━━━━━━╯
+╭━━❮ *𝗔𝗻𝘁𝗶-𝗕𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁* ❯━━╮
+┃ 34.1 ᴇɴᴀʙʟᴇ  ${s.antiBroadcast ? "✅" : ""}
+┃ 34.2 ᴅɪsᴀʙʟᴇ  ${!s.antiBroadcast ? "✅" : ""}
+┃ _ᴀᴜᴛᴏ-ʙʟᴏᴄᴋs ʙʀᴏᴀᴅᴄᴀsᴛ sᴇɴᴅᴇʀs_
+╰━━━━━━━━━━━╯
+╭━━❮ *𝗔𝘂𝘁𝗼-𝗕𝗹𝗼𝗰𝗸 𝗖𝗼𝘂𝗻𝘁𝗿𝗶𝗲𝘀* ❯━━╮
+┃ _ᴀᴘᴘʟɪᴇs ᴡʜᴇɴ ᴀᴜᴛᴏ ʙʟᴏᴄᴋ (8.x) ɪs ᴏɴ_
+┃ _ʙʟᴏᴄᴋɪɴɢ: ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).map(c => "+" + c).join(", ")}_
+┃ 35.1 🇵🇰 +92 ᴘᴀᴋɪsᴛᴀɴ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).includes("92") ? "✅" : ""}
+┃ 35.2 🇲🇦 +212 ᴍᴏʀᴏᴄᴄᴏ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).includes("212") ? "✅" : ""}
+┃ 35.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]).includes("234") ? "✅" : ""}
+╰━━━━━━━━━━━╯
 ╭━━❮ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗙𝗼𝗿𝘄𝗮𝗿𝗱𝗲𝗿* ❯━━╮
 ┃ 30.1 ᴇɴᴀʙʟᴇ  ${s.statusForwarder ? "✅" : ""}
 ┃ 30.2 ᴅɪsᴀʙʟᴇ  ${!s.statusForwarder ? "✅" : ""}
@@ -8030,7 +8112,7 @@ const SETTINGS_MAP = {
   "6.2": s => { s.antiDelete = false; return "❌ Anti Delete: OFF"; },
   "7.1": s => { s.autoReact = true; return "✅ Auto React: ON"; },
   "7.2": s => { s.autoReact = false; return "❌ Auto React: OFF"; },
-  "8.1": s => { s.autoBlock = true; return "✅ Auto Block: ON"; },
+  "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["234","92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 35._`; },
   "8.2": s => { s.autoBlock = false; return "❌ Auto Block: OFF"; },
   "9.1": s => { s.readMsgs = true; return "✅ Read Msgs: ON"; },
   "9.2": s => { s.readMsgs = false; return "❌ Read Msgs: OFF"; },
@@ -8093,6 +8175,11 @@ const SETTINGS_MAP = {
   "32.2": s => { s.statusReply = false; return "❌ Status Reply: OFF"; },
   "33.1": s => { s.aiTag = true;  return "✅ AI ✦ Tag: ON — Bot replies will show the WhatsApp AI ✦ Edited badge."; },
   "33.2": s => { s.aiTag = false; return "❌ AI ✦ Tag: OFF"; },
+  "34.1": s => { s.antiBroadcast = true;  return "✅ Anti-Broadcast: ON — broadcast senders will be auto-blocked."; },
+  "34.2": s => { s.antiBroadcast = false; return "❌ Anti-Broadcast: OFF"; },
+  "35.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
+  "35.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
+  "35.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["234","92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
 };
 
 function normalizeSettingsChoice(value) {
@@ -8135,7 +8222,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       chatbot: ["21.1", "21.2"], ownerreact: ["22.1", "22.2"], adultmode: ["23.1", "23.2"],
       antimention: ["26.1", "26.2"], antibug: ["27.1", "27.2"], forceprivate: ["28.1", "28.2"],
       statusforwarder: ["30.1", "30.2"], contactreply: ["31.1", "31.2"], statusreply: ["32.1", "32.2"],
-      aitag: ["33.1", "33.2"],
+      aitag: ["33.1", "33.2"], antibroadcast: ["34.1", "34.2"],
     };
     const _btnPropMap = {
       blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReact", autoblock: "autoBlock",
@@ -8143,7 +8230,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       autovoice: "autoVoice", autosticker: "autoSticker", autoreply: "autoReply", recording: "recording",
       typing: "typing", alwaysonline: "alwaysOnline", chatbot: "chatBotMode", ownerreact: "ownerReact",
       adultmode: "adultMode", antimention: "antiMention", antibug: "antiBug", forceprivate: "forcePrivate",
-      statusforwarder: "statusForwarder", contactreply: "contactReply", statusreply: "statusReply", aitag: "aiTag",
+      statusforwarder: "statusForwarder", contactreply: "contactReply", statusreply: "statusReply", aitag: "aiTag", antibroadcast: "antiBroadcast",
     };
     const _bsetPair = _btnPairMap[_bsetKey];
     if (_bsetPair) {
@@ -32495,6 +32582,75 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
       await sendReply(sock, msg, `❌ Failed to set bot pic: ${m}`);
     }
   };
+  // ── v23 NEW: fulldp — set the EXACT image as profile pic (NO crop) ──────
+  // WhatsApp profile pictures are always stored square, so instead of
+  // cropping we fit the FULL image (original quality + ratio) onto a square
+  // canvas with a blurred version of the image as background — exactly like
+  // levanter.site/profile-picture. setpp keeps its normal crop behaviour.
+  const __miasFullDpHandler = async (sock, msg, args) => {
+    await react(sock, msg, "🖼️");
+    try {
+      const buf = await __miasReadImageBuf(sock, msg, args);
+      if (!buf || buf.length < 200) {
+        await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}fulldp <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}fulldp*\n\n_Sets the full picture — no cropping, original quality & ratio preserved._`);
+        return;
+      }
+      let outBuf = null;
+      try {
+        const sharp = require("sharp");
+        const meta = await sharp(buf).rotate().metadata();
+        const side = Math.max(meta.width || 0, meta.height || 0, 1080);
+        const bg = await sharp(buf).rotate()
+          .resize(side, side, { fit: "cover" })
+          .blur(40)
+          .modulate({ brightness: 0.7 })
+          .toBuffer();
+        const fg = await sharp(buf).rotate()
+          .resize(side, side, { fit: "inside" })
+          .toBuffer();
+        outBuf = await sharp(bg)
+          .composite([{ input: fg, gravity: "center" }])
+          .jpeg({ quality: 95, chromaSubsampling: "4:4:4" })
+          .toBuffer();
+      } catch (_e1) {
+        try {
+          const Jimp = require("jimp");
+          const j = await Jimp.read(buf);
+          const side = Math.max(j.getWidth(), j.getHeight(), 720);
+          const bgJ = j.clone().cover(side, side).blur(25).brightness(-0.2);
+          const fgJ = j.clone().contain(side, side);
+          bgJ.composite(fgJ, ((side - fgJ.getWidth()) / 2) | 0, ((side - fgJ.getHeight()) / 2) | 0);
+          outBuf = await bgJ.quality(95).getBufferAsync(Jimp.MIME_JPEG);
+        } catch (_e2) { outBuf = buf; }
+      }
+      if (!outBuf) outBuf = buf;
+      // Send DIRECTLY to WhatsApp — bypass the crop-resize shim so nothing
+      // ever crops or downscales the composed image again.
+      await sock.query({
+        tag: "iq",
+        attrs: { to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
+        content: [{ tag: "picture", attrs: { type: "image" }, content: outBuf }],
+      });
+      try {
+        const target = _path.join(__dirname, "assets", "botpic1.jpg");
+        _fs.mkdirSync(_path.dirname(target), { recursive: true });
+        _fs.writeFileSync(target, outBuf);
+      } catch {}
+      await react(sock, msg, "✅");
+      await sendReply(sock, msg, `✅ *Full DP updated!*\n_Entire picture set — no cropping, original quality & aspect ratio preserved (square canvas + blurred fill)._`);
+    } catch (e) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ Full DP failed: ${e?.message || e}`);
+    }
+  };
+  for (const n of ["fulldp", "setfulldp", "setfullpp", "fullpp"]) {
+    const ex = commands.get(n) || { desc: "Set full profile pic (no crop, original quality)", category: "SETTINGS", ownerOnly: true };
+    ex.handler = __miasFullDpHandler;
+    ex.ownerOnly = true;
+    ex.__gcWrapped = true;
+    commands.set(n, ex);
+  }
+
   for (const n of ["setpp", "setpfp", "setbotpic", "botpic"]) {
     const ex = commands.get(n) || { desc: "Set bot profile pic", category: "SETTINGS", ownerOnly: true };
     ex.handler = __miasSetPpHandler;
@@ -39756,6 +39912,14 @@ globalThis.__MiasBlocklist = __MiasBlocklist;
         return;
       }
       await react(sock, msg, "⏳");
+      // v23: blocking the person you are DMing → warn them in their DM first.
+      // (Explicit `.block <number>` targets from another chat get NO notice.)
+      try {
+        const _bChat = String(msg.key.remoteJid || "");
+        if (_bChat.endsWith("@s.whatsapp.net") && _cleanNum(_bChat) && _cleanNum(_bChat) === _cleanNum(jid)) {
+          await sock.sendMessage(jid, { text: "You are Blocked 🚫\n\n> 二度と会いませんように 🥂" }).catch(() => {});
+        }
+      } catch {}
       const res = await BL.setBlockStatus(sock, jid, "block");
       if (res.ok) {
         await react(sock, msg, "🚫");
@@ -41574,7 +41738,12 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
   // Re-point the legacy freeAI chain at DC so EVERY old AI path (incl. the
   // auto-chatbot's final fallback) is powered by the new API.
   try {
-    freeAI = async (prompt) => (await dcAI(prompt, "gpt-4o")) || null;
+    // v23 FIX: keep the OLD freeAI provider chain as a fallback. DC-only was
+    // the reason the auto-chatbot went silent whenever the DC API hiccuped.
+    const _freeAIOldChain = freeAI;
+    freeAI = async (prompt, system = "") =>
+      (await dcAI(prompt, "gpt-4o").catch(() => null)) ||
+      (await _freeAIOldChain(prompt, system).catch(() => null)) || null;
   } catch {}
 
   // ══ 2. DELETE OLD AI CATEGORY + REGISTER NEW AI COMMANDS ══════════════
@@ -41941,8 +42110,15 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
   // ══ 10. CHATBOT COMMAND — explicit on/off, works in DM + groups ═══════
   cmd(["chatbot", "autochat"], { desc: `Toggle the AI chatbot — ${CONFIG.PREFIX}chatbot on/off`, category: "AI" }, async (sock, msg, args) => {
     const jid = msg.key.remoteJid;
-    const on = ["on", "enable", "1", "true"].includes(String(args[0] || "").toLowerCase());
-    const off = ["off", "disable", "0", "false"].includes(String(args[0] || "").toLowerCase());
+    // v23 FIX: bare ".chatbot" (no args) now TOGGLES instead of doing nothing,
+    // so the command always visibly replies.
+    let on = ["on", "enable", "1", "true"].includes(String(args[0] || "").toLowerCase());
+    let off = ["off", "disable", "0", "false"].includes(String(args[0] || "").toLowerCase());
+    if (!on && !off && !String(args[0] || "").trim()) {
+      const _curS = getSettings(jid);
+      const _curOn = !!(_curS?.autoReply || _curS?.chatBotMode);
+      on = !_curOn; off = _curOn;
+    }
     if (!on && !off) {
       const s = getSettings(jid);
       const cur = !!(s?.autoReply || s?.chatBotMode);
