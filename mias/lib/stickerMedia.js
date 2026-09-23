@@ -45,13 +45,44 @@ function safeExt(mediaType) {
   return "media";
 }
 
+let _resolvedFfmpeg = null;
 async function ffmpegPath() {
+  if (_resolvedFfmpeg) return _resolvedFfmpeg;
+  // 1) ffmpeg-static bundled binary — but only if it actually exists on disk
+  //    (a partial install leaves the package importable with a dead path,
+  //    which is exactly the "cannot find the native FFmpeg binary" failure).
   try {
     const mod = await import("ffmpeg-static");
-    return mod.default || mod;
-  } catch {
+    const p = typeof mod === "string" ? mod : (mod.default || null);
+    if (p && fs.existsSync(p)) {
+      _resolvedFfmpeg = p;
+      return p;
+    }
+  } catch {}
+  // 2) Well-known system locations (Docker apt ffmpeg, Alpine, Railway).
+  for (const p of ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg", "/usr/sbin/ffmpeg"]) {
+    try { if (fs.existsSync(p)) { _resolvedFfmpeg = p; return p; } } catch {}
+  }
+  // 3) PATH probe — confirm the binary really executes before trusting it.
+  const onPath = await new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => { if (!settled) { settled = true; resolve(ok); } };
+    try {
+      const probe = spawn("ffmpeg", ["-version"], { stdio: "ignore" });
+      probe.once("error", () => done(false));
+      probe.once("close", (code) => done(code === 0));
+      const t = setTimeout(() => { try { probe.kill("SIGKILL"); } catch {} done(false); }, 5000);
+      if (t && typeof t.unref === "function") t.unref();
+    } catch { done(false); }
+  });
+  if (onPath) {
+    _resolvedFfmpeg = "ffmpeg";
     return "ffmpeg";
   }
+  throw new Error(
+    "No usable FFmpeg binary found. Install it with `apt-get install -y ffmpeg` " +
+    "or `npm i ffmpeg-static` (the project Dockerfile already does both)."
+  );
 }
 
 async function runFfmpeg(input, output, { animated, fps = MAX_VIDEO_FPS, seconds = MAX_VIDEO_SECONDS, quality }) {
