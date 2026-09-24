@@ -1,0 +1,17 @@
+name: Deploy to Railway
+on:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Railway deploy on every push
+        run: |
+          echo "Push received — Railway is connected to this repo with Auto-Deploy ON."
+          echo "This workflow exists so every commit has a visible deploy record in Actions."
+          echo "If you use the Railway CLI, set RAILWAY_TOKEN and uncomment below:"
+          # npm i -g @railway/cli
+          # railway up --detach --service mais-project
+          
