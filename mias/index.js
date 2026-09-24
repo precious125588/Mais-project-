@@ -23844,8 +23844,21 @@ cmd(["setbotpic", "botpic", "setpp"], { desc: "Set bot profile pic from URL or r
   }
 });
 
-// ── aza / setaza / setazapic: payment account info card ──
-const _azaStore = { bank: "OPAY", number: "9068551055", name: "DENNIS", picUrl: "https://files.catbox.moe/4bonns.jpg" };
+// ── aza / setaza / setazapic: payment account info card with persistent storage ──
+const _AZA_FILE = require("path").join(process.cwd(), "nexstore", "aza_store.json");
+let _azaStore = { bank: "OPAY", number: "9068551055", name: "DENNIS", picUrl: "https://files.catbox.moe/4bonns.jpg" };
+try {
+  if (require("fs").existsSync(_AZA_FILE)) {
+    const _savedAza = JSON.parse(require("fs").readFileSync(_AZA_FILE, "utf8"));
+    if (_savedAza && _savedAza.bank) _azaStore = Object.assign(_azaStore, _savedAza);
+  }
+} catch (_) {}
+function _saveAza() {
+  try {
+    require("fs").mkdirSync(require("path").dirname(_AZA_FILE), { recursive: true });
+    require("fs").writeFileSync(_AZA_FILE, JSON.stringify(_azaStore, null, 2));
+  } catch (_) {}
+}
 cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <account no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
   const raw = args.join(" ").trim();
   const parts = raw.split("|").map(v => v.trim()).filter(Boolean);
@@ -23853,13 +23866,13 @@ cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <account no> | <n
     await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank Name | 1234567890 | Account Holder*\n\nExample: *${CONFIG.PREFIX}setaza Opay | 8012345678 | Precious X*`);
     return;
   }
-  _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2];
+  _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2]; _saveAza();
   await sendReply(sock, msg, `✅ *Payment Account Saved*\n\n🏦 Bank: *${_azaStore.bank}*\n🔢 Number: *${_azaStore.number}*\n👤 Name: *${_azaStore.name}*`);
 });
 cmd(["setazapic"], { desc: "Set image for the .aza card (URL or reply to an image)", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
   // URL form
   if (args[0] && /^https?:\/\//.test(args[0])) {
-    _azaStore.picUrl = args[0];
+    _azaStore.picUrl = args[0]; _saveAza();
     await sendReply(sock, msg, `✅ Aza picture set!`);
     return;
   }
@@ -23873,7 +23886,7 @@ cmd(["setazapic"], { desc: "Set image for the .aza card (URL or reply to an imag
       form.append("fileToUpload", buf, { filename: "aza.jpg", contentType: "image/jpeg" });
       const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 60000 });
       const url = String(data || "").trim();
-      if (/^https?:\/\//.test(url)) { _azaStore.picUrl = url; await sendReply(sock, msg, `✅ Aza picture set!\n${url}`); return; }
+      if (/^https?:\/\//.test(url)) { _azaStore.picUrl = url; _saveAza(); await sendReply(sock, msg, `✅ Aza picture set!\n${url}`); return; }
     }
   } catch (e) {}
   await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}setazapic*`);
@@ -32910,18 +32923,30 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
   async function __miasReadImageBuf(sock, msg, args) {
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
     const quoted = ctx?.quotedMessage;
-    const quotedImg = quoted?.imageMessage || quoted?.viewOnceMessage?.message?.imageMessage;
+    const qNode = quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessage?.message || quoted?.ephemeralMessage?.message || quoted;
+    const quotedImg = qNode?.imageMessage || (qNode?.documentMessage && String(qNode.documentMessage.mimetype || "").startsWith("image/") ? qNode.documentMessage : null);
+    const mNode = msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessage?.message || msg.message?.ephemeralMessage?.message || msg.message;
+    const directImg = mNode?.imageMessage || (mNode?.documentMessage && String(mNode.documentMessage.mimetype || "").startsWith("image/") ? mNode.documentMessage : null);
     let buf = null;
     if (quotedImg) {
-      const stream = await downloadContentFromMessage(quotedImg, "image");
+      const stream = await downloadContentFromMessage(quotedImg, quotedImg.mimetype?.includes("document") ? "document" : "image");
       buf = Buffer.from([]);
       for await (const c of stream) buf = Buffer.concat([buf, c]);
-    } else if (msg.message?.imageMessage) {
-      const stream = await downloadContentFromMessage(msg.message.imageMessage, "image");
+    } else if (directImg) {
+      const stream = await downloadContentFromMessage(directImg, directImg.mimetype?.includes("document") ? "document" : "image");
       buf = Buffer.from([]);
       for await (const c of stream) buf = Buffer.concat([buf, c]);
-    } else if (args?.[0] && /^https?:\/\//.test(args[0])) {
-      const r = await _axios.get(args[0], { responseType: "arraybuffer", timeout: 20000 });
+    } else if (args?.[0] && /^https?:\/\//i.test(args[0])) {
+      const targetUrl = args[0].trim();
+      const r = await _axios.get(targetUrl, {
+        responseType: "arraybuffer",
+        timeout: 60000,
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+      });
+      const cType = String(r.headers["content-type"] || "").toLowerCase();
+      if (cType.includes("text/html") || cType.includes("application/json")) {
+        throw new Error("The link returned a webpage (HTML), not an image. Please reply to an actual image or give a direct picture link.");
+      }
       buf = Buffer.from(r.data);
     }
     return buf;
@@ -43456,8 +43481,8 @@ try {
         body: [author, __rdlFmtDur(meta.duration)].filter(Boolean).join(' • '),
         mediaType: 1,
         renderLargerThumbnail: true,
-        showAdAttribution: true,
-        sourceUrl: meta.url || undefined,
+        showAdAttribution: false,
+        sourceUrl: meta.url || ("https://www.youtube.com/watch?v=" + (meta.videoId || "")),
       };
       if (thumbBuf && thumbBuf.length > 100) ad.thumbnail = thumbBuf;
       const sent = await sock.sendMessage(jid, { text: cardText, contextInfo: { externalAdReply: ad } }, { quoted: msg }).catch(() => null);
@@ -43589,10 +43614,11 @@ const _cmfGrabMedia = async (sock, msg) => {
   let node = q || msg.message;
   node = node?.ephemeralMessage?.message || node?.viewOnceMessage?.message
     || node?.viewOnceMessageV2?.message || node?.documentWithCaptionMessage?.message || node;
-  const img = node?.imageMessage, vid = node?.videoMessage, aud = node?.audioMessage, stk = node?.stickerMessage;
-  const kind = img ? "image" : vid ? "video" : aud ? "audio" : stk ? "sticker" : null;
+  const img = node?.imageMessage, vid = node?.videoMessage, aud = node?.audioMessage, stk = node?.stickerMessage, doc = node?.documentMessage;
+  const kind = img ? "image" : vid ? "video" : aud ? "audio" : stk ? "sticker" : doc ? "document" : null;
   if (!kind) return { kind: null, buf: null };
-  const stream = await downloadContentFromMessage(node[kind + "Message"] || node[kind] || (kind === "image" ? img : kind === "video" ? vid : kind === "audio" ? aud : stk), kind);
+  const mediaObj = node[kind + "Message"] || (kind === "image" ? img : kind === "video" ? vid : kind === "audio" ? aud : kind === "sticker" ? stk : doc);
+  const stream = await downloadContentFromMessage(mediaObj, kind === "document" ? "document" : kind);
   let buf = Buffer.from([]);
   for await (const c of stream) buf = Buffer.concat([buf, c]);
   return { kind, buf };
@@ -43649,9 +43675,13 @@ cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }
   } catch (e) { await sendReply(sock, msg, `❌ tovn failed: ${e?.message || e}`); }
 });
 cmd(["tourl", "litterbox"], { desc: "Media → URL (catbox → litterbox → tmpfiles)", category: "MEDIA" }, async (sock, msg) => {
+  await react(sock, msg, "🌀").catch(() => {});
   const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
-  if (!buf) { await sendReply(sock, msg, `🔗 Reply to *any media* with ${CONFIG.PREFIX}tourl`); return; }
-  await react(sock, msg, "🌀");
+  if (!buf) {
+    await react(sock, msg, "❌").catch(() => {});
+    await sendReply(sock, msg, `🔗 Reply to *any media* (image, video, audio, sticker, document) with ${CONFIG.PREFIX}tourl`);
+    return;
+  }
   const ext = kind === "image" ? "jpg" : kind === "video" ? "mp4" : kind === "audio" ? "mp3" : kind === "sticker" ? "webp" : "bin";
   const mime = kind === "image" ? "image/jpeg" : kind === "video" ? "video/mp4" : kind === "audio" ? "audio/mpeg" : "application/octet-stream";
   const FormData = require("form-data");
@@ -43942,14 +43972,14 @@ for (const n of ["setgcdesc", "setgroupdesc", "setgroupdescription"]) { const e 
 for (const n of ["setgcpp", "setgcpic", "setgrouppic", "setgppic", "gcpic"]) { const e = commands.get(n) || { category: "GROUP" }; e.desc = "Set the group profile picture (quote image or URL)"; e.ownerOnly = true; e.handler = _fixGcPp; e._origHandler = _fixGcPp; commands.set(n, e); }
 
 // ── welcome/goodbye toggles: NO permanent custom-message save (words must not stick) ──
-cmd(["welcome"], { desc: "Toggle welcome messages on/off", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
+cmd(["welcome"], { desc: "Toggle welcome messages on/off", category: "GROUP", adminOnly: true }, async (sock, msg) => {
   if (!requireGroup(msg)) return;
   const s = getSettings(msg.key.remoteJid);
   s.welcome = !s.welcome; if (!s.welcome) s.welcomeCustomMsg = "";
   saveNow();
   await sendReply(sock, msg, `👋 Welcome messages: ${s.welcome ? "✅ ON" : "❌ OFF"}`);
 });
-cmd(["goodbye"], { desc: "Toggle goodbye messages on/off", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
+cmd(["goodbye"], { desc: "Toggle goodbye messages on/off", category: "GROUP", adminOnly: true }, async (sock, msg) => {
   if (!requireGroup(msg)) return;
   const s = getSettings(msg.key.remoteJid);
   s.goodbye = !s.goodbye; if (!s.goodbye) s.goodbyeCustomMsg = "";
@@ -43983,12 +44013,12 @@ cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (soc
 cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
   const parts = args.join(" ").split("|").map(v => v.trim()).filter(Boolean);
   if (parts.length < 3) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank | Number | Name*`); return; }
-  _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2];
+  _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2]; _saveAza();
   await sendReply(sock, msg, `✅ *Saved:* ${_azaStore.bank} • ${_azaStore.number} • ${_azaStore.name}`);
 });
 cmd(["setazapic"], { desc: "Set the .aza card picture (URL)", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
   if (!args[0] || !/^https?:\/\//.test(args[0])) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*`); return; }
-  _azaStore.picUrl = args[0];
+  _azaStore.picUrl = args[0]; _saveAza();
   await sendReply(sock, msg, `✅ Aza picture set.`);
 });
 
