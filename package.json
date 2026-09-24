@@ -1,6 +1,6 @@
 {
   "name": "mais-mdx-web",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "MAIS MDX Web Pairing System with Admin Panel",
   "main": "server.js",
   "scripts": {
