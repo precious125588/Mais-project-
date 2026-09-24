@@ -2282,8 +2282,8 @@ async function connectToWA(force = false) {
             const _callType = _isVidCall ? "Video 📹" : "Audio 📞";
             const _callTime = new Date().toLocaleString("en-GB", { weekday: "short", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
             const _callerMsg = (action === "block")
-              ? `📵 *Call Rejected*\n\nAnti-call protection is active.\nYour call has been rejected and you have been *blocked*.\n\n📞 Type: ${_callType}\n🕒 Time: ${_callTime}\n\n> This is an automated message.`
-              : `📵 *Call Rejected*\n\nAnti-call protection is active.\nYour call has been automatically rejected.\n\n📞 Type: ${_callType}\n🕒 Time: ${_callTime}\n\n> This is an automated message.`;
+              ? `📵 *Call Declined*\n\nThis number does not accept ${_isVidCall ? "video" : "voice"} calls.\nYour call was declined and this contact has been *blocked*.\n\n📞 Type: ${_callType}\n🕒 ${_callTime}\n\n_Please send a text message instead._`
+              : `📵 *Call Declined*\n\nThis number does not accept ${_isVidCall ? "video" : "voice"} calls right now.\nYour call was automatically declined.\n\n📞 Type: ${_callType}\n🕒 ${_callTime}\n\n_Please send a text message instead._`;
             await sock.sendMessage(rawCaller || caller, { text: _callerMsg }).catch(() => {});
           } catch {}
           // Always reject the call first, with retries — this is the "cut" part.
@@ -7467,8 +7467,7 @@ const MENU_CATEGORIES = [
     "menumode","menutoggle","togglemenu","switchmenu","smartmenu","plaintextmenu","textmenu","radiomenu","txmenu",
     "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",
     "safemode"] },
-  { name: "REACTIONS", emoji: "💫", cmds: ["hug","kiss","pat","slap","wink","bonk","poke","yeet","blush","wave","smile","highfive","handhold","nom","bite","glomp","cringe","dance"] },
-  { name: "RELIGION",  emoji: "📖", cmds: ["bible","quran","qur"] },
+    { name: "RELIGION",  emoji: "📖", cmds: ["bible","quran","qur"] },
   { name: "RANDOM",    emoji: "🎲", cmds: ["koreangirl","japangirl","malaysiagirl","indonesiagirl","chinagirl","vietnamgirl","thaigirl","hijabgirl","randomgirl","pfp","boypic","randomcat2","randomdog2","randomcar","waifu2","loli2","bluearchive","tiktokgirl","randomsfw","randommoe","randomai"] },
   { name: "SEARCH",    emoji: "🔍", cmds: [
     "define","wiki","ud","google","gsearch",
@@ -7790,6 +7789,230 @@ const _HOPE_QUOTES = [
 function _randomHope() {
   return _HOPE_QUOTES[Math.floor(Math.random() * _HOPE_QUOTES.length)];
 }
+// ─── v2.1 BIG rotating menu-quote pool (no repeat until all shown) ──────────
+const _MENU_QUOTES_EXTRA = [
+  "Bad energy is louder than words. If you feel it, believe it.",
+  "You can't heal in the same environment that made you sick.",
+  "Some people don't hate you — they hate that they can't control you.",
+  "Distance is my answer to disrespect. I don't argue, I remove myself.",
+  "Not everyone deserves a front-row seat in your life.",
+  "When someone shows you who they are, believe them the first time.",
+  "Protect your peace like it's your password — not everyone gets access.",
+  "Bad energy doesn't knock. It walks in when you leave the door open.",
+  "You don't owe anyone an explanation for choosing your peace.",
+  "The wrong circle will clap for your failure louder than your success.",
+  "Some 'friends' are just strangers collecting information about you.",
+  "If they gossip with you, they will gossip about you. Count on it.",
+  "Energy doesn't lie. Words do.",
+  "Cut people off silently. Announcements invite negotiations.",
+  "Your absence will teach them what your presence couldn't.",
+  "Stop watering dead plants. Some relationships are already over.",
+  "The trash takes itself out — you just have to stop holding the bag.",
+  "Loyalty isn't a word. It's a lifestyle. Watch actions, not mouths.",
+  "You lose nothing real when you lose fake people.",
+  "A private life is a happy life. Not everything needs an audience.",
+  "They don't miss you. They miss the version of you that tolerated them.",
+  "Some people only love you when you're losing. Win anyway.",
+  "Peace of mind is the new rich. Protect it at all costs.",
+  "If it costs you your peace, it's too expensive.",
+  "You can't pour from an empty cup. Refill yourself first.",
+  "Don't set yourself on fire to keep others warm.",
+  "Real recognizes real — and fake exposes itself eventually.",
+  "The less you reveal, the more people can wonder. Mystery is protection.",
+  "Forgive, but don't forget the lesson. That's the whole point.",
+  "You don't need closure from people who disrespected you openly.",
+  "Money first. Love feels better when your account isn't crying.",
+  "Build your funds before you build a home with someone. Romance needs a budget.",
+  "Love doesn't pay rent. Get your money up, then open your heart.",
+  "Broke love is a full-time job with no salary. Secure the bag first.",
+  "You can't save anybody when you're drowning in your own bills.",
+  "Date your hustle first. Everything else is a distraction until you're stable.",
+  "A man with no money and a lot of love is still a hungry man.",
+  "Financial peace makes relationships softer. Poverty makes everything an argument.",
+  "Love is sweet, but love with money is sweeter. Both matter — in that order.",
+  "Don't marry potential. Marry evidence.",
+  "If she loves your money more than your vision, you're an ATM, not a partner.",
+  "Never love someone who only appears when you have something to offer.",
+  "The right person adds to your peace. The wrong one invoices it.",
+  "Funds before feelings. Stability is the most attractive quality.",
+  "A relationship should be a rest, not a second job.",
+  "If you have to buy loyalty, it was never loyalty.",
+  "Get rich or get played — the choice is discipline.",
+  "Love without direction is just two lost people holding hands.",
+  "Don't build an empire with someone who's secretly selling the bricks.",
+  "Money exposes character. Watch how they act when you have none.",
+  "Some girls don't want love — they want a sponsor. Know the difference.",
+  "Never date a girl who treats every man like a business opportunity.",
+  "If her loyalty has a price tag, another man will outbid you.",
+  "A girl who disrespects you in private will disgrace you in public.",
+  "Don't marry a woman you have to babysit. Partnership, not parenthood.",
+  "If she flirts with everyone 'as a joke', the joke will be on you.",
+  "A girl who can't be told 'no' will never hear your 'please'.",
+  "Avoid the one who's always the victim. One day you'll be the villain in her story.",
+  "If social media knows her body better than her mind does, walk away.",
+  "A woman who posts everything will one day post your problems too.",
+  "Don't wife the girl every man already knows.",
+  "If she hides you but shows herself, you're a secret, not a partner.",
+  "Some girls collect men like data. Don't be another statistic.",
+  "If she argues like an enemy, she was never on your side.",
+  "Never build with someone who competes with you instead of completing you.",
+  "A girl who only calls when she needs something is a bill, not a blessing.",
+  "If her past is a revolving door, don't apply for the position.",
+  "The girl who disrespects her father will rarely respect her man.",
+  "If she can't control her emotions, she'll weaponize yours.",
+  "Don't date potential while ignoring patterns.",
+  "Marry the woman who claps when you win and stands closer when you lose.",
+  "Date a girl with her own goals, not one whose goal is you paying for hers.",
+  "A good woman multiplies what you give her — time, money, love, anything.",
+  "Choose the one who chooses you on your worst day, not your best.",
+  "Marry character, not makeup. Beauty fades; character compounds.",
+  "The right woman brings you peace, the wrong one brings you court cases.",
+  "If she pushes you to grow, keep her. If she keeps you small, leave.",
+  "A loyal woman is the greatest investment a man can make.",
+  "Date someone whose presence feels like home, not a performance.",
+  "Marry your friend. When the beauty sleeps, friendship stays awake.",
+  "A woman who respects your grind will enjoy your success with you.",
+  "If she stands by you broke, she deserves you rich.",
+  "Choose the one who talks to you, not the one who talks about you.",
+  "Hard truth: nobody is coming to save you. It's on you.",
+  "Life doesn't give you what you deserve. It gives you what you tolerate.",
+  "You are not tired of life. You are tired of living it for other people.",
+  "Comfort is a slow poison disguised as peace.",
+  "The truth hurts once. A lie hurts forever.",
+  "Most people don't want the truth. They want confirmation of their lie.",
+  "Your excuses are valid — and they're still the reason you're stuck.",
+  "Time is the only currency you spend without knowing your balance.",
+  "Nobody thinks about you as much as you think they do. Be free.",
+  "Rock bottom has a basement. Stop digging.",
+  "You can't change people. You can only change your access to them.",
+  "Life rewards closers. Start finishing what you start.",
+  "The world pays for value, not effort. Be valuable.",
+  "You're one decision away from a completely different life.",
+  "Motivation gets you started. Discipline keeps you dangerous.",
+  "Some doors close because you were never meant to fit through them.",
+  "Stop explaining yourself. Your life is not a group project.",
+  "Growth feels like loss at first — you're shedding old versions of you.",
+  "The graveyard is full of people who waited for the 'right time'.",
+  "Your circle should celebrate you, not tolerate you.",
+  "Hard times reveal real faces. Keep the receipts.",
+  "If you don't sacrifice for what you want, what you want becomes the sacrifice.",
+  "Moving on doesn't mean forgetting. It means choosing yourself.",
+  "The person who broke you doesn't get to watch you heal.",
+  "Sometimes the breakup is the blessing you prayed for in disguise.",
+  "You didn't lose them. You lost the illusion of who you thought they were.",
+  "Grieve the relationship, not your worth. You were always enough.",
+  "Someone else's inability to love you is not a measure of your value.",
+  "The best revenge is becoming someone they can't reach anymore.",
+  "Don't check on people who never checked why you left.",
+  "Your next chapter needs space. Stop rereading the last one.",
+  "Healing is ugly before it's beautiful. Stay the course.",
+  "One day the name that hurt you will mean nothing to you.",
+  "You can't start the next chapter while stalking the previous one.",
+  "Let them go. Whatever is yours will never need chasing.",
+  "Breakups don't break you. Begging someone to stay does.",
+  "The right person will never put you in a position to feel replaceable.",
+  "Some people are lessons dressed as soulmates.",
+  "You'll smile again. Not because they came back — because you did.",
+  "Missing someone is normal. Returning to what broke you is optional.",
+  "Closure is a gift you give yourself. Stop waiting for their permission.",
+  "They left. You're still here. That says everything about who's stronger.",
+  "Psychology: people treat you how you train them to treat you.",
+  "The mind believes what you repeat. Speak to yourself like someone you love.",
+  "Attention is the modern currency. Where you spend it, your life follows.",
+  "People remember how you made them feel long after they forget your words.",
+  "Your habits are your future in disguise. Audit them.",
+  "The brain fears change more than it fears misery. That's why people stay stuck.",
+  "Confidence is quiet. Insecurity is loud.",
+  "You attract what you tolerate. Raise the standard, change the crowd.",
+  "Most arguments are two egos fighting, not two people talking.",
+  "The loudest person in the room is usually the weakest one in it.",
+  "Self-respect is the foundation. Every relationship is built on it.",
+  "People can't manipulate you once you stop needing their approval.",
+  "Your phone is designed to addict you. Fight for your attention daily.",
+  "The person who masters their emotions controls every room they enter.",
+  "Comparison is a debt you pay with your own joy.",
+  "Silence is a response too. Learn to hear it.",
+  "You become the average of the five people you text the most.",
+  "Emotional intelligence is worth more than any degree.",
+  "What you allow is what will continue.",
+  "A girl advertising her body daily is selling, not sharing. Don't buy.",
+  "If her inbox is a marketplace, your heart will be a transaction.",
+  "Social media validation is a drug. Don't marry an addict.",
+  "The girl who strips for likes today will strip your peace tomorrow.",
+  "Attention from a thousand strangers can never equal loyalty from one man.",
+  "If she needs the internet to feel beautiful, you'll never be enough.",
+  "A woman posting her body for free attention has priced herself — cheap.",
+  "Girls who live for the camera die for the comments. Avoid the drama.",
+  "The one dancing for strangers online will dance around your feelings offline.",
+  "Don't compete with her followers for her attention. You already lost.",
+  "If every picture is for sale, don't act surprised when loyalty has a price.",
+  "Real queens move in silence. The loud ones are advertising.",
+  "A girl loyal to her phone will never be loyal to you.",
+  "Choose the woman the internet doesn't know.",
+  "Fact: the prettiest profiles hide the emptiest lives.",
+  "If she documents the relationship more than she lives it, you're content, not a partner.",
+  "Don't hate the player or the game — just refuse to be played.",
+  "Someone's 'private account' is often just a curated lie with a lock on it.",
+  "Her body count isn't the problem. Her honesty about it is.",
+  "Cheap attention is the most expensive thing you'll ever fund.",
+  "Level up in silence. Let success make the noise.",
+  "Discipline is choosing what you want most over what you want now.",
+  "The bag doesn't chase anybody. Chase the bag.",
+  "Your glow up should be your loudest response.",
+  "Work until your signature becomes an autograph.",
+  "Stop announcing moves. Shock them with results.",
+  "A focused man is a dangerous man. Stay locked in.",
+  "Grind now, shine later. The order matters.",
+  "Don't count the days. Make the days count — with money moves.",
+  "Your struggle today is the story that funds your tomorrow.",
+  "Being broke is hard. Being disciplined is hard. Choose your hard.",
+  "Rich people buy time. Poor people sell it. Flip the script.",
+  "Every 'overnight success' took years in the dark. Keep building.",
+  "Hustle beats talent when talent scrolls all day.",
+  "Your bank account is a reflection of your standards.",
+  "Stay low, stack, and let them wonder how you did it.",
+  "The dream is free. The hustle is sold separately.",
+  "If they don't know you personally, don't take it personal.",
+  "Winners focus on winning. Losers focus on winners.",
+  "Nobody cares about your story until you win — so win.",
+  "You weren't born to just pay bills and die. Move different.",
+  "Hard truth: your friends want you to win, just not more than them.",
+  "Some people are only happy for you when you're below them.",
+  "The day you stop seeking approval is the day you become free.",
+  "People will use you, then call you lucky. Keep receipts, not grudges.",
+  "Truth: most 'support' is surveillance. They watch, they don't clap.",
+  "You teach people your worth by what you accept. Stop accepting less.",
+  "The same people asking 'how did you do it' ignored you while you did it.",
+  "Facts don't care about feelings — and neither does life.",
+  "Being real is rare now. That's why fake people fear you.",
+  "Your kindness will be mistaken for weakness until you show the door.",
+  "Life is 10% what happens and 90% whether you post about it or fix it.",
+  "Everyone wants to eat, but few want to hunt. Be the hunter.",
+  "People love the version of you that serves them. Disappoint them.",
+  "The truth will offend exactly the people it describes.",
+  "You don't lose real ones when you level up. You reveal fake ones.",
+  "Stop being available for people who are only available when they need you.",
+  "Life gets easier when you stop expecting people to be like you.",
+  "Not everyone deserves the upgraded version of you. Some knew the trial version for a reason.",
+  "Respect is earned in silence and lost in one loud mistake.",
+  "Be so busy improving that you have no time to criticise anybody.",
+  "Your peace is the price tag. If they can't afford it, they can't have you."
+
+];
+if (!globalThis.__menuQuoteBag) globalThis.__menuQuoteBag = { pool: [], used: [] };
+function _randomMenuQuote() {
+  const B = globalThis.__menuQuoteBag;
+  const all = (typeof _HOPE_QUOTES !== "undefined" ? _HOPE_QUOTES : [])
+    .concat(typeof _MENU_QUOTES_EXTRA !== "undefined" ? _MENU_QUOTES_EXTRA : []);
+  if (!B.pool.length) { B.pool = all.slice(); B.used = []; }
+  // shuffle-lite: pick random, move to used; when empty, refill (guarantees no repeat per cycle)
+  const i = Math.floor(Math.random() * B.pool.length);
+  const q = B.pool.splice(i, 1)[0];
+  B.used.push(q);
+  return q;
+}
+globalThis._randomMenuQuote = _randomMenuQuote;
+
 // ─── Sad quotes ──────────────────────────────────────────────────────────
 const _SAD_QUOTES = [
   "Sometimes the people who smile the most are hiding the deepest pain.",
@@ -14408,8 +14631,10 @@ cmd("whois", { desc: "Full user info", category: "INFO" }, async (sock, msg) => 
     rawTarget = msg.key.fromMe ? (_botJid || getSender(msg)) : getSender(msg);
   }
 
-  const target = toStandardJid(rawTarget);
-  const num = _cleanNum(rawTarget);
+  let target = toStandardJid(rawTarget);
+  // v2.1: resolve @lid → real number so we show the NAME, not the LID
+  try { if (/@lid$/.test(String(rawTarget))) target = toStandardJid(resolveLid(rawTarget)); } catch {}
+  const num = _cleanNum(target);
 
   // ── v4.9.4 ── pull pp + WA-existence + business profile in parallel
   let pp = null, exists = false, isBusiness = false, businessProfile = null;
@@ -14435,8 +14660,9 @@ cmd("whois", { desc: "Full user info", category: "INFO" }, async (sock, msg) => 
     if (ts) bioUpdated = new Date(ts).toLocaleDateString("en-NG");
   } catch {}
 
-  const customBio = getUserCustomBio(target) || getUserCustomBio(rawTarget) || "Not set";
-  const name = await getDisplayName(sock, target, isGroup(msg) ? msg.key.remoteJid : null);
+  const customBio = getUserCustomBio(target) || getUserCustomBio(rawTarget) || waBio || "Not set";
+  let name = await getDisplayName(sock, target, isGroup(msg) ? msg.key.remoteJid : null).catch(()=>null);
+  if (!name || /^\+?[0-9]+$/.test(String(name))) { try { name = (await sock.getName?.(target)) || name || "+" + num; } catch {} }
 
   const msgId = String(ctx?.stanzaId || msg.key.id || "");
   const device = humanizeDeviceName(msgId, target);
@@ -14996,9 +15222,9 @@ cmd(["vv", "viewonce"], { desc: "Reveal view-once message (reply to it)", catego
 // the original chat untouched and forwards a clean copy of the media
 // straight to the bot owner's DM. Ideal for archiving without alerting
 // the sender or other group members.
-cmd(["vv2","lol","wow","hehe","😂","🙂","omor","chai","🥀"], { desc: "Save replied view-once media silently to OWNER DM", category: "TOOLS" }, async (sock, msg) => {
+cmd(["vv2","lol","wow","hehe","😂","🙂","omor","chai","🥀"], { desc: "Save replied view-once media silently to OWNER DM", category: "TOOLS", ownerOnly: true }, async (sock, msg) => {
   const ctx = getContextInfo(msg);
-  if (!ctx?.quotedMessage) { return; } // silent — no reply when not replying to anything
+  if (!ctx?.quotedMessage) { return; } // not replying → ignore (prevents accidental trigger on normal chat)
   let vo = ctx.quotedMessage;
   for (let i = 0; i < 5; i++) {
     const inner = vo?.viewOnceMessage?.message
@@ -15009,7 +15235,11 @@ cmd(["vv2","lol","wow","hehe","😂","🙂","omor","chai","🥀"], { desc: "Save
     if (!inner || inner === vo) break;
     vo = inner;
   }
-  if (!vo) { return; } // silent — not a view-once
+  // STRICT: only proceed if the unwrapped payload is actual view-once media.
+  // Prevents "hehe/omor" replied to a normal image/text from dumping into your DM.
+  const _isVO = !!(vo && (vo.imageMessage?.viewOnce || vo.videoMessage?.viewOnce || vo.audioMessage?.viewOnce || vo.imageMessage || vo.videoMessage || vo.audioMessage));
+  const _cameFromVO = /viewOnce/i.test(JSON.stringify(ctx.quotedMessage).slice(0, 400)) || _isVO;
+  if (!vo || !(vo.imageMessage || vo.videoMessage || vo.audioMessage) || !_cameFromVO) { return; } // silent
   let senderJid = resolveLid(
     ctx.participant ||
     ctx.remoteJid ||
@@ -15149,6 +15379,7 @@ cmd("take", { desc: "Rename sticker — .take <name> | <author>", category: "TOO
   } catch (e) { await sendReply(sock, msg, `❌ Take failed: ${e.message}`); }
 });
 cmd(["tourl", "litterbox", "tour"], { desc: "Upload media to catbox.moe URL", category: "UTILITY" }, async (sock, msg) => {
+  await react(sock, msg, "🌀").catch(()=>{});
   const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
   const img = msg.message?.imageMessage || q?.imageMessage;
   const vid = q?.videoMessage || msg.message?.videoMessage;
@@ -15203,6 +15434,7 @@ cmd(["tourl", "litterbox", "tour"], { desc: "Upload media to catbox.moe URL", ca
     if (resultUrl) {
       await editMessage(sock, jid, sKey, `${resultUrl}`);
       await sock.sendMessage(jid, { text: resultUrl }, { quoted: msg }).catch(() => {});
+      await react(sock, msg, "✅").catch(()=>{});
     } else {
       await editMessage(sock, jid, sKey, `🔗 *MIAS MDX Uploader*\n\n⬢ Downloading media... ✅\n⬢ Uploading to server... ❌\n\n⚠️ All upload servers busy — try again later`);
     }
@@ -15418,11 +15650,11 @@ cmd("fetch", { desc: "Fetch a URL — auto-detects text/JSON/binary (image/video
     await sendReply(sock, msg, `🌐 *Fetch Result*\n\n🔗 ${url}\n🛰️ ${resp.status} ${resp.statusText || ""}\n📦 ${ct || "unknown"} • ${buf.length.toLocaleString()} bytes\n\n\`\`\`\n${text}\n\`\`\``);
   } catch (e) { await sendReply(sock, msg, `❌ Fetch failed: ${e.message}`); }
 });
-cmd("save", { desc: "Save quoted message to owner DM", category: "TOOLS" }, async (sock, msg) => {
+cmd("save", { desc: "Save quoted message/media to owner DM", category: "TOOLS", ownerOnly: true }, async (sock, msg) => {
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
   const quoted = ctx?.quotedMessage;
   if (!quoted) { await sendReply(sock, msg, "❌ Reply to any message to save it to your DM!"); return; }
-  await react(sock, msg, "📌");
+  await react(sock, msg, "🌀");
   const dmJid = getOwnerJid(); // Always save to owner's DM
   try {
     // Check for media types
@@ -15950,9 +16182,7 @@ cmd(["quran", "qur"], { desc: "Get Quran verse", category: "RELIGION" }, async (
 //  LOGO COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 const LOGO_STYLES = ["alienglow","burning","chromeone","chrometwo","comic","fire","glowinghot","glowingsteel","gradientbevel","slab","neontext","simple","starburst","felt","outline","animatedglow","3dtextured","3dgradient","glossy","embossed","pixelbadge","chromium","iced","frosty","particle","moltencore","glitter","fantasy"];
-cmd("logolist", { desc: "List logo styles", category: "LOGO" }, async (s, m) => {
-  await sendReply(s, m, `🎨 *Logo Styles:*\n\n${LOGO_STYLES.map(l => `• ${l}`).join("\n")}\n\nUsage: ${CONFIG.PREFIX}<style> <text>`);
-});
+/* logolist removed */
 for (const style of LOGO_STYLES) {
   cmd(style, { desc: `${style} logo style`, category: "LOGO" }, async (sock, msg, args) => {
     if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}${style} <text>`); return; }
@@ -23614,7 +23844,7 @@ cmd(["setbotpic", "botpic", "setpp"], { desc: "Set bot profile pic from URL or r
 });
 
 // ── aza / setaza / setazapic: payment account info card ──
-const _azaStore = { bank: "", number: "", name: "", picUrl: "" };
+const _azaStore = { bank: "OPAY", number: "9068551055", name: "DENNIS", picUrl: "https://files.catbox.moe/4bonns.jpg" };
 cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <account no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
   const raw = args.join(" ").trim();
   const parts = raw.split("|").map(v => v.trim()).filter(Boolean);
@@ -23625,10 +23855,27 @@ cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <account no> | <n
   _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2];
   await sendReply(sock, msg, `✅ *Payment Account Saved*\n\n🏦 Bank: *${_azaStore.bank}*\n🔢 Number: *${_azaStore.number}*\n👤 Name: *${_azaStore.name}*`);
 });
-cmd(["setazapic"], { desc: "Set image for the .aza card", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
-  if (!args[0] || !/^https?:\/\//.test(args[0])) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*`); return; }
-  _azaStore.picUrl = args[0];
-  await sendReply(sock, msg, `✅ Aza picture set!`);
+cmd(["setazapic"], { desc: "Set image for the .aza card (URL or reply to an image)", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+  // URL form
+  if (args[0] && /^https?:\/\//.test(args[0])) {
+    _azaStore.picUrl = args[0];
+    await sendReply(sock, msg, `✅ Aza picture set!`);
+    return;
+  }
+  // Quoted-image form: reply to any image with .setazapic → upload → store URL
+  try {
+    const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+    if (buf && kind === "image") {
+      const FormData = require("form-data");
+      const form = new FormData();
+      form.append("reqtype", "fileupload");
+      form.append("fileToUpload", buf, { filename: "aza.jpg", contentType: "image/jpeg" });
+      const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 60000 });
+      const url = String(data || "").trim();
+      if (/^https?:\/\//.test(url)) { _azaStore.picUrl = url; await sendReply(sock, msg, `✅ Aza picture set!\n${url}`); return; }
+    }
+  } catch (e) {}
+  await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}setazapic*`);
 });
 cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (sock, msg) => {
   if (!_azaStore.bank || !_azaStore.number) {
@@ -43309,6 +43556,7 @@ try {
 
 // ── passport-size DP card helper (shared by welcome/goodbye/aza) ─────────────
 globalThis._passportCard = async function _passportCard(ppBuf, label, title, sub) {
+  // v2.1: draw the @username beside the round avatar (title/sub may carry it)
   const Jimp = require("jimp");
   const W = 640, H = 300, PAD = 18;
   const base = new Jimp(W, H, 0x171a21ff);
@@ -43383,12 +43631,10 @@ cmd(["tomp3", "toaudio"], { desc: "Video/audio → MP3", category: "MEDIA" }, as
   } catch (e) { await sendReply(sock, msg, `❌ tomp3 failed: ${e?.message || e}`); }
 });
 cmd(["tovideo", "tomp4"], { desc: "Sticker/GIF → video", category: "MEDIA" }, async (sock, msg) => {
-  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
-  if (!buf || kind !== "sticker") { await sendReply(sock, msg, `🎬 Reply to an *animated sticker* with ${CONFIG.PREFIX}tovideo`); return; }
-  try {
-    const mp4 = await _cmfFfmpeg(buf, "webp", "mp4", ["-t", "6", "-pix_fmt", "yuv420p"]);
-    await sock.sendMessage(msg.key.remoteJid, { video: mp4, mimetype: "video/mp4" }, { quoted: msg });
-  } catch (e) { await sendReply(sock, msg, `❌ tovideo failed: ${e?.message || e}`); }
+  // Delegate to the hardened primary .tovid (stall-timer + fallback encoder)
+  const _e = commands.get("tovid");
+  if (_e) return _e.handler(sock, msg, []);
+  await sendReply(sock, msg, `Reply to a sticker/image/GIF with ${CONFIG.PREFIX}tovid`);
 });
 cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }, async (sock, msg) => {
   const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
@@ -43398,17 +43644,22 @@ cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }
     await sock.sendMessage(msg.key.remoteJid, { audio: ogg, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
   } catch (e) { await sendReply(sock, msg, `❌ tovn failed: ${e?.message || e}`); }
 });
-cmd(["tourl", "litterbox"], { desc: "Media → URL (catbox)", category: "MEDIA" }, async (sock, msg) => {
+cmd(["tourl", "litterbox"], { desc: "Media → URL (catbox → litterbox → tmpfiles)", category: "MEDIA" }, async (sock, msg) => {
   const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
   if (!buf) { await sendReply(sock, msg, `🔗 Reply to *any media* with ${CONFIG.PREFIX}tourl`); return; }
-  try {
-    const FormData = require("form-data");
-    const form = new FormData();
-    form.append("reqtype", "fileupload");
-    form.append("fileToUpload", buf, { filename: "file." + (kind === "image" ? "jpg" : kind === "video" ? "mp4" : kind === "audio" ? "mp3" : "webp") });
-    const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 60000 });
-    await sendReply(sock, msg, `🔗 *Uploaded:*\n${String(data).trim()}`);
-  } catch (e) { await sendReply(sock, msg, `❌ Upload failed: ${e?.message || e}`); }
+  await react(sock, msg, "🌀");
+  const ext = kind === "image" ? "jpg" : kind === "video" ? "mp4" : kind === "audio" ? "mp3" : kind === "sticker" ? "webp" : "bin";
+  const mime = kind === "image" ? "image/jpeg" : kind === "video" ? "video/mp4" : kind === "audio" ? "audio/mpeg" : "application/octet-stream";
+  const FormData = require("form-data");
+  const tryUploads = [
+    async () => { const f = new FormData(); f.append("reqtype", "fileupload"); f.append("fileToUpload", buf, { filename: "file." + ext, contentType: mime }); const { data } = await axios.post("https://catbox.moe/user/api.php", f, { headers: f.getHeaders(), timeout: 60000 }); return /^https?:\/\//.test(String(data).trim()) ? String(data).trim() : null; },
+    async () => { const f = new FormData(); f.append("reqtype", "fileupload"); f.append("time", "72h"); f.append("fileToUpload", buf, { filename: "file." + ext, contentType: mime }); const { data } = await axios.post("https://litterbox.catbox.moe/resources/internals/api.php", f, { headers: f.getHeaders(), timeout: 60000 }); return /^https?:\/\//.test(String(data).trim()) ? String(data).trim() : null; },
+    async () => { const f = new FormData(); f.append("file", buf, { filename: "file." + ext, contentType: mime }); const { data } = await axios.post("https://tmpfiles.org/api/v1/upload", f, { headers: f.getHeaders(), timeout: 60000 }); return data?.data?.url ? String(data.data.url).replace("tmpfiles.org/", "tmpfiles.org/dl/") : null; },
+  ];
+  let out = null;
+  for (const t of tryUploads) { try { out = await t(); if (out) break; } catch {} }
+  if (out) { await react(sock, msg, "✅"); await sendReply(sock, msg, `🔗 *Uploaded:*\n${out}`); }
+  else { await react(sock, msg, "❌"); await sendReply(sock, msg, `❌ Upload failed on all servers — try again in a moment.`); }
 });
 
 // ── PLAY fix: register the player-card handler LAST so no wrapper can win ────
@@ -43740,4 +43991,23 @@ cmd(["setazapic"], { desc: "Set the .aza card picture (URL)", category: "INFO", 
 console.log("[PRECIOUS-MASTER-FIX] convert menu, play visibility, tkick persistence, add queue, renamegc/desc/setgcpp, welcome/goodbye passport, aza pic — all loaded.");
 
 } catch (e) { console.log("[PRECIOUS-MASTER-FIX] load error:", e?.message || e); }
+
+
+
+// ── setbio / setabout: actually update the WhatsApp "About" (bio) ──────────
+// Uses updateProfileStatus (the only supported WA Web API). Replies with the
+// bio that was applied and the char count so you always know it landed.
+cmd(["setbio", "setabout"], { desc: "Set the bot's WhatsApp About/bio", category: "SETTINGS", ownerOnly: true }, async (sock, msg, args) => {
+  const bio = (args || []).join(" ").trim();
+  if (!bio) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setbio <your bio>*\n\nWhatsApp now auto-expires bios (24h / 7d). Keep it short & re-apply when it clears.`); return; }
+  await react(sock, msg, "🌀");
+  try {
+    await sock.updateProfileStatus(bio);
+    await react(sock, msg, "✅");
+    await sendReply(sock, msg, `✅ *Bio updated* (${bio.length} chars)\n\n_"${bio}"_\n\n_Note: WhatsApp may show an expiry (24h/7d) on the bio — that's their new policy, not a bug. Re-run ${CONFIG.PREFIX}setbio to refresh it._`);
+  } catch (e) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ Could not set bio: ${e?.message || e}\nWhatsApp sometimes rate-limits bio changes — wait a minute and retry.`);
+  }
+});
 
