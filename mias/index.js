@@ -1,3 +1,17 @@
+function __unwrapWaMsg(m) {
+  if (!m) return null;
+  let cur = m;
+  for (let i = 0; i < 6; i++) {
+    if (cur?.ephemeralMessage?.message) cur = cur.ephemeralMessage.message;
+    else if (cur?.viewOnceMessage?.message) cur = cur.viewOnceMessage.message;
+    else if (cur?.viewOnceMessageV2?.message) cur = cur.viewOnceMessageV2.message;
+    else if (cur?.viewOnceMessageV2Extension?.message) cur = cur.viewOnceMessageV2Extension.message;
+    else if (cur?.documentWithCaptionMessage?.message) cur = cur.documentWithCaptionMessage.message;
+    else break;
+  }
+  return cur;
+}
+
 /* __MIAS_PORTABLE_VIDEO_PATCH_V1__ */
 
 // ══ AUTO CACHE CLEAR + STALE-CODE CRASH SHIELD (v34) ════════════════════════
@@ -550,11 +564,9 @@ async function __miasFullDpBuffer(buf) {
     const sharp = require("sharp");
     const meta = await sharp(buf).rotate().metadata();
     const side = Math.max(meta.width || 0, meta.height || 0, 1080);
-    const bg = await sharp(buf).rotate()
-      .resize(side, side, { fit: "cover" }).blur(40).modulate({ brightness: 0.7 }).toBuffer();
-    const fg = await sharp(buf).rotate()
-      .resize(side, side, { fit: "inside" }).toBuffer();
-    return await sharp(bg).composite([{ input: fg, gravity: "center" }])
+    // Levanter-style: the picture itself covers the whole square — no blurred side bars
+    return await sharp(buf).rotate()
+      .resize(side, side, { fit: "cover", position: "centre" })
       .jpeg({ quality: 95, chromaSubsampling: "4:4:4", mozjpeg: true }).toBuffer();
   } catch {}
   // Fallback: jimp (pure JS, always available)
@@ -562,10 +574,8 @@ async function __miasFullDpBuffer(buf) {
     const Jimp = require("jimp");
     const j = await Jimp.read(buf);
     const side = Math.max(j.getWidth(), j.getHeight(), 720);
-    const bgJ = j.clone().cover(side, side).blur(25).brightness(-0.2);
-    const fgJ = j.clone().contain(side, side);
-    bgJ.composite(fgJ, ((side - fgJ.getWidth()) / 2) | 0, ((side - fgJ.getHeight()) / 2) | 0);
-    return await bgJ.quality(95).getBufferAsync(Jimp.MIME_JPEG);
+    const fullJ = j.clone().cover(side, side);
+    return await fullJ.quality(95).getBufferAsync(Jimp.MIME_JPEG);
   } catch {}
   // Last resort: never hand WhatsApp the raw upload — force plain JPEG
   try {
@@ -32933,9 +32943,9 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
 
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
     const quoted = ctx?.quotedMessage;
-    const qNode = quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessage?.message || quoted?.ephemeralMessage?.message || quoted?.documentWithCaptionMessage?.message || quoted;
+    const qNode = __unwrapWaMsg(quoted) || quoted;
     const quotedImg = qNode?.imageMessage || (qNode?.documentMessage && String(qNode.documentMessage.mimetype || "").startsWith("image/") ? qNode.documentMessage : null);
-    const mNode = msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessage?.message || msg.message?.ephemeralMessage?.message || msg.message?.documentWithCaptionMessage?.message || msg.message;
+    const mNode = __unwrapWaMsg(msg.message) || msg.message;
     const directImg = mNode?.imageMessage || (mNode?.documentMessage && String(mNode.documentMessage.mimetype || "").startsWith("image/") ? mNode.documentMessage : null);
     let buf = null;
     if (quotedImg) {
@@ -43509,11 +43519,14 @@ try {
       if (tinyThumb && tinyThumb.length > 50) ad.thumbnail = tinyThumb;
       if (meta.thumb) ad.thumbnailUrl = meta.thumb;
 
-      // Primary send: ad-card with tiny JPEG thumbnail (guaranteed < 25KB so WhatsApp relays with double ticks)
-      let sent = await sock.sendMessage(jid, { text: cardText, contextInfo: { externalAdReply: ad } }, { quoted: msg }).catch(() => null);
-      // Fallback: If externalAdReply failed, send directly as an image card with caption
-      if ((!sent || !sent.key || !sent.key.id) && thumbBuf && thumbBuf.length > 100) {
+      // Primary send: normal CLEAR image card (original thumbnail, no blur) so every client
+      // receives it with double blue ticks. Ad-card only as fallback.
+      let sent = null;
+      if (thumbBuf && thumbBuf.length > 100) {
         sent = await sock.sendMessage(jid, { image: thumbBuf, caption: cardText }, { quoted: msg }).catch(() => null);
+      }
+      if (!sent || !sent.key || !sent.key.id) {
+        sent = await sock.sendMessage(jid, { text: cardText, contextInfo: { externalAdReply: ad } }, { quoted: msg }).catch(() => null);
       }
       if (status && status.key) { try { await sock.sendMessage(jid, { delete: status.key }); } catch (_) {} }
       if (!sent || !sent.key || !sent.key.id) { await sendReply(sock, msg, '❌ Could not send the player card for *' + title + '*.'); return; }
@@ -43641,8 +43654,7 @@ globalThis._passportCard = async function _passportCard(ppBuf, label, title, sub
 const _cmfGrabMedia = async (sock, msg) => {
   const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
   let node = q || msg.message;
-  node = node?.ephemeralMessage?.message || node?.viewOnceMessage?.message
-    || node?.viewOnceMessageV2?.message || node?.documentWithCaptionMessage?.message || node;
+  node = __unwrapWaMsg(node) || node;
   const img = node?.imageMessage, vid = node?.videoMessage, aud = node?.audioMessage, stk = node?.stickerMessage, doc = node?.documentMessage;
   const kind = img ? "image" : vid ? "video" : aud ? "audio" : stk ? "sticker" : doc ? "document" : null;
   if (!kind) return { kind: null, buf: null };
