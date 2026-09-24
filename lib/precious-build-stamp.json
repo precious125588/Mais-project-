@@ -1,5 +1,18 @@
 {
-  "buildId": "auto-20260924-130848",
-  "timestamp": 1790255328,
-  "description": "Fix whois and DM reply target detection so quotes and explicit numbers do not resolve to JINX"
+  "buildId": "auto-20260924-132358",
+  "builtAt": "2026-09-24T13:23:58.161Z",
+  "files": {
+    "server.js": "f1e6ab38c841a9753bcc8c4b116c1a1b3b6b8f7bca5dc540d349cbbfa8e31817",
+    "mias/index.js": "ed55e0d2396b07b5bc39e56cb7c2d83fd14f141897473aa5348e32af8e98dfce",
+    "lib/precious-cache-clear.cjs": "f40cc625a9b807157d2227861632eaf51708d51dcbb50f963dbc3d47c4230284",
+    "lib/precious-stale-guard.cjs": "f885075a84864a8c80f5f9d903a51ecf329df907f14f0a164230c179e4bad3b1"
+  },
+  "mustNotExist": [
+    "mias/lib/nsfwAdultPack.cjs",
+    "mias/lib/nsfwPrexzy.cjs",
+    "patch-nsfw.cjs",
+    "patches/patch-nsfw.cjs"
+  ],
+  "timestamp": 1790256238082,
+  "target": "precious-v2.1-fix-whois-target-detection"
 }
