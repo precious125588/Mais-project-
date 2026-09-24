@@ -1,5 +1,5 @@
 {
-  "buildId": "auto-20260924-125956",
-  "timestamp": 1790254796,
-  "description": "Levanter fullpp, recursive unwrapper for tourl/fulldp, crystal-clear player image card"
+  "buildId": "auto-20260924-130848",
+  "timestamp": 1790255328,
+  "description": "Fix whois and DM reply target detection so quotes and explicit numbers do not resolve to JINX"
 }

@@ -4708,7 +4708,9 @@ function getMessageParticipant(msg) {
 async function resolveCommandTarget(sock, msg, args = []) {
   const ctx = getContextInfo(msg);
   const mentions = ctx?.mentionedJid || [];
-  const quotedParticipant = ctx?.quotedMessage ? (ctx?.participant || "") : "";
+  const quotedParticipant = ctx?.quotedMessage
+    ? (ctx?.participant || (isGroup(msg) ? "" : toStandardJid(resolveLid(msg?.key?.remoteJid || ""))))
+    : "";
   const senderJid = toStandardJid(resolveLid(getMessageParticipant(msg) || ""));
   let rawTarget = mentions[0] || quotedParticipant || "";
   if (!rawTarget && args?.[0]) {
@@ -14634,13 +14636,28 @@ function _countryFromNumber(num) {
   return { name: "Unknown", flag: "🌐" };
 }
 
-cmd("whois", { desc: "Full user info", category: "INFO" }, async (sock, msg) => {
+cmd("whois", { desc: "Full user info", category: "INFO" }, async (sock, msg, args) => {
   await react(sock, msg, "🔍");
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  let rawTarget = ctx?.mentionedJid?.[0] || ctx?.participant || getSender(msg);
-  if (!ctx?.mentionedJid?.length && !ctx?.participant) {
-    rawTarget = msg.key.fromMe ? (_botJid || getSender(msg)) : getSender(msg);
+  const ctx = msg.message?.extendedTextMessage?.contextInfo
+    || msg.message?.imageMessage?.contextInfo
+    || msg.message?.videoMessage?.contextInfo;
+  let rawTarget = ctx?.mentionedJid?.[0] || ctx?.participant || "";
+  // Explicit target number wins (e.g. .whois 2348152433778)
+  if (!rawTarget && args?.length) {
+    const n = String(args.join(" ")).replace(/[^0-9]/g, "");
+    if (n.length >= 7) rawTarget = n + "@s.whatsapp.net";
   }
+  if (!rawTarget && !isGroup(msg)) {
+    const chatJid = msg.key.remoteJid || "";
+    const botNum = _cleanNum(_botJid || sock.user?.id || "");
+    // In a DM: target the chat partner, EXCEPT when chatting with the bot itself
+    if (!msg.key.fromMe || !botNum || _cleanNum(chatJid) === botNum) {
+      rawTarget = getSender(msg) || chatJid;
+    } else {
+      rawTarget = chatJid;
+    }
+  }
+  if (!rawTarget) rawTarget = getSender(msg);
 
   let target = toStandardJid(rawTarget);
   // v2.1: resolve @lid → real number so we show the NAME, not the LID
