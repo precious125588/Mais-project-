@@ -10088,8 +10088,9 @@ function _p2Bind(sock) {
 /* ── .play ─────────────────────────────────────────────────────────────────── */
 
 const _p2PlayCardImpl = async (sock, msg, args) => {
-  if (typeof __rdlPlayCard === 'function') {
-    return __rdlPlayCard(sock, msg, args);
+  {
+    const __rdl = (typeof globalThis.__RDL_PLAY_CARD__ === 'function') ? globalThis.__RDL_PLAY_CARD__ : null;
+    if (__rdl) return __rdl(sock, msg, args);
   }
   const jid = msg.key.remoteJid;
   if (!args || !args.length) {
@@ -10221,7 +10222,7 @@ cmd(["play_legacy_disabled", "music_legacy_disabled", "song_legacy_disabled"], {
 
 // Registrar used by the late re-registration block near the end of the file,
 // which is what actually makes the card handler win over older overrides.
-function _p2ResolveCardRegistrar() { return (typeof __rdlPlayHandler === "function") ? __rdlPlayHandler : _p2PlayCardImpl; }
+function _p2ResolveCardRegistrar() { return (typeof globalThis.__RDL_PLAY_HANDLER__ === "function") ? globalThis.__RDL_PLAY_HANDLER__ : _p2PlayCardImpl; }
 
 cmd(["playvid","playvideo","vidplay"], { desc: "Download song as video (mp4)", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `❌ Usage: ${CONFIG.PREFIX}playvid <song name or YouTube URL>`); return; }
@@ -41270,7 +41271,7 @@ for (const name of ["play", "music", "song"]) {
 // list available as an explicit fallback (${CONFIG.PREFIX}playsearch <song>).
 try {
   const _card = commands.get("play") && commands.get("play").__playCardHandler;
-  const _cardHandler = (typeof __rdlPlayHandler === "function") ? __rdlPlayHandler : ((typeof _p2ResolveCardRegistrar === "function") ? _p2ResolveCardRegistrar() : null);
+  const _cardHandler = (typeof globalThis.__RDL_PLAY_HANDLER__ === "function") ? globalThis.__RDL_PLAY_HANDLER__ : ((typeof _p2ResolveCardRegistrar === "function") ? _p2ResolveCardRegistrar() : null);
   if (_cardHandler) {
     for (const name of ["play", "music", "song"]) {
       const entry = commands.get(name) || { category: "DOWNLOAD" };
@@ -43476,6 +43477,9 @@ try {
   }
 
   const __rdlPlayHandler = async (sock, msg, args) => __rdlPlayCard(sock, msg, args);
+  // Expose block-scoped handler globally so _p2PlayCardImpl / late re-registrations
+  // can reach it (function/const inside try{} is NOT visible in outer scopes).
+  try { globalThis.__RDL_PLAY_CARD__ = __rdlPlayCard; globalThis.__RDL_PLAY_HANDLER__ = __rdlPlayHandler; } catch (_) {}
   for (const n of ['play', 'music', 'song']) {
     const e = commands.get(n) || { category: 'DOWNLOAD' };
     e.handler = __rdlPlayHandler;
