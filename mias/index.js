@@ -536,6 +536,56 @@ async function __miasResizeProfilePic(buf) {
 }
 globalThis.__miasResizeProfilePic = __miasResizeProfilePic;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// v36 FULL-DP ENGINE — same square-canvas + blurred-fill technique used by
+// levanter.site/profile-picture. The FULL picture is fitted inside a square
+// canvas (never cropped), over a blurred self-background, re-encoded as a
+// clean square JPEG — which is what WhatsApp accepts without the
+// "not-acceptable" (406) rejection. Shared by every DP command AND by the
+// global updateProfilePicture shim so nothing ever re-crops/re-encodes it.
+// ─────────────────────────────────────────────────────────────────────────────
+async function __miasFullDpBuffer(buf) {
+  // Primary: sharp (best quality: 4:4:4 chroma, mozjpeg)
+  try {
+    const sharp = require("sharp");
+    const meta = await sharp(buf).rotate().metadata();
+    const side = Math.max(meta.width || 0, meta.height || 0, 1080);
+    const bg = await sharp(buf).rotate()
+      .resize(side, side, { fit: "cover" }).blur(40).modulate({ brightness: 0.7 }).toBuffer();
+    const fg = await sharp(buf).rotate()
+      .resize(side, side, { fit: "inside" }).toBuffer();
+    return await sharp(bg).composite([{ input: fg, gravity: "center" }])
+      .jpeg({ quality: 95, chromaSubsampling: "4:4:4", mozjpeg: true }).toBuffer();
+  } catch {}
+  // Fallback: jimp (pure JS, always available)
+  try {
+    const Jimp = require("jimp");
+    const j = await Jimp.read(buf);
+    const side = Math.max(j.getWidth(), j.getHeight(), 720);
+    const bgJ = j.clone().cover(side, side).blur(25).brightness(-0.2);
+    const fgJ = j.clone().contain(side, side);
+    bgJ.composite(fgJ, ((side - fgJ.getWidth()) / 2) | 0, ((side - fgJ.getHeight()) / 2) | 0);
+    return await bgJ.quality(95).getBufferAsync(Jimp.MIME_JPEG);
+  } catch {}
+  // Last resort: never hand WhatsApp the raw upload — force plain JPEG
+  try {
+    const Jimp2 = require("jimp");
+    const plain = await Jimp2.read(buf);
+    return await plain.quality(95).getBufferAsync(Jimp2.MIME_JPEG);
+  } catch {}
+  return buf;
+}
+globalThis.__miasFullDpBuffer = __miasFullDpBuffer;
+
+// isValidProfileBuf: only a REAL JPEG/PNG buffer may be sent in the
+// w:profile:picture IQ — WhatsApp answers anything else with 406 not-acceptable.
+function __miasIsValidProfileBuf(buf) {
+  return Buffer.isBuffer(buf) && buf.length > 200 && (
+    (buf[0] === 0xFF && buf[1] === 0xD8) ||
+    (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47));
+}
+globalThis.__miasIsValidProfileBuf = __miasIsValidProfileBuf;
+
 async function __miasReadContentToBuf(content) {
   if (Buffer.isBuffer(content)) return content;
   if (content && typeof content === "object") {
@@ -567,36 +617,59 @@ function __miasInstallProfilePicShim(sock) {
   sock.updateProfilePicture = async (jid, content, dimensions) => {
     if (!jid) throw new Error("updateProfilePicture: jid required");
     let buf;
-    try {
-      buf = await __miasReadContentToBuf(content);
-      buf = await __miasResizeProfilePic(buf);
-    } catch (e) {
-      // last resort — pass through to original (which will likely fail) so caller sees error
-      if (_orig) return _orig(jid, content, dimensions);
-      throw e;
+    if (Buffer.isBuffer(content) && __miasIsValidProfileBuf(content)) {
+      // Already a clean JPEG/PNG (e.g. fulldp's square blurred-canvas output)
+      // — pass through UNTOUCHED so nothing re-crops or re-encodes it.
+      buf = content;
+    } else {
+      try {
+        buf = await __miasReadContentToBuf(content);
+        buf = await __miasResizeProfilePic(buf);
+      } catch (e) {
+        // last resort — pass through to original (which will likely fail) so caller sees error
+        if (_orig) return _orig(jid, content, dimensions);
+        throw e;
+      }
     }
+    const me = sock.user?.id || "";
+    const target = _jidNorm(jid) !== _jidNorm(me) ? _jidNorm(jid) : undefined;
+    const iqAttrs = {
+      to: "@s.whatsapp.net",
+      type: "set",
+      xmlns: "w:profile:picture",
+      ...(target ? { target } : {}),
+    };
     // Try the original first — most builds happily accept a pre-resized JPEG buffer
     if (_orig) {
       try { return await _orig(jid, buf, dimensions); }
       catch (e) {
         const m = String(e?.message || "");
-        if (!m.includes("No image processing library")) throw e;
+        if (!m.includes("No image processing library") && !m.includes("not-acceptable") && !m.includes("406")) throw e;
         // fall through to raw IQ
       }
     }
     // Raw IQ fallback (mirrors Baileys' updateProfilePicture, minus the jimp/sharp check)
-    const me = sock.user?.id || "";
-    const target = _jidNorm(jid) !== _jidNorm(me) ? _jidNorm(jid) : undefined;
-    await sock.query({
-      tag: "iq",
-      attrs: {
-        to: "@s.whatsapp.net",
-        type: "set",
-        xmlns: "w:profile:picture",
-        ...(target ? { target } : {}),
-      },
-      content: [{ tag: "picture", attrs: { type: "image" }, content: buf }],
-    });
+    try {
+      await sock.query({
+        tag: "iq",
+        attrs: iqAttrs,
+        content: [{ tag: "picture", attrs: { type: "image" }, content: buf }],
+      });
+    } catch (eIq) {
+      const mIq = String(eIq?.message || "");
+      if (!(mIq.includes("not-acceptable") || mIq.includes("406"))) throw eIq;
+      // WhatsApp rejected the image (406): retry with a force-converted plain
+      // JPEG via jimp — this is the ONLY accepted encoding in that case.
+      const Jimp = require("jimp");
+      const plain = await Jimp.read(buf).catch(() => null);
+      if (!plain) throw eIq;
+      const forced = await plain.scaleToFit(720, 720).quality(88).getBufferAsync(Jimp.MIME_JPEG);
+      await sock.query({
+        tag: "iq",
+        attrs: iqAttrs,
+        content: [{ tag: "picture", attrs: { type: "image" }, content: forced }],
+      });
+    }
   };
 }
 globalThis.__miasInstallProfilePicShim = __miasInstallProfilePicShim;
@@ -32645,44 +32718,9 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
         await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}fulldp <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}fulldp*\n\n_Sets the full picture — no cropping, original quality & ratio preserved._`);
         return;
       }
-      let outBuf = null;
-      try {
-        const sharp = require("sharp");
-        const meta = await sharp(buf).rotate().metadata();
-        const side = Math.max(meta.width || 0, meta.height || 0, 1080);
-        const bg = await sharp(buf).rotate()
-          .resize(side, side, { fit: "cover" })
-          .blur(40)
-          .modulate({ brightness: 0.7 })
-          .toBuffer();
-        const fg = await sharp(buf).rotate()
-          .resize(side, side, { fit: "inside" })
-          .toBuffer();
-        outBuf = await sharp(bg)
-          .composite([{ input: fg, gravity: "center" }])
-          .jpeg({ quality: 95, chromaSubsampling: "4:4:4" })
-          .toBuffer();
-      } catch (_e1) {
-        try {
-          const Jimp = require("jimp");
-          const j = await Jimp.read(buf);
-          const side = Math.max(j.getWidth(), j.getHeight(), 720);
-          const bgJ = j.clone().cover(side, side).blur(25).brightness(-0.2);
-          const fgJ = j.clone().contain(side, side);
-          bgJ.composite(fgJ, ((side - fgJ.getWidth()) / 2) | 0, ((side - fgJ.getHeight()) / 2) | 0);
-          outBuf = await bgJ.quality(95).getBufferAsync(Jimp.MIME_JPEG);
-        } catch (_e2) {
-          // FORCE: never hand WhatsApp the raw upload — it only accepts JPEG.
-          // If the blurred-canvas step failed, force-convert the original to
-          // a plain JPEG so the upload can still proceed.
-          try {
-            const Jimp2 = require("jimp");
-            const plain = await Jimp2.read(buf);
-            outBuf = await plain.quality(95).getBufferAsync(Jimp2.MIME_JPEG);
-          } catch (_e3) { outBuf = buf; }
-        }
-      }
-      if (!outBuf) outBuf = buf;
+      // v36: compose the full-DP via the shared levanter-style engine
+      // (square canvas + blurred fill, sharp-first / jimp-fallback / plain-JPEG last resort)
+      const outBuf = await globalThis.__miasFullDpBuffer(buf);
       const me = sock.user?.id || sock.user?.jid || "";
       // Send DIRECTLY to WhatsApp — bypass the crop-resize shim so nothing
       // ever crops or downscales the composed image again.
