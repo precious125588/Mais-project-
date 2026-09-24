@@ -6,6 +6,12 @@ require('./lib/precious-stale-guard.cjs').verify({ name: 'server' });
 // ══ CRASH SHIELD — registered first so nothing can kill the web server ══════
 require('./lib/crash-shield.cjs').install({ name: 'server' });
 
+// ══ BUILD-SYNC (v36) — truthful "new code applied or not" log on every boot ══
+// Prints [BUILD-SYNC] ✅ APPLIED / ⚠️ STALE / ❓ UNKNOWN — never assumes new
+// code is applied. Set REPO_SLUG (owner/repo) so it can check GitHub's HEAD.
+try { require('./lib/build-sync.cjs').check().catch(() => {}); }
+catch (_eBS) { console.log('[BUILD-SYNC] ❓ check could not start (' + (_eBS && _eBS.message) + ') — NOT assuming new code applied'); }
+
 /* ── FIX-PACK ORCHESTRATOR (v32) — version-controlled, runs on the REAL boot ──
    Railway boots `node server.js` (railway.toml) and the Procfile runs only
    v30+v31, so the npm-start chain (fix_all, fix_session_401, …) never ran on
