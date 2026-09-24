@@ -1,5 +1,5 @@
 {
-  "buildId": "auto-20260924-115914",
+  "buildId": "auto-20260924-122137",
   "builtAt": "2026-09-24T11:27:06.886Z",
   "files": {
     "server.js": "f1e6ab38c841a9753bcc8c4b116c1a1b3b6b8f7bca5dc540d349cbbfa8e31817",
@@ -13,6 +13,6 @@
     "patch-nsfw.cjs",
     "patches/patch-nsfw.cjs"
   ],
-  "timestamp": 1790251154376,
-  "target": "precious-v2.1-fix"
+  "timestamp": 1790252497725,
+  "target": "precious-v2.1-fix-fulldp-tourl-playcard"
 }

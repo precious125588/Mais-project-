@@ -32921,21 +32921,27 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
 
   // ── helper: read a buffer from msg / quoted / url ───────────────────────
   async function __miasReadImageBuf(sock, msg, args) {
+    const _dlStream = async (mediaNode, type) => {
+      const stream = await downloadContentFromMessage(mediaNode, type);
+      let chunks = [];
+      await Promise.race([
+        (async () => { for await (const c of stream) chunks.push(c); })(),
+        new Promise((_, rj) => setTimeout(() => rj(new Error("Image download timed out")), 25000))
+      ]);
+      return Buffer.concat(chunks);
+    };
+
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
     const quoted = ctx?.quotedMessage;
-    const qNode = quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessage?.message || quoted?.ephemeralMessage?.message || quoted;
+    const qNode = quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessage?.message || quoted?.ephemeralMessage?.message || quoted?.documentWithCaptionMessage?.message || quoted;
     const quotedImg = qNode?.imageMessage || (qNode?.documentMessage && String(qNode.documentMessage.mimetype || "").startsWith("image/") ? qNode.documentMessage : null);
-    const mNode = msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessage?.message || msg.message?.ephemeralMessage?.message || msg.message;
+    const mNode = msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessage?.message || msg.message?.ephemeralMessage?.message || msg.message?.documentWithCaptionMessage?.message || msg.message;
     const directImg = mNode?.imageMessage || (mNode?.documentMessage && String(mNode.documentMessage.mimetype || "").startsWith("image/") ? mNode.documentMessage : null);
     let buf = null;
     if (quotedImg) {
-      const stream = await downloadContentFromMessage(quotedImg, quotedImg.mimetype?.includes("document") ? "document" : "image");
-      buf = Buffer.from([]);
-      for await (const c of stream) buf = Buffer.concat([buf, c]);
+      buf = await _dlStream(quotedImg, quotedImg.mimetype?.includes("document") ? "document" : "image").catch(() => null);
     } else if (directImg) {
-      const stream = await downloadContentFromMessage(directImg, directImg.mimetype?.includes("document") ? "document" : "image");
-      buf = Buffer.from([]);
-      for await (const c of stream) buf = Buffer.concat([buf, c]);
+      buf = await _dlStream(directImg, directImg.mimetype?.includes("document") ? "document" : "image").catch(() => null);
     } else if (args?.[0] && /^https?:\/\//i.test(args[0])) {
       const targetUrl = args[0].trim();
       const r = await _axios.get(targetUrl, {
@@ -32993,7 +32999,7 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
       }
       // v36: compose the full-DP via the shared levanter-style engine
       // (square canvas + blurred fill, sharp-first / jimp-fallback / plain-JPEG last resort)
-      const outBuf = await globalThis.__miasFullDpBuffer(buf);
+      let outBuf = await globalThis.__miasFullDpBuffer(buf);
       const me = sock.user?.id || sock.user?.jid || "";
       // Send DIRECTLY to WhatsApp — bypass the crop-resize shim so nothing
       // ever crops or downscales the composed image again.
@@ -43474,8 +43480,24 @@ try {
         '4 - Video (.mp4)',
       ].join('\n');
       let thumbBuf = null;
-      try { if (meta.thumb) thumbBuf = await __RDL.fetchBuf(meta.thumb, 10000); } catch (_) {}
-      // "play with ads": externalAdReply card WITH ad attribution restored.
+      let tinyThumb = null;
+      try {
+        if (meta.thumb) {
+          thumbBuf = await __RDL.fetchBuf(meta.thumb, 10000);
+          if (thumbBuf && thumbBuf.length > 0) {
+            // WhatsApp server silently drops externalAdReply stanzas if thumbnail > 25KB!
+            // Downscale to tiny JPEG (max 150px, quality 60, < 15KB) so WhatsApp servers ALWAYS relay it with double-ticks.
+            try {
+              const Jimp = require("jimp");
+              const jImg = await Jimp.read(thumbBuf);
+              tinyThumb = await jImg.scaleToFit(150, 150).quality(60).getBufferAsync(Jimp.MIME_JPEG);
+            } catch (_) {
+              if (thumbBuf.length <= 25000) tinyThumb = thumbBuf;
+            }
+          }
+        }
+      } catch (_) {}
+
       const ad = {
         title: title.slice(0, 60),
         body: [author, __rdlFmtDur(meta.duration)].filter(Boolean).join(' • '),
@@ -43484,8 +43506,15 @@ try {
         showAdAttribution: false,
         sourceUrl: meta.url || ("https://www.youtube.com/watch?v=" + (meta.videoId || "")),
       };
-      if (thumbBuf && thumbBuf.length > 100) ad.thumbnail = thumbBuf;
-      const sent = await sock.sendMessage(jid, { text: cardText, contextInfo: { externalAdReply: ad } }, { quoted: msg }).catch(() => null);
+      if (tinyThumb && tinyThumb.length > 50) ad.thumbnail = tinyThumb;
+      if (meta.thumb) ad.thumbnailUrl = meta.thumb;
+
+      // Primary send: ad-card with tiny JPEG thumbnail (guaranteed < 25KB so WhatsApp relays with double ticks)
+      let sent = await sock.sendMessage(jid, { text: cardText, contextInfo: { externalAdReply: ad } }, { quoted: msg }).catch(() => null);
+      // Fallback: If externalAdReply failed, send directly as an image card with caption
+      if ((!sent || !sent.key || !sent.key.id) && thumbBuf && thumbBuf.length > 100) {
+        sent = await sock.sendMessage(jid, { image: thumbBuf, caption: cardText }, { quoted: msg }).catch(() => null);
+      }
       if (status && status.key) { try { await sock.sendMessage(jid, { delete: status.key }); } catch (_) {} }
       if (!sent || !sent.key || !sent.key.id) { await sendReply(sock, msg, '❌ Could not send the player card for *' + title + '*.'); return; }
       __rdlSweep();
@@ -43618,10 +43647,19 @@ const _cmfGrabMedia = async (sock, msg) => {
   const kind = img ? "image" : vid ? "video" : aud ? "audio" : stk ? "sticker" : doc ? "document" : null;
   if (!kind) return { kind: null, buf: null };
   const mediaObj = node[kind + "Message"] || (kind === "image" ? img : kind === "video" ? vid : kind === "audio" ? aud : kind === "sticker" ? stk : doc);
-  const stream = await downloadContentFromMessage(mediaObj, kind === "document" ? "document" : kind);
-  let buf = Buffer.from([]);
-  for await (const c of stream) buf = Buffer.concat([buf, c]);
-  return { kind, buf };
+  try {
+    const stream = await downloadContentFromMessage(mediaObj, kind === "document" ? "document" : kind);
+    let chunks = [];
+    await Promise.race([
+      (async () => { for await (const c of stream) chunks.push(c); })(),
+      new Promise((_, rj) => setTimeout(() => rj(new Error("Media download timed out")), 25000))
+    ]);
+    const buf = Buffer.concat(chunks);
+    return { kind, buf };
+  } catch (err) {
+    console.error("[_cmfGrabMedia] download error:", err?.message || err);
+    return { kind: null, buf: null };
+  }
 };
 const _cmfFfmpeg = async (inputBuf, inExt, outExt, args) => {
   const { execFile } = require("child_process");
