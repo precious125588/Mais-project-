@@ -3510,6 +3510,7 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
           } catch (e) { /* never crash the dispatcher because of a react */ }
 
           if (body && !isCommandBody(body)) { try { if (await handleGameAnswer(sock, msg, body)) return; } catch (e) { console.error("[game-answer]", e?.message); } }
+          try { if (globalThis.__miasAfkCheck) await globalThis.__miasAfkCheck(sock, msg); } catch {}
 
           // ── v4.9.5 AUTO-CHATBOT ──────────────────────────────────────────
           // Per-chat autoReply toggle (set via .autochat on/off).
@@ -3704,6 +3705,9 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
             // command prefix.  This lets a user reply "1.3" to TikTok or "2"
             // to a play picker instead of typing .pick first.
             try {
+              if (globalThis.__miasLinkNumeric && await globalThis.__miasLinkNumeric(sock, msg, body)) return;
+              if (globalThis.__miasSudoNumeric && await globalThis.__miasSudoNumeric(sock, msg, body)) return;
+              if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
             } catch (e) {
               console.error("[numbered-reply]", e?.message || e);
@@ -3726,6 +3730,15 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
             if (_fpCmd && String(msg.key.remoteJid || '').endsWith('@g.us') && !fromOwner) return;
           } catch {}
 
+          // ── SETTINGS/UI OWNER-ONLY GATE — nobody but owner/sudo may toggle settings ──
+          try {
+            const _setNames = new Set(["settings","setting","set","setprefix","prefix","settheme","config","btnmenu","buttonmenu","buttonsui","listui","listmenuui","interactivelist","flowmenu","flowui","radiomenu","autobio","autoreact","autoview","autolike","antilink","antispam","antiraid","antidelete","antidel","antiedit","antiview","welcome","goodbye","setwelcome","setgoodbye","blockcalls","autoblock","antibroadcast","anticall","autoread","autotyping","autorecording","alwaysonline","chatbot","autochat","mode","workmode","private","public"]);
+            const _cmdName = (String(_command.raw||"").split(/\s+/)[0]||"").toLowerCase();
+            if (_setNames.has(_cmdName) && !fromOwner) {
+              await sendReply(sock, msg, "🔒 *Owner only.* You can't change bot settings.");
+              return;
+            }
+          } catch {}
           // ── Creator Mode gate — when active, only creator/owner can use bot ──
   try {
     if (_creatorModeActive && !isCreator(sender) && !(msg.key.fromMe || isOwner(sender))) {
@@ -4593,10 +4606,15 @@ const isOwner = jid => {
   const ownerJid = (CONFIG.OWNER_JID || "").toLowerCase();
   if (ownerJid && (raw.toLowerCase() === ownerJid || resolved.toLowerCase() === ownerJid)) return true;
   const _ownResolvedNum = _cleanNum(resolved);
-  if (ownerNum && _ownResolvedNum && _ownResolvedNum === ownerNum) return true;
+  // FIX: never treat "everyone as owner" — require a REAL, full-length number match.
+  // _cleanNum can over-trim LID/device JIDs so that unrelated numbers collapsed to the
+  // same short string (this is what made +2348152433778 get recognised as owner for
+  // every sender). We now require ≥10-digit equality, and never fall back to matching
+  // the bot's own number as "owner" unless it really is the configured owner.
+  if (ownerNum && _ownResolvedNum && _ownResolvedNum.length >= 10 && _ownResolvedNum === ownerNum) return true;
   const _ownBotNum = _cleanNum(_botJid || "");
-  if (_botJid && _ownResolvedNum && _ownBotNum && _ownResolvedNum === _ownBotNum) return true;
-  if (_ownerLidJid && (raw === _ownerLidJid || resolved === _ownerLidJid)) return true;
+  if (ownerNum && _botJid && _ownResolvedNum && _ownResolvedNum.length >= 10 && _ownBotNum.length >= 10 && _ownResolvedNum === _ownBotNum && _ownBotNum === ownerNum) return true;
+  if (_ownerLidJid && ownerNum && (raw === _ownerLidJid || resolved === _ownerLidJid)) return true;
   return false;
 };
 const isSudo      = jid => isOwner(jid) || sudoUsers.has(_cleanNum(resolveLid(jid)));
@@ -4627,6 +4645,17 @@ function shouldSilenceForPrivateMode(msg) {
     || (typeof isSudo === "function" && isSudo(sender))
     || (typeof isCreator === "function" && isCreator(sender));
   if (privileged) return false;
+  // ── ALWAYS-PUBLIC COMMANDS — work even in private mode ──
+  try {
+    const _txt = String(
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text || ""
+    ).trim().toLowerCase();
+    // .aza / aza
+    if (/^[.\/!#]?aza\b/.test(_txt)) return false;
+    // send / please send / pls send / send me / share ... etc (status re-share)
+    if (/^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/.test(_txt)) return false;
+  } catch {}
   if (isBotPrivateModeActive()) return true;
   try {
     const chat = getSettings(msg.key.remoteJid);
@@ -11916,9 +11945,26 @@ cmd(["image", "img"], { desc: "Send up to five Pinterest images — .image <quer
     .map((result) => result.value)
     .slice(0, 5);
 
+  // ── FALLBACK: if Pinterest returned nothing, pull from Unsplash / Pexels / Openverse ──
+  if (!images.length) {
+    const _fbUrls = [];
+    const _pushU = (u) => { if (u && /^https?:\/\//.test(u) && !_fbUrls.includes(u)) _fbUrls.push(u); };
+    try { const r = await axios.get(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=5&client_id=`, { timeout: 12000 }).catch(()=>({})); (r.data?.results||[]).forEach(x=>_pushU(x?.urls?.regular||x?.urls?.small)); } catch {}
+    try { const r = await axios.get(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=5`, { timeout: 12000 }).catch(()=>({})); (r.data?.photos||[]).forEach(x=>_pushU(x?.src?.large||x?.src?.medium)); } catch {}
+    try { const r = await axios.get(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=5&license_type=commercial`, { timeout: 12000 }).catch(()=>({})); (r.data?.results||[]).forEach(x=>_pushU(x?.url)); } catch {}
+    try { const r = await axios.get(`https://source.unsplash.com/featured/1080x1080/?${encodeURIComponent(query)}`, { timeout: 8000, maxRedirects: 0, validateStatus: ()=>true }).catch(()=>({})); const loc = r.headers?.location; if (loc) _pushU(loc); } catch {}
+    for (const u of _fbUrls.slice(0,5)) {
+      try {
+        const rr = await axios.get(u, { responseType: "arraybuffer", timeout: 25000, maxContentLength: 20*1024*1024, maxRedirects: 5,
+          headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*;q=0.8" } });
+        const b = Buffer.from(rr.data||[]);
+        if (b.length > 1000) images.push({ image: u, buffer: b, caption: query });
+      } catch {}
+    }
+  }
   if (!images.length) {
     await react(sock, msg, "❌");
-    await sendReply(sock, msg, `❌ No Pinterest images were available for *${query}*.`);
+    await sendReply(sock, msg, `❌ No images were found for *${query}*. Try another search term.`);
     return;
   }
 
@@ -15406,7 +15452,7 @@ cmd("take", { desc: "Rename sticker — .take <name> | <author>", category: "TOO
     await sock.sendMessage(msg.key.remoteJid, { sticker: tagged });
   } catch (e) { await sendReply(sock, msg, `❌ Take failed: ${e.message}`); }
 });
-cmd(["tourl", "litterbox", "tour"], { desc: "Upload media to catbox.moe URL", category: "UTILITY" }, async (sock, msg) => {
+cmd(["tourl", "litterbox", "tour"], { desc: "Upload media → URL (litterbox + catbox)", category: "UTILITY" }, async (sock, msg) => {
   await react(sock, msg, "🌀").catch(()=>{});
   const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
   const img = msg.message?.imageMessage || q?.imageMessage;
@@ -15431,21 +15477,21 @@ cmd(["tourl", "litterbox", "tour"], { desc: "Upload media to catbox.moe URL", ca
     // Try catbox first, then litterbox fallback
     let resultUrl = null;
     const uploadApis = [
-      async () => {
-        const form = new FormData();
-        form.append("reqtype", "fileupload");
-        form.append("fileToUpload", buf, { filename: `upload.${ext}`, contentType: mime });
-        const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 60000 });
-        if (data && typeof data === "string" && data.startsWith("https://")) return data;
-        return null;
-      },
-      async () => {
+      async () => { // litterbox FIRST (reliable, no rate-limit)
         const form = new FormData();
         form.append("reqtype", "fileupload");
         form.append("time", "72h");
         form.append("fileToUpload", buf, { filename: `upload.${ext}`, contentType: mime });
-        const { data } = await axios.post("https://litterbox.catbox.moe/resources/internals/api.php", form, { headers: form.getHeaders(), timeout: 60000 });
-        if (data && typeof data === "string" && data.startsWith("https://")) return data;
+        const { data } = await axios.post("https://litterbox.catbox.moe/resources/internals/api.php", form, { headers: form.getHeaders(), timeout: 90000, maxContentLength: Infinity, maxBodyLength: Infinity });
+        if (data && typeof data === "string" && data.startsWith("https://")) return data.trim();
+        return null;
+      },
+      async () => { // catbox permanent fallback
+        const form = new FormData();
+        form.append("reqtype", "fileupload");
+        form.append("fileToUpload", buf, { filename: `upload.${ext}`, contentType: mime });
+        const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 90000, maxContentLength: Infinity, maxBodyLength: Infinity });
+        if (data && typeof data === "string" && data.startsWith("https://")) return data.trim();
         return null;
       },
       async () => {
@@ -16615,11 +16661,6 @@ cmd("getlid", { desc: "Get LID (linked device ID) of group members or a specific
       }
       if (members.length > 20) out += `\n_...and ${members.length - 20} more. Mention a user for their specific LID._\n`;
       await sendReply(sock, msg, out + ``);
-      try {
-        await sendNativeFlowButtons(sock, jid, msg, `🆔 *LID list — ${members.length} members*\n_Mention someone for their specific LID_`, [
-          { text: "🔄 Refresh List", id: `${CONFIG.PREFIX}getlid` },
-        ], `${CONFIG.BOT_NAME} • LID Info`);
-      } catch {}
     }
   } catch (e) { await sendReply(sock, msg, `❌ Failed: ${e.message}`); }
 });
@@ -16710,20 +16751,33 @@ cmd("close", { desc: "Close group", category: "GROUP", ownerOnly: true }, async 
   await sock.groupSettingUpdate(msg.key.remoteJid, "announcement");
   await sendReply(sock, msg, `🔒 *Group CLOSED!*\n\n🔐 Closed by *${adminName}*`);
 });
+globalThis.__miasLinkPending = globalThis.__miasLinkPending || new Map();
 cmd("link", { desc: "Group invite link", category: "GROUP" }, async (sock, msg) => {
   if (!requireGroup(msg)) return;
   try {
     const c = await sock.groupInviteCode(msg.key.remoteJid);
     const inviteLink = `https://chat.whatsapp.com/${c}`;
-    const text = `🔗 *Group Invite Link*\n\n${inviteLink}`;
-    try {
-      await sendCTAButtons(sock, msg.key.remoteJid, msg, text, [
-        { type: "url",  text: "🔗 Join Group",       url: inviteLink },
-        { type: "copy", text: "📋 Copy Invite Link",  value: inviteLink, id: "grp_link" },
-      ], `${CONFIG.BOT_NAME} • Group Link`);
-    } catch { await sendReply(sock, msg, text); }
+    globalThis.__miasLinkPending.set(msg.key.remoteJid, { link: inviteLink, ts: Date.now() });
+    const text = `🔗 *Group Invite Link*\n\n*1.* Join group\n*2.* Copy invite link\n\n_Reply to this message with 1 or 2_`;
+    await sendReply(sock, msg, text);
   } catch { await sendReply(sock, msg, "❌ Need admin rights."); }
 });
+// numeric reply for the link card
+globalThis.__miasLinkNumeric = async (sock, msg, body) => {
+  try {
+    const pick = String(body||"").trim();
+    if (!/^[12]$/.test(pick)) return false;
+    const jid = msg.key.remoteJid;
+    const pend = globalThis.__miasLinkPending?.get(jid);
+    if (!pend || (Date.now()-pend.ts) > 10*60*1000) return false;
+    // only when quoting the bot's link card
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    if (!ctx?.stanzaId) return false;
+    if (pick === "1") await sendReply(sock, msg, `🔗 *Join here:*\n${pend.link}`);
+    else await sendReply(sock, msg, `📋 *Copy:*\n\n\`${pend.link}\``);
+    return true;
+  } catch { return false; }
+};
 cmd("revoke", { desc: "Revoke invite link", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
   if (!requireGroup(msg)) return;
   try {
@@ -23873,34 +23927,46 @@ cmd(["setbotpic", "botpic", "setpp"], { desc: "Set bot profile pic from URL or r
 
 // ── aza / setaza / setazapic: payment account info card with persistent storage ──
 const _AZA_FILE = require("path").join(process.cwd(), "nexstore", "aza_store.json");
-let _azaStore = { bank: "OPAY", number: "9068551055", name: "DENNIS", picUrl: "https://files.catbox.moe/4bonns.jpg" };
+const _AZA_DEFAULT = { bank: "OPAY", number: "9068551055", name: "DENNIS", picUrl: "https://files.catbox.moe/4bonns.jpg" };
+// Per-user store: { "<num>": {bank,number,name,picUrl}, "_default": {...} }
+let _azaUsers = { _default: Object.assign({}, _AZA_DEFAULT) };
 try {
   if (require("fs").existsSync(_AZA_FILE)) {
-    const _savedAza = JSON.parse(require("fs").readFileSync(_AZA_FILE, "utf8"));
-    if (_savedAza && _savedAza.bank) _azaStore = Object.assign(_azaStore, _savedAza);
+    const _raw = JSON.parse(require("fs").readFileSync(_AZA_FILE, "utf8"));
+    if (_raw && _raw.bank) { _azaUsers._default = Object.assign({}, _AZA_DEFAULT, _raw); } // legacy flat shape → default
+    else if (_raw && typeof _raw === "object") { _azaUsers = Object.assign({ _default: Object.assign({}, _AZA_DEFAULT) }, _raw); }
   }
 } catch (_) {}
-function _saveAza() {
+function _saveAzaAll() {
   try {
     require("fs").mkdirSync(require("path").dirname(_AZA_FILE), { recursive: true });
-    require("fs").writeFileSync(_AZA_FILE, JSON.stringify(_azaStore, null, 2));
+    require("fs").writeFileSync(_AZA_FILE, JSON.stringify(_azaUsers, null, 2));
   } catch (_) {}
 }
-cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <account no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+function _azaKeyFor(msg) { return _cleanNum(getSender(msg)) || _cleanNum(msg?.key?.participant || msg?.key?.remoteJid || "") || "_default"; }
+function _getAzaFor(msg) { const k = _azaKeyFor(msg); return _azaUsers[k] || _azaUsers._default; }
+// Back-compat shim so older code referencing _azaStore still reads the DEFAULT slot
+const _azaStore = new Proxy(_azaUsers._default, {});
+cmd(["setaza"], { desc: "Set YOUR payment account: .setaza <bank> | <account no> | <name>", category: "INFO" }, async (sock, msg, args) => {
   const raw = args.join(" ").trim();
   const parts = raw.split("|").map(v => v.trim()).filter(Boolean);
   if (parts.length < 3) {
-    await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank Name | 1234567890 | Account Holder*\n\nExample: *${CONFIG.PREFIX}setaza Opay | 8012345678 | Precious X*`);
+    await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank Name | 1234567890 | Account Holder*\n\nExample: *${CONFIG.PREFIX}setaza Opay | 8012345678 | Precious X*\n\n_(Saved to your number only — each user keeps their own aza.)_`);
     return;
   }
-  _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2]; _saveAza();
-  await sendReply(sock, msg, `✅ *Payment Account Saved*\n\n🏦 Bank: *${_azaStore.bank}*\n🔢 Number: *${_azaStore.number}*\n👤 Name: *${_azaStore.name}*`);
+  const k = _azaKeyFor(msg);
+  _azaUsers[k] = Object.assign({}, _azaUsers[k] || {}, { bank: parts[0], number: parts[1].replace(/\D/g, ""), name: parts[2] });
+  _saveAzaAll();
+  const mine = _azaUsers[k];
+  await sendReply(sock, msg, `✅ *Your Payment Account Saved*\n\n🏦 Bank: *${mine.bank}*\n🔢 Number: *${mine.number}*\n👤 Name: *${mine.name}*\n\n_(Only your .aza shows this — others keep theirs.)_`);
 });
 cmd(["setazapic"], { desc: "Set image for the .aza card (URL or reply to an image)", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
   // URL form
   if (args[0] && /^https?:\/\//.test(args[0])) {
-    _azaStore.picUrl = args[0]; _saveAza();
-    await sendReply(sock, msg, `✅ Aza picture set!`);
+    const k = _azaKeyFor(msg);
+    _azaUsers[k] = Object.assign({}, _azaUsers[k] || _getAzaFor(msg), { picUrl: args[0] });
+    _saveAzaAll();
+    await sendReply(sock, msg, `✅ Your aza picture set!`);
     return;
   }
   // Quoted-image form: reply to any image with .setazapic → upload → store URL
@@ -23913,20 +23979,21 @@ cmd(["setazapic"], { desc: "Set image for the .aza card (URL or reply to an imag
       form.append("fileToUpload", buf, { filename: "aza.jpg", contentType: "image/jpeg" });
       const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 60000 });
       const url = String(data || "").trim();
-      if (/^https?:\/\//.test(url)) { _azaStore.picUrl = url; _saveAza(); await sendReply(sock, msg, `✅ Aza picture set!\n${url}`); return; }
+      if (/^https?:\/\//.test(url)) { const k = _azaKeyFor(msg); _azaUsers[k] = Object.assign({}, _azaUsers[k] || _getAzaFor(msg), { picUrl: url }); _saveAzaAll(); await sendReply(sock, msg, `✅ Your aza picture set!\n${url}`); return; }
     }
   } catch (e) {}
   await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}setazapic*`);
 });
 cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (sock, msg) => {
-  if (!_azaStore.bank || !_azaStore.number) {
-    await sendReply(sock, msg, `💳 *No payment account set*\n\nOwner can set one with:\n*${CONFIG.PREFIX}setaza Bank | Number | Name*`);
+  const _mine = _getAzaFor(msg);
+  if (!_mine.bank || !_mine.number) {
+    await sendReply(sock, msg, `💳 *No payment account set*\n\nSet yours with:\n*${CONFIG.PREFIX}setaza Bank | Number | Name*`);
     return;
   }
-  const caption = `╭━━━〔 💳 *PAYMENT INFO* 〕━━━╮\n│\n│  🏦 *Bank:* ${_azaStore.bank}\n│  🔢 *Account:* \`${_azaStore.number}\`\n│  👤 *Name:* ${_azaStore.name}\n│\n╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n📋 *Tap the number above to copy*`;
-  if (_azaStore.picUrl) {
+  const caption = `╭━━━〔 💳 *PAYMENT INFO* 〕━━━╮\n│\n│  🏦 *Bank:* ${_mine.bank}\n│  🔢 *Account:* \`${_mine.number}\`\n│  👤 *Name:* ${_mine.name}\n│\n╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n📋 *Tap the number above to copy*`;
+  if (_mine.picUrl) {
     try {
-      const r = await axios.get(_azaStore.picUrl, { responseType: "arraybuffer", timeout: 15000 });
+      const r = await axios.get(_mine.picUrl, { responseType: "arraybuffer", timeout: 15000 });
       await sock.sendMessage(msg.key.remoteJid, { image: Buffer.from(r.data), caption }, { quoted: msg });
       return;
     } catch {}
@@ -44109,6 +44176,303 @@ cmd(["setbio", "setabout"], { desc: "Set the bot's WhatsApp About/bio", category
   } catch (e) {
     await react(sock, msg, "❌");
     await sendReply(sock, msg, `❌ Could not set bio: ${e?.message || e}\nWhatsApp sometimes rate-limits bio changes — wait a minute and retry.`);
+  }
+});
+
+
+
+// ── NEW .sudo (image-card + numeric reply) — replaces legacy setsudo/sudo ──
+const _sudoPending = new Map(); // senderJid -> { targetJid, targetNum }
+globalThis.__miasSudoPending = _sudoPending;
+cmd(["sudo"], { desc: "Grant sudo: .sudo in a DM or reply to a user", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  try {
+    const jid = msg.key.remoteJid;
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    let target = ctx?.mentionedJid?.[0] || ctx?.participant || "";
+    if (!target && args[0]) { const n = String(args[0]).replace(/[^0-9]/g,""); if (n.length>=7) target = n + "@s.whatsapp.net"; }
+    if (!target && !isGroup(msg)) target = jid; // DM → the other person
+    if (!target || target === jid && isGroup(msg)) { await sendReply(sock, msg, "❌ Reply to a user, tag them, give a number, or use inside their DM."); return; }
+    const tNum = _cleanNum(target);
+    // profile pic → fallback to bot pic
+    let card = null;
+    try { const u = await sock.profilePictureUrl(target, "image"); if (u) card = Buffer.from((await axios.get(u,{responseType:"arraybuffer",timeout:12000})).data); } catch {}
+    if (!card) { try { card = await getBotPic(); } catch {} }
+    _sudoPending.set(_cleanNum(getSender(msg)) + "|" + jid, { target, tNum, ts: Date.now() });
+    const cap = `👑 *SUDO — ACCESS CONTROL*\n\nTarget: @${tNum}\n\n*1.* Sudo (DM only)\n*2.* Sudo VIP (Group + DM)\n*3.* Remove (revoke all access)\n\n_Quote this card and reply with 1, 2 or 3_`;
+    if (card) await sock.sendMessage(jid, { image: card, caption: cap, mentions: [target] }, { quoted: msg });
+    else await sendReply(sock, msg, cap, [target]);
+  } catch (e) { await sendReply(sock, msg, "❌ Sudo failed: " + (e?.message||e)); }
+});
+// numeric reply handler for the sudo card
+globalThis.__miasSudoNumeric = async (sock, msg, body) => {
+  try {
+    const pick = String(body||"").trim();
+    if (!/^[123]$/.test(pick)) return false;
+    const jid = msg.key.remoteJid;
+    const key = _cleanNum(getSender(msg)) + "|" + jid;
+    const pend = _sudoPending.get(key);
+    if (!pend || (Date.now()-pend.ts) > 10*60*1000) { _sudoPending.delete(key); return false; }
+    const { target, tNum } = pend;
+    if (typeof sudoUsers === "undefined") return false;
+    if (pick === "1") { sudoUsers.add(tNum); _sudoPending.delete(key); await sendReply(sock, msg, `✅ @${tNum} granted *SUDO (DM)* access.`, [target]); }
+    else if (pick === "2") { sudoUsers.add(tNum); sudoUsers.add(tNum+":vip"); _sudoPending.delete(key); await sendReply(sock, msg, `✅ @${tNum} granted *SUDO VIP* (Group + DM).`, [target]); }
+    else if (pick === "3") { sudoUsers.delete(tNum); sudoUsers.delete(tNum+":vip"); _sudoPending.delete(key); await sendReply(sock, msg, `🗑️ All sudo access removed for @${tNum}.`, [target]); }
+    return true;
+  } catch { return false; }
+};
+
+
+// ── .save reaction patch: 🌀 while working, ✅ when delivered ──
+try {
+  const _sv = commands.get("save");
+  if (_sv && !_sv.__miasReactWrapped) {
+    const _origSave = _sv.run || _sv.execute || _sv.handler;
+    if (typeof _origSave === "function") {
+      const wrapped = async (sock, msg, args, ...rest) => {
+        try { await react(sock, msg, "🌀"); } catch {}
+        const out = await _origSave(sock, msg, args, ...rest);
+        try { await react(sock, msg, "✅"); } catch {}
+        return out;
+      };
+      if (_sv.run) _sv.run = wrapped; else if (_sv.execute) _sv.execute = wrapped; else if (_sv.handler) _sv.handler = wrapped;
+      _sv.__miasReactWrapped = true;
+    }
+  }
+} catch {}
+
+
+// ── Multi-select forward: reply with .1/.2/.3 to mark (🌀), then .forward <num> ──
+const _fwdMarks = new Map(); // ownerKey -> [ {jid, id, msg} ]
+globalThis.__miasForwardMark = async (sock, msg, body) => {
+  try {
+    const m = String(body||"").trim().match(/^\.(\d{1,2})$/);
+    if (!m) return false;
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    if (!ctx?.stanzaId || !ctx?.quotedMessage) return false;
+    const oKey = _cleanNum(getSender(msg));
+    if (!_fwdMarks.has(oKey)) _fwdMarks.set(oKey, []);
+    _fwdMarks.get(oKey).push({ jid: msg.key.remoteJid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || msg.key.remoteJid });
+    try { await react(sock, msg, "🌀"); } catch {}
+    await sendReply(sock, msg, `🌀 Marked *${_fwdMarks.get(oKey).length}* message(s). When done, send *${CONFIG.PREFIX}forward <targetNumber>*`);
+    return true;
+  } catch { return false; }
+};
+cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message to a number", category: "WHATSAPP", ownerOnly: true }, async (sock, msg, args) => {
+  const oKey = _cleanNum(getSender(msg));
+  const jid = msg.key.remoteJid;
+  const tRaw = String(args[0]||"").replace(/[^0-9]/g,"");
+  // Direct quoted forward (no marks)
+  const ctx = msg.message?.extendedTextMessage?.contextInfo;
+  const marked = _fwdMarks.get(oKey) || [];
+  if (!marked.length && !ctx?.quotedMessage) { await sendReply(sock, msg, `❌ Reply to a message with ${CONFIG.PREFIX}forward <number>, or mark several with .1 .2 .3 first.`); return; }
+  if (!tRaw || tRaw.length < 7) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <targetNumber>`); return; }
+  const target = tRaw + "@s.whatsapp.net";
+  const items = marked.length ? marked : [{ jid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || jid, _markMsg: msg }];
+  let ok = 0, failed = [];
+  for (const it of items) {
+    try {
+      const q = it.q;
+      let payload = null;
+      if (q.imageMessage) { const st = await downloadContentFromMessage(q.imageMessage,"image"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={image:b, caption:q.imageMessage.caption||""}; }
+      else if (q.videoMessage) { const st = await downloadContentFromMessage(q.videoMessage,"video"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={video:b, caption:q.videoMessage.caption||"", mimetype:"video/mp4"}; }
+      else if (q.audioMessage) { const st = await downloadContentFromMessage(q.audioMessage,"audio"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={audio:b, mimetype:q.audioMessage.mimetype||"audio/mpeg", ptt:!!q.audioMessage.ptt}; }
+      else if (q.stickerMessage) { const st = await downloadContentFromMessage(q.stickerMessage,"sticker"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={sticker:b}; }
+      else if (q.documentMessage) { const st = await downloadContentFromMessage(q.documentMessage,"document"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={document:b, mimetype:q.documentMessage.mimetype||"application/octet-stream", fileName:q.documentMessage.fileName||"file"}; }
+      else { payload = { text: q.conversation || q.extendedTextMessage?.text || "" }; }
+      await sock.sendMessage(target, payload);
+      ok++;
+      if (it._markMsg) { try { await react(sock, it._markMsg, "✅"); } catch {} }
+    } catch (e) { failed.push(it); if (it._markMsg) { try { await react(sock, it._markMsg, "❌"); } catch {} } }
+  }
+  _fwdMarks.delete(oKey);
+  await sendReply(sock, msg, `📤 Forwarded *${ok}* message(s) to +${tRaw}${failed.length?`\n❌ ${failed.length} failed`:""}`);
+});
+
+
+// ── Download stability: keep bot alive during big/parallel downloads ──
+globalThis.__miasDownloadGuard = async function guardHeavy(buf) {
+  try { if (global.gc && buf && buf.length > 30*1024*1024) global.gc(); } catch {}
+  return buf;
+};
+process.on("unhandledRejection", (e)=>{ const m=String(e?.message||e||""); if(/ENOMEM|heap|Allocation failed|bad mac|BadMAC/i.test(m)) { try{global.gc&&global.gc();}catch{} return; } });
+process.on("uncaughtException", (e)=>{ const m=String(e?.message||e||""); if(/ENOMEM|heap|Allocation failed|bad mac|BadMAC/i.test(m)) { try{global.gc&&global.gc();}catch{} return; } console.error("[crash-guard]", m.slice(0,200)); });
+
+
+
+// ── AFK auto-reply: tell people WHY you're away ──
+try {
+  if (!globalThis.__miasAfkHookInstalled) {
+    globalThis.__miasAfkHookInstalled = true;
+    globalThis.__miasAfkCheck = async (sock, msg) => {
+      try {
+        if (!afkUsers || !afkUsers.size || msg.key.fromMe) return;
+        const ctx = msg.message?.extendedTextMessage?.contextInfo;
+        const mentioned = ctx?.mentionedJid || [];
+        const replyTo = ctx?.participant;
+        const isDm = !isGroup(msg);
+        for (const [afkJid, info] of afkUsers) {
+          const num = _cleanNum(afkJid);
+          const pinged = mentioned.some(j=>_cleanNum(j)===num) || _cleanNum(replyTo||"")===num || (isDm && _cleanNum(msg.key.remoteJid)===num);
+          if (pinged) {
+            const reason = (info && (info.reason || info.text)) || "I'm AFK right now.";
+            const since = info?.since ? new Date(info.since).toLocaleTimeString() : "";
+            await sock.sendMessage(msg.key.remoteJid, { text: `💤 *@${num} is AFK*\n📝 Reason: ${reason}${since?`\n🕐 Since: ${since}`:""}`, mentions: [afkJid] }, { quoted: msg }).catch(()=>{});
+          }
+        }
+      } catch {}
+    };
+  }
+} catch {}
+
+
+
+// ── ROBUST MEDIA DOWNLOAD — fixes "image quote goes silent" on some resolutions ──
+// Root cause: large/unusual-resolution images occasionally fail the first CDN
+// pull (stale media key / direct-path mismatch) and the error was swallowed by
+// an outer try{}catch{} so the command just went quiet. We retry once after a
+// sock.updateMediaMessage() re-upload, then throw a REAL error the command can
+// report instead of dying silently.
+globalThis.__miasRobustDownload = async function(sock, node, kind) {
+  const _tryDl = async (n) => {
+    const st = await downloadContentFromMessage(n, kind);
+    let b = Buffer.from([]);
+    for await (const c of st) b = Buffer.concat([b, c]);
+    return b;
+  };
+  try {
+    const buf = await _tryDl(node);
+    if (buf && buf.length > 100) return buf;
+    throw new Error("empty media buffer");
+  } catch (e1) {
+    try {
+      const reup = await sock.updateMediaMessage({ message: { [kind + "Message"]: node } });
+      const n2 = reup?.[kind + "Message"] || reup?.message?.[kind + "Message"] || node;
+      const buf2 = await _tryDl(n2);
+      if (buf2 && buf2.length > 100) return buf2;
+    } catch {}
+    throw e1;
+  }
+};
+// Wrap every image-quote command so a failed download REPLIES instead of going silent
+try {
+  const _quoteCmds = ["setpp","setgcpp","setgcpic","setpic","setazapic","tourl","removebg","rmbg","sticker","s","toimg","tovv","vv","vv2","remini","enhance","gst"];
+  for (const _cn of _quoteCmds) {
+    const _c = commands.get(_cn);
+    if (_c && !_c.__miasSilentGuard) {
+      const _run = _c.run || _c.execute || _c.handler;
+      if (typeof _run === "function") {
+        const _w = async (sock, msg, args, ...r) => {
+          try { return await _run(sock, msg, args, ...r); }
+          catch (e) {
+            console.error(`[${_cn}]`, e?.message || e);
+            try { await react(sock, msg, "❌"); } catch {}
+            try { await sendReply(sock, msg, `❌ *${_cn}* failed: ${String(e?.message || e).slice(0, 200)}`); } catch {}
+          }
+        };
+        if (_c.run) _c.run = _w; else if (_c.execute) _c.execute = _w; else if (_c.handler) _c.handler = _w;
+        _c.__miasSilentGuard = true;
+      }
+    }
+  }
+} catch {}
+
+// ── TKICK (temp-kick) — actually re-adds the member after the timeout ──
+cmd(["tkick", "tempkick", "tk"], { desc: "Kick member temporarily, auto re-add link after", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+  if (!isGroup(msg)) { await sendReply(sock, msg, "❌ Group only."); return; }
+  const gid = msg.key.remoteJid;
+  const ctx = msg.message?.extendedTextMessage?.contextInfo;
+  let target = ctx?.mentionedJid?.[0] || ctx?.participant || "";
+  if (!target && args[0]) { const n = String(args[0]).replace(/[^0-9]/g,""); if (n.length>=7) target = n+"@s.whatsapp.net"; }
+  if (!target) { await sendReply(sock, msg, `Usage: reply/tag with ${CONFIG.PREFIX}tkick [minutes]`); return; }
+  const mins = Math.max(1, parseInt((args.find(a=>/^\d+$/.test(a))||"5"),10));
+  try {
+    await sock.groupParticipantsUpdate(gid, [target], "remove");
+    await sendReply(sock, msg, `👢 @${_cleanNum(target)} kicked. Re-adding in *${mins} min*…`, [target]);
+    setTimeout(async () => {
+      try { await sock.groupParticipantsUpdate(gid, [target], "add"); await sendText(sock, gid, `✅ @${_cleanNum(target)} was re-added after the temp kick.`, [target]); }
+      catch (e) {
+        try { const c = await sock.groupInviteCode(gid); await sock.sendMessage(target, { text: `You were temp-kicked. Rejoin: https://chat.whatsapp.com/${c}` }).catch(()=>{}); } catch {}
+      }
+    }, mins * 60000).unref();
+  } catch (e) { await sendReply(sock, msg, `❌ Kick failed: ${e?.message||e}`); }
+});
+
+// ── CLEANLAST — deletes BOTH user and bot messages (text + media) ──
+cmd(["cleanlast", "clearlast"], { desc: "Delete the last N messages (user AND bot)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  const n = Math.min(50, Math.max(1, parseInt(args[0]||"5",10)));
+  await react(sock, msg, "🧹").catch(()=>{});
+  let deleted = 0;
+  try {
+    const keys = [];
+    // pull recent ids from the anti-delete store if available
+    const store = globalThis.__miasMsgStore || globalThis.msgStore || null;
+    if (store && typeof store.getRecent === "function") {
+      const recent = store.getRecent(jid, n) || [];
+      for (const k of recent) keys.push(k);
+    }
+    // always include the command message itself
+    keys.push(msg.key);
+    for (const k of keys.slice(0, n+1)) {
+      try { await sock.sendMessage(jid, { delete: k }); deleted++; } catch {}
+    }
+    if (!deleted) {
+      // fallback: delete the replied-to message at minimum
+      const ctx = msg.message?.extendedTextMessage?.contextInfo;
+      if (ctx?.stanzaId) {
+        try { await sock.sendMessage(jid, { delete: { remoteJid: jid, id: ctx.stanzaId, fromMe: false, participant: ctx.participant } }); deleted++; } catch {}
+      }
+      try { await sock.sendMessage(jid, { delete: msg.key }); deleted++; } catch {}
+    }
+    await react(sock, msg, "✅").catch(()=>{});
+  } catch (e) { await sendReply(sock, msg, `❌ Clean failed: ${e?.message||e}`); }
+});
+
+// ── PIN — actually pins the quoted message (7 days default) ──
+cmd(["pin", "pinmsg"], { desc: "Pin the replied message (default 7d)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  const ctx = msg.message?.extendedTextMessage?.contextInfo;
+  if (!ctx?.stanzaId) { await sendReply(sock, msg, `❌ Reply to the message you want pinned with ${CONFIG.PREFIX}pin`); return; }
+  const days = Math.max(1, parseInt(args[0]||"7",10));
+  const secs = days * 24 * 3600;
+  const key = { remoteJid: jid, id: ctx.stanzaId, fromMe: false, participant: ctx.participant };
+  let done = false, lastErr = "";
+  // Method A: Baileys pin message type
+  try { await sock.sendMessage(jid, { pin: key, type: 1, time: secs }); done = true; } catch (e) { lastErr = e?.message || ""; }
+  // Method B: chatModify pin (older Baileys)
+  if (!done) { try { await sock.chatModify({ pin: true }, jid); done = true; } catch (e) { lastErr = e?.message || lastErr; } }
+  if (done) await sendReply(sock, msg, `📌 Message pinned for *${days} day(s)*.`);
+  else await sendReply(sock, msg, `❌ Pin failed: ${lastErr || "unknown"} (bot needs admin rights in groups)`);
+});
+
+// ── GST — inject media through ffmpeg pipeline & deliver to the target group ──
+cmd(["gst"], { desc: "Send media to a group via the bot pipeline (ffmpeg-injected)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  const ctx = msg.message?.extendedTextMessage?.contextInfo;
+  const q = ctx?.quotedMessage || {};
+  const node = q.videoMessage || q.imageMessage || q.audioMessage || q.stickerMessage || q.documentMessage;
+  if (!node) { await sendReply(sock, msg, `❌ Reply to a media message with ${CONFIG.PREFIX}gst`); return; }
+  const kind = q.videoMessage ? "video" : q.imageMessage ? "image" : q.audioMessage ? "audio" : q.stickerMessage ? "sticker" : "document";
+  await react(sock, msg, "🌀").catch(()=>{});
+  try {
+    const buf = await globalThis.__miasRobustDownload(sock, node, kind);
+    // resolve target group (current group by default, or a JID arg)
+    let targetGid = jid;
+    if (args[0] && /@g\.us$/.test(args[0])) targetGid = args[0];
+    let groupName = targetGid;
+    try { const meta = await sock.groupMetadata(targetGid); groupName = meta?.subject || targetGid; } catch {}
+    let payload;
+    if (kind === "video") payload = { video: buf, mimetype: "video/mp4", caption: `🎬 video uploaded to *${groupName}*` };
+    else if (kind === "image") payload = { image: buf, caption: `🖼️ image uploaded to *${groupName}*` };
+    else if (kind === "audio") payload = { audio: buf, mimetype: node.mimetype || "audio/mpeg", ptt: !!node.ptt };
+    else if (kind === "sticker") payload = { sticker: buf };
+    else payload = { document: buf, mimetype: node.mimetype || "application/octet-stream", fileName: node.fileName || "file", caption: `📎 file uploaded to *${groupName}*` };
+    await sock.sendMessage(targetGid, payload);
+    await react(sock, msg, "✅").catch(()=>{});
+    await sendReply(sock, msg, `✅ ${kind} uploaded to *${groupName}*`);
+  } catch (e) {
+    await react(sock, msg, "❌").catch(()=>{});
+    await sendReply(sock, msg, `❌ GST failed: ${String(e?.message||e).slice(0,200)}`);
   }
 });
 
