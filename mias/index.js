@@ -44276,15 +44276,41 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       }
     }
 
-    const _qt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || (typeof __v31QuotedText === "function" ? __v31QuotedText(msg) : "");
+    let _qt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || (typeof __v31QuotedText === "function" ? __v31QuotedText(msg) : "");
+    // HARDEN (sudo silent fix): fall back to reading the quoted message
+    // directly. If the shared extractors miss the card (interactive/buttons
+    // wrapper, edited message, etc.) the whole pick used to die silently
+    // right here — no pending entry AND no card text → return false.
+    if (!_qt) {
+      try {
+        const _q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        if (_q) {
+          _qt = String(
+            _q.conversation
+            || _q.extendedTextMessage?.text
+            || _q.imageMessage?.caption
+            || _q.videoMessage?.caption
+            || _q.buttonsMessage?.contentText
+            || _q.listMessage?.description
+            || _q.interactiveMessage?.body?.text
+            || _q.interactiveMessage?.header?.title
+            || ""
+          );
+        }
+      } catch {}
+    }
     const isSudoCard = _qt && /SUDO|GRANT SUDO|REMOVE SUDO/i.test(_qt);
 
     // If not in memory but quoting a valid card, extract target directly from card text
     if (!pend && isSudoCard) {
-      const tm = _qt.match(/Target:\s*@?(\d+)/i);
+      let tm = _qt.match(/Target:\s*@?(\d{7,15})/i);
+      if (!tm) tm = _qt.match(/@(\d{7,15})/);          // card mentions @number
+      if (!tm) tm = _qt.match(/\b(\d{7,15})\b/);       // last resort: any phone-length number on the card
       if (tm) {
         const tNum = tm[1];
-        pend = { target: tNum + "@s.whatsapp.net", tNum, ts: Date.now() };
+        pend = { target: tNum + "@s.whatsapp.net", tNum, ts: Date.now(), recovered: true };
+        // store it back so this pick (and later replies) resolve normally
+        try { _sudoPending.set(key, pend); _sudoPending.set(jid, pend); } catch {}
       }
     }
 
@@ -44393,7 +44419,8 @@ globalThis.__miasForwardMark = async (sock, msg, body) => {
     // Mark cmd with checkmark
     try { await react(sock, msg, "✅"); } catch {}
     
-    await sendReply(sock, msg, `📌 Marked message *#${m[1]}* (${_fwdMarks.get(oKey).length} queued). Quote next with .<num> or send *${CONFIG.PREFIX}forward <number>* to forward all.`);
+    // SILENT mark — reactions only (📌 on the target, ✅ on your mark).
+    // The bot says NOTHING in chat until you run .forward <number>.
     return true;
   } catch { return false; }
 };
