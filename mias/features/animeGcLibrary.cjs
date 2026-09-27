@@ -342,7 +342,7 @@ function libraryCredsExist() {
       if (fs.existsSync(credFile)) {
         try {
           const creds = JSON.parse(fs.readFileSync(credFile, 'utf8'));
-          if (creds && creds.registered === true && creds.me && creds.me.id) return true;
+          if (creds && (creds.registered || creds.me || creds.account || creds.registrationId)) return true;
         } catch {}
       }
     }

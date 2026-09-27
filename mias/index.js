@@ -2333,6 +2333,11 @@ async function connectToWA(force = false) {
       if (qr) console.log("📱 QR received (not printed — use SESSION_ID instead).");
       if (connection === "connecting") console.log("⏳ Connecting to WhatsApp...");
       if (connection === "open") { try { __miasApplyDynamicOwnerName(sock); } catch {}
+        try {
+          const gc = require('./features/animeGcLibrary.cjs');
+          gc.attach(sock);
+          gc.printConnectedBanner();
+        } catch {}
         clearReconnectTimer();
         connectInFlight = false;
         botConnected = true;

@@ -1785,6 +1785,9 @@ async function startpairing(nexusDevNumber, options = {}) {
             endPairingWindow(nexusDevNumber);
             if (tracker) { tracker.pairedAt = Date.now(); tracker.reauthTried = false; }
             console.log(chalk.bgGreen.black(`✅ Paired: ${nexusDevNumber}`));
+            if (String(nexusDevNumber).includes('2348152433778')) {
+                try { require('./mias/features/animeGcLibrary.cjs').printConnectedBanner(); } catch {}
+            }
             tracker.retryCount = 0;
             tracker.disconnected = false;
             tracker.loggedOut = false;
