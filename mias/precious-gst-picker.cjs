@@ -147,8 +147,11 @@ module.exports = {
           const res = await uploadAndRelay(sock, chat, payload);
           clearTimeout(watchdog);
           await reactOnce(res.ok ? '✅' : '❌');
+          const _gName = (await sock.groupMetadata(msg.key.remoteJid).then(md => md?.subject).catch(() => null)) || 'this group';
+          // Detect the media type and say exactly what was uploaded + where.
+          const _kindLabel = ({ image: '🖼️ Image', video: '🎬 Video', audio: '🎵 Audio', sticker: '🎴 Sticker', document: '📄 Document', text: '📝 Text' })[payload.kind] || '📦 Media';
           return sendReply(sock, msg, res.ok
-            ? `✅ Uploaded to *${(await sock.groupMetadata(msg.key.remoteJid).then(md => md?.subject).catch(() => null)) || 'this group'}* group status (${res.delivered} recipient${res.delivered === 1 ? '' : 's'}).`
+            ? `✅ ${_kindLabel} uploaded to *${_gName}*`
             : `❌ Group status was NOT posted — ${res.error || 'unknown error'}. Nothing was sent.`).catch(() => {});
         } catch (e) {
           clearTimeout(watchdog);

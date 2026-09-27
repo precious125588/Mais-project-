@@ -2335,8 +2335,11 @@ async function connectToWA(force = false) {
       if (connection === "open") { try { __miasApplyDynamicOwnerName(sock); } catch {}
         try {
           const gc = require('./features/animeGcLibrary.cjs');
-          gc.attach(sock);
-          gc.printConnectedBanner();
+          const _gcOwnerJ = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
+          gc.attach(sock, { notifyJid: _gcOwnerJ });
+          // Always print the full library status banner (connected OR not) so the
+          // pairing state of +2348152433778 is visible in the logs on every connect.
+          try { console.log(gc.statusText()); } catch {}
         } catch {}
         clearReconnectTimer();
         connectInFlight = false;
@@ -2726,10 +2729,19 @@ async function connectToWA(force = false) {
           if (msg.message.documentWithCaptionMessage?.message) msg.message = msg.message.documentWithCaptionMessage.message;
           if (msg.message.editedMessage?.message) msg.message = msg.message.editedMessage.message;
 
-          // ── Auto read-receipt — ticks blue on every chat when readMsgs ON ──
+          // ── Auto read-receipt — ticks blue (double blue tick) when readMsgs/autoread ON ──
+          // FIX: this used to read ONLY the raw CONFIG.OWNER_NUMBER settings key, so the
+          // Settings-UI toggle (9.1) and the .autoread command (which write to the owner
+          // JID / chat / bot scopes) never activated it. Now every scope is honoured.
           try {
-            const _rrJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-            if (getSettings(_rrJ)?.readMsgs && !msg.key?.fromMe) {
+            const _rrOwnerJ = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
+            const _rrChatJ = msg.key?.remoteJid || "";
+            let _rrOn = !!(getSettings(_rrOwnerJ)?.readMsgs)
+              || !!(_rrChatJ && getSettings(_rrChatJ)?.readMsgs)
+              || !!getSettings("bot")?.readMsgs
+              || !!getSettings("bot")?.autoread;
+            try { if (!_rrOn && typeof getSetting === "function" && (getSetting("bot", "autoread", false) || getSetting("bot", "readMsgs", false))) _rrOn = true; } catch {}
+            if (_rrOn && !msg.key?.fromMe) {
               sock.readMessages([msg.key]).catch(() => {});
             }
           } catch {}
@@ -3247,6 +3259,20 @@ Save my contact:` }).catch(() => {});
               if (_muteSet && _author && _muteSet.has(_author)) {
                 try { await sock.sendMessage(msg.key.remoteJid, { delete: msg.key }); } catch {}
                 return;
+              }
+            }
+          } catch {}
+
+          // ── Always-on LINK DETECTOR (groups) — reacts 🔗 to ANY posted link so ──
+          //    detection is visible even when the sender is the owner / an admin /
+          //    owner-sent (those legitimately bypass antiLink enforcement). ──
+          try {
+            if ((msg.key.remoteJid || "").endsWith("@g.us") && body) {
+              const _ldSet = getSettings(msg.key.remoteJid);
+              if (!_ldSet || _ldSet.linkDetector !== false) {
+                if (/(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?/i.test(body)) {
+                  await sock.sendMessage(msg.key.remoteJid, { react: { text: "🔗", key: msg.key } }).catch(() => {});
+                }
               }
             }
           } catch {}
@@ -8497,8 +8523,8 @@ const SETTINGS_MAP = {
   "7.2": s => { s.autoReact = false; return "❌ Auto React: OFF"; },
   "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 35._`; },
   "8.2": s => { s.autoBlock = false; return "❌ Auto Block: OFF"; },
-  "9.1": s => { s.readMsgs = true; return "✅ Read Msgs: ON"; },
-  "9.2": s => { s.readMsgs = false; return "❌ Read Msgs: OFF"; },
+  "9.1": s => { s.readMsgs = true; try { getSettings("bot").readMsgs = true; getSettings("bot").autoread = true; } catch {} return "✅ Read Msgs: ON"; },
+  "9.2": s => { s.readMsgs = false; try { getSettings("bot").readMsgs = false; getSettings("bot").autoread = false; } catch {} return "❌ Read Msgs: OFF"; },
   "10.1": s => { s.viewStatus = true; return "✅ View Status: ON"; },
   "10.2": s => { s.viewStatus = false; return "❌ View Status: OFF"; },
   "11.1": s => { s.reactStatus = true; return "✅ React Status: ON"; },
@@ -43083,7 +43109,12 @@ try {
           } catch (_) {}
           return false;
         }
-        // Check sudo numeric handler first so sudo replies are never hijacked
+        // Forward multi-mark (.1/.2/.3 quoting any message) must win before sudo;
+        // it self-skips when the quoted text is a SUDO/picker card.
+        if (typeof globalThis.__miasForwardMark === "function") {
+          try { if (await globalThis.__miasForwardMark(sock, msg, body)) return true; } catch {}
+        }
+        // Check sudo numeric handler so sudo replies are never hijacked
         if (typeof globalThis.__miasSudoNumeric === "function") {
           try {
             const _sHit = await globalThis.__miasSudoNumeric(sock, msg, body);
