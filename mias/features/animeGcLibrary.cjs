@@ -238,7 +238,11 @@ function handleMessage(msg) {
 
 // ── socket attach (idempotent — safe across reconnects) ─────────────────
 function socketDigits(sock) {
-  return String(sock?.user?.id || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+  const fromSock = String(sock?.user?.id || sock?.authState?.creds?.me?.id || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+  if (fromSock) return fromSock;
+  const envHint = String(process.env.AUTH_DIR || process.env.SHIELD_NAME || process.env.BOT_PHONE || '').replace(/[^0-9]/g, '');
+  if (envHint && envHint.includes(LIBRARY_DIGITS)) return LIBRARY_DIGITS;
+  return '';
 }
 
 function attach(sock) {
