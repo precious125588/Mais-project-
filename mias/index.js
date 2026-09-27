@@ -736,6 +736,9 @@ makeWASocket = function __wrappedMakeWASocket(opts) {
   } catch (_rfErr) {
     console.error("[MIAS] reaction forwarding install failed:", _rfErr?.message || _rfErr);
   }
+  try {
+    require('./precious-anime-edits.cjs').attachSocket(sock);
+  } catch (_animeErr) {}
   return sock;
 };
 

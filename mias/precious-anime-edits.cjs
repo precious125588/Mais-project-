@@ -32,6 +32,12 @@ const fs    = require('fs');
 const path  = require('path');
 const axios = require('axios');
 
+// SOURCE 3 (additive): WhatsApp Anime GC Library. Fails closed if absent.
+let GC = null;
+try { GC = require('./features/animeGcLibrary.cjs'); } catch (e) {
+  console.log('[anime-edits] GC library module unavailable:', e && e.message);
+}
+
 // ── locate the edits/ folder (repo root) ─────────────────────────────────
 function editsDir() {
   const a = path.join(__dirname, '..', 'edits');
@@ -220,7 +226,17 @@ function qualityOk(v) {
 function routeZip(cat) {
   const out = [];
   for (const f of cat.files) out.push(...loadLinkFile(f));
-  return out.filter(i => matchesCat(i, cat)); // zip is pre-classified; belt+braces
+  return out.filter(i => matchesCat(i, cat)) // zip is pre-classified; belt+braces
+    .map(i => ({ ...i, src: 'zip', cid: 'zip_' + i.url }));
+}
+// GC library links are already franchise-scoped by group, so the tag check is
+// skipped when there are no hashtags/caption to test against.
+function routeGc(catKey, cat) {
+  if (!GC) return [];
+  try {
+    return GC.linksFor(catKey).map(i => ({ ...i, cid: 'gc_' + i.cid }))
+      .filter(i => i.url.includes('/video/') || !(i.caption || i.hashtags) || matchesCat(i, cat));
+  } catch { return []; }
 }
 async function routePages(cat) {
   const users = loadUsernames();
@@ -252,10 +268,15 @@ async function routeSearch(cat) {
 }
 
 // ── per-user unseen picker ───────────────────────────────────────────────
+// Stable per-source content key: session + category + source + contentId.
+// sessionA+naruto+zip+X and sessionB+naruto+zip+X are independent histories.
+function contentKeyOf(item) {
+  return (item.src || 'other') + ':' + (item.cid || item.url);
+}
 function pickUnseen(userJid, catKey, pool, n) {
   const seen = loadSeen();
   const mine = new Set(((seen[userJid] || {})[catKey]) || []);
-  let fresh = pool.filter(i => !mine.has(i.url));
+  let fresh = pool.filter(i => !mine.has(contentKeyOf(i)));
   if (!fresh.length && pool.length) {           // drained → reset this user+cat
     seen[userJid] = seen[userJid] || {}; seen[userJid][catKey] = [];
     saveSeen(seen); fresh = pool.slice();
@@ -267,12 +288,12 @@ function pickUnseen(userJid, catKey, pool, n) {
   }
   return fresh.slice(0, n);
 }
-function markSeen(userJid, catKey, urls) {
+function markSeen(userJid, catKey, keys) {
   const seen = loadSeen();
   seen[userJid] = seen[userJid] || {};
   const cur = new Set(seen[userJid][catKey] || []);
-  for (const u of urls) cur.add(u);
-  seen[userJid][catKey] = [...cur].slice(-500);
+  for (const u of keys) cur.add(u);
+  seen[userJid][catKey] = [...cur].slice(-1000);
   saveSeen(seen);
 }
 
@@ -302,15 +323,22 @@ module.exports = {
         if (r === 'zip')    pool.push(...routeZip(cat));
         if (r === 'pages')  { try { pool.push(...await routePages(cat)); } catch {} }
         if (r === 'search') { try { pool.push(...await routeSearch(cat)); } catch {} }
+        if (r === 'gc')     { try { pool.push(...routeGc(catKey, cat)); } catch {} }
         if (pool.length >= 2) break;      // first working route wins, order rotates
       }
+      // GC library is additive: if the first routes could not fill the
+      // request, the shared library tops the pool up before we give up.
+      if (pool.length < 2) { try { pool.push(...routeGc(catKey, cat)); } catch {} }
       if (!pool.length) {
         await P.react(sock, msg, '❌').catch(() => {});
         return P.sendReply(sock, msg, `❌ No ${cat.label} edits available right now. Try again in a bit.`);
       }
       const picks = pickUnseen(user, catKey, pool, 8); // try up to 8, deliver 2
+      const pickedKeys = new Set();
       for (const item of picks) {
         if (sent.length >= 2) break;
+        if (pickedKeys.has(contentKeyOf(item))) continue; // never the same content twice
+        pickedKeys.add(contentKeyOf(item));
         try {
           const info = await resolveTikTok(item.url);
           if (!info || !info.play) continue;
@@ -322,7 +350,7 @@ module.exports = {
           const caption = String(info.title || item.title || (cat.label + ' edit'))
             .replace(/\s+/g, ' ').trim().slice(0, 120) || (cat.label + ' edit');
           await sendVideoRobust(sock, jid, buf, caption, msg);
-          sent.push(item.url);
+          sent.push(contentKeyOf(item));
         } catch { /* next candidate */ }
       }
       if (sent.length) {
@@ -334,6 +362,28 @@ module.exports = {
         await P.sendReply(sock, msg, `❌ TikTok download APIs are busy right now — try again in a moment.`);
       }
     }
+
+    // ── owner-only GC library maintenance commands (reuse existing auth) ──
+    const _ownerDigits = String((P.CONFIG && P.CONFIG.OWNER_NUMBER) || process.env.OWNER_NUMBER || '').replace(/[^0-9]/g, '');
+    const _isOwnerMsg = (msg) => {
+      if (!_ownerDigits) return false;
+      const who = String(msg?.key?.participant || msg?.key?.remoteJid || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+      return !!who && who === _ownerDigits;
+    };
+    try {
+      P.cmd(['animelib', 'animelibrary'], { desc: 'Owner: show Anime GC Library status', category: 'OWNER' }, async (sock, msg) => {
+        if (!GC) return P.sendReply(sock, msg, '⚠️ Anime GC library module is not loaded.');
+        if (!_isOwnerMsg(msg)) return P.sendReply(sock, msg, '⚠️ Owner only.');
+        await P.sendReply(sock, msg, GC.statusText());
+      });
+      P.cmd(['animelibrefresh', 'refreshanimelib'], { desc: 'Owner: re-resolve the 14 anime GC routes', category: 'OWNER' }, async (sock, msg) => {
+        if (!GC) return P.sendReply(sock, msg, '⚠️ Anime GC library module is not loaded.');
+        if (!_isOwnerMsg(msg)) return P.sendReply(sock, msg, '⚠️ Owner only.');
+        await P.sendReply(sock, msg, '🔄 Resolving anime GC routes…');
+        await GC.refresh(sock).catch(() => {});
+        await P.sendReply(sock, msg, GC.statusText());
+      });
+    } catch (e) { console.log('[anime-edits] owner commands failed:', e && e.message); }
 
     const registered = [];
     for (const [key, cat] of Object.entries(CATEGORIES)) {
@@ -349,4 +399,13 @@ module.exports = {
     }
     return { categories: registered.length, commands: registered };
   },
+  // Called once per live socket (bot session or the library number). The GC
+  // module attaches exactly one listener per socket object, so reconnects are
+  // safe. Also prints the one-time startup health banner.
+  attachSocket(sock) {
+    if (!GC) return false;
+    try { GC.printStartupBanner(); } catch {}
+    try { return GC.attach(sock); } catch { return false; }
+  },
+  GC,
 };
