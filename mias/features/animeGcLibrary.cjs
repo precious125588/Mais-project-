@@ -68,6 +68,7 @@ const _attachedSocks = new WeakSet();
 let _librarySock  = null;
 let _bannerDone   = false;
 let _routesDone   = false;
+let _notifyJid    = null;   // DM that receives 📌 link-mark confirmations
 
 function readJson(file, fallback) {
   try {
@@ -198,7 +199,7 @@ function routeByJid(jid) {
 }
 
 // ── collector: one incoming message → zero or more new library entries ──
-function handleMessage(msg) {
+function handleMessage(msg, sock) {
   try {
     const jid = msg?.key?.remoteJid;
     if (!jid || typeof jid !== 'string') return 0;
@@ -206,7 +207,15 @@ function handleMessage(msg) {
     const route = routeByJid(jid);
     if (!route) return 0;                        // unregistered group → ignore
     const text = messageText(msg?.message || {});
-    if (!text || !/tiktok\.com/i.test(text)) return 0;   // plain talk / emoji / stickers / other links
+    if (!text) return 0;
+    // ── LINK DETECTOR — always active in registered GCs: any non-TikTok link ──
+    //    gets a 🔗 reaction so link detection is visibly working. ──
+    if (!/tiktok\.com/i.test(text)) {
+      if (/(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?/i.test(text)) {
+        try { if (sock) sock.sendMessage(jid, { react: { text: '🔗', key: msg.key } }).catch(() => {}); } catch {}
+      }
+      return 0;
+    }
     const urls = extractTikTokUrls(text);
     if (!urls.length) return 0;
     const store = loadLinks();
@@ -228,6 +237,14 @@ function handleMessage(msg) {
     if (added) {
       saveLinks();
       console.log(`[ANIME-LIB] +${added} ${route.label} | total=${countForRoute(route.key)}`);
+      // 📌 mark the link message so the poster sees it was saved (reaction only, no text spam)
+      try { if (sock) sock.sendMessage(jid, { react: { text: '📌', key: msg.key } }).catch(() => {}); } catch {}
+      // quiet one-line confirmation to the owner/library DM — never the group
+      try {
+        if (sock && _notifyJid) {
+          sock.sendMessage(_notifyJid, { text: `📌 Marked link *${route.label}* (${countForRoute(route.key)} saved in GC library).` }).catch(() => {});
+        }
+      } catch {}
     }
     return added;
   } catch (e) {
@@ -245,22 +262,24 @@ function socketDigits(sock) {
   return '';
 }
 
-function attach(sock) {
+function attach(sock, opts) {
   try {
     if (!sock || !sock.ev || typeof sock.ev.on !== 'function') return false;
+    try { if (opts && opts.notifyJid) _notifyJid = String(opts.notifyJid); } catch {}
     if (_attachedSocks.has(sock) || sock.__animeGcAttached) return true;
     _attachedSocks.add(sock);
     try { Object.defineProperty(sock, '__animeGcAttached', { value: true, configurable: true }); } catch {}
     sock.ev.on('messages.upsert', (update) => {
       try {
         const msgs = update?.messages || [];
-        for (const m of msgs) handleMessage(m);
+        for (const m of msgs) handleMessage(m, sock);
       } catch (e) {
         try { console.warn('[ANIME-LIB] upsert error:', e && e.message); } catch {}
       }
     });
     if (socketDigits(sock) === LIBRARY_DIGITS) {
       _librarySock = sock;
+      if (!_notifyJid) _notifyJid = LIBRARY_DIGITS + '@s.whatsapp.net';
       printConnectedBanner();
       refresh(sock).then(() => printRouteHealth()).catch(() => {});
     }
@@ -418,6 +437,7 @@ function statusText() {
     lines.push(`⚠️ GC route animes isn't connected`);
     lines.push(`📞 Library number: ${LIBRARY_NUMBER}`);
   }
+  lines.push('🔗 Link detector: ACTIVE');
   return lines.join('\n');
 }
 
