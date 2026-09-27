@@ -697,22 +697,7 @@ makeWASocket = function __wrappedMakeWASocket(opts) {
       globalThis.__miasInstallConnectSync(sock);
     }
   } catch {}
-  // STRIP PROCESSING/DONE REACTIONS (spiral + checkmark) globally
-  try {
-    const _origSendMsg = sock.sendMessage.bind(sock);
-    sock.sendMessage = function (jid, content, options) {
-      try {
-        if (content && typeof content === 'object' && content.react && typeof content.react === 'object') {
-          const _rt = String(content.react.text || '');
-          if (_rt === '\u{1F300}' || _rt === '\u2705') {
-            return Promise.resolve({ status: 200, key: content && content.react && content.react.key || {} });
-          }
-        }
-      } catch (_e) {}
-      return _origSendMsg(jid, content, options);
-    };
-  } catch (_reactStripErr) {
-    try { console.log('[react-strip] install failed:', _reactStripErr && _reactStripErr.message || _reactStripErr); } catch (_ee) {}
+  // Reaction stripper disabled: allow loading and done reactions catch (_ee) {}
   }
   try { __miasInstallProfilePicShim(sock); } catch (e) {
     try { console.log("[pp-shim] install failed:", e?.message || e); } catch {}
@@ -3700,6 +3685,13 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
                 return;
               }
             }
+          }
+          // Early check: forward marking (.1 .2 .3) or sudo numeric selection (.1 .2 .3 or 1 2 3)
+          try {
+            if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
+            if (globalThis.__miasSudoNumeric && await globalThis.__miasSudoNumeric(sock, msg, body)) return;
+          } catch (e) {
+            console.error("[early-numeric-check]", e?.message || e);
           }
           const _command = parseCommandBody(body);
           const _matchedPrefix = _command.prefix;
@@ -44192,38 +44184,55 @@ cmd(["setbio", "setabout"], { desc: "Set the bot's WhatsApp About/bio", category
 
 
 // ── NEW .sudo (image-card + numeric reply) — replaces legacy setsudo/sudo ──
-const _sudoPending = new Map(); // senderJid -> { targetJid, targetNum }
+const _sudoPending = new Map(); // senderJid -> { targetJid, targetNum, ts, cmdKey, jid }
 globalThis.__miasSudoPending = _sudoPending;
+
 cmd(["sudo"], { desc: "Grant sudo: .sudo in a DM or reply to a user", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
   try {
-    const jid = msg.key.remoteJid;
+    try { await react(sock, msg, "🌀"); } catch {}
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
     let target = ctx?.mentionedJid?.[0] || ctx?.participant || "";
     if (!target && args[0]) { const n = String(args[0]).replace(/[^0-9]/g,""); if (n.length>=7) target = n + "@s.whatsapp.net"; }
     if (!target && !isGroup(msg)) target = jid; // DM → the other person
-    if (!target || target === jid && isGroup(msg)) { await sendReply(sock, msg, "❌ Reply to a user, tag them, give a number, or use inside their DM."); return; }
+    if (!target || target === jid && isGroup(msg)) {
+      try { await react(sock, msg, "❌"); } catch {}
+      await sendReply(sock, msg, "❌ Reply to a user, tag them, give a number, or use inside their DM.");
+      return;
+    }
     const tNum = _cleanNum(target);
-    // profile pic → fallback to bot pic
     let card = null;
     try { const u = await sock.profilePictureUrl(target, "image"); if (u) card = Buffer.from((await axios.get(u,{responseType:"arraybuffer",timeout:12000})).data); } catch {}
     if (!card) { try { card = await getBotPic(); } catch {} }
-    _sudoPending.set(_cleanNum(getSender(msg)) + "|" + jid, { target, tNum, ts: Date.now() });
+    
+    const pendData = { target, tNum, ts: Date.now(), cmdKey: msg.key, jid };
+    const sSender = _cleanNum(getSender(msg));
+    _sudoPending.set(sSender + "|" + jid, pendData);
+    _sudoPending.set(jid, pendData);
+    globalThis.__lastSudoPending = pendData;
+
     const cap = `👑 *SUDO — ACCESS CONTROL*\n\nTarget: @${tNum}\n\n*1.* Sudo (DM only)\n*2.* Sudo VIP (Group + DM)\n*3.* Remove (revoke all access)\n\n_Quote this card and reply with 1, 2 or 3_`;
     if (card) await sock.sendMessage(jid, { image: card, caption: cap, mentions: [target] }, { quoted: msg });
     else await sendReply(sock, msg, cap, [target]);
-  } catch (e) { await sendReply(sock, msg, "❌ Sudo failed: " + (e?.message||e)); }
+  } catch (e) {
+    try { await react(sock, msg, "❌"); } catch {}
+    await sendReply(sock, msg, "❌ Sudo failed: " + (e?.message||e));
+  }
 });
+
 // numeric reply handler for the sudo card
 globalThis.__miasSudoNumeric = async (sock, msg, body) => {
   try {
-    const pick = String(body||"").trim();
-    if (!/^[123]$/.test(pick)) return false;
+    const raw = String(body||"").trim();
+    const pickMatch = raw.match(/^[.!#/]?([123])$/);
+    if (!pickMatch) return false;
+    const pick = pickMatch[1];
     const jid = msg.key.remoteJid;
     const sNum = _cleanNum(getSender(msg));
     const key = sNum + "|" + jid;
-    let pend = _sudoPending.get(key);
+
+    let pend = _sudoPending.get(key) || _sudoPending.get(jid);
     if (!pend) {
-      // Flexible lookup: check if any pending entry exists for this chat
       for (const [k, v] of _sudoPending.entries()) {
         if (k.endsWith("|" + jid) && (Date.now() - v.ts) <= 10*60*1000) {
           pend = v;
@@ -44231,22 +44240,65 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
         }
       }
     }
-    if (!pend || (Date.now()-pend.ts) > 10*60*1000) {
-      if (pend) _sudoPending.delete(key);
-      const _qt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || (typeof __v31QuotedText === "function" ? __v31QuotedText(msg) : "");
-      if (_qt && /SUDO|GRANT SUDO|REMOVE SUDO/i.test(_qt)) {
+
+    const _qt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || (typeof __v31QuotedText === "function" ? __v31QuotedText(msg) : "");
+    const isSudoCard = _qt && /SUDO|GRANT SUDO|REMOVE SUDO/i.test(_qt);
+
+    // If not in memory but quoting a valid card, extract target directly from card text
+    if (!pend && isSudoCard) {
+      const tm = _qt.match(/Target:\s*@?(\d+)/i);
+      if (tm) {
+        const tNum = tm[1];
+        pend = { target: tNum + "@s.whatsapp.net", tNum, ts: Date.now() };
+      }
+    }
+
+    if (!pend) {
+      if (isSudoCard) {
         await sendReply(sock, msg, "⌛ That *Sudo* menu has expired. Please run .sudo again.");
         return true;
       }
       return false;
     }
-    const { target, tNum } = pend;
-    if (typeof sudoUsers === "undefined") return false;
-    if (pick === "1") { sudoUsers.add(tNum); _sudoPending.delete(key); await sendReply(sock, msg, `✅ @${tNum} granted *SUDO (DM)* access.`, [target]); }
-    else if (pick === "2") { sudoUsers.add(tNum); sudoUsers.add(tNum+":vip"); _sudoPending.delete(key); await sendReply(sock, msg, `✅ @${tNum} granted *SUDO VIP* (Group + DM).`, [target]); }
-    else if (pick === "3") { sudoUsers.delete(tNum); sudoUsers.delete(tNum+":vip"); _sudoPending.delete(key); await sendReply(sock, msg, `🗑️ All sudo access removed for @${tNum}.`, [target]); }
+
+    // Loading reaction on the reply message
+    try { await react(sock, msg, "🌀"); } catch {}
+
+    const { target, tNum, cmdKey } = pend;
+    if (typeof sudoUsers !== "undefined") {
+      if (pick === "1") {
+        sudoUsers.add(tNum);
+        try { if (typeof saveNow === "function") saveNow(); } catch {}
+        _sudoPending.delete(key);
+        _sudoPending.delete(jid);
+        if (cmdKey) { try { await sock.sendMessage(jid, { react: { text: "✅", key: cmdKey } }); } catch {} }
+        try { await react(sock, msg, "✅"); } catch {}
+        await sendReply(sock, msg, `✅ @${tNum} granted *SUDO (DM)* access.`, [target]);
+      } else if (pick === "2") {
+        sudoUsers.add(tNum);
+        sudoUsers.add(tNum+":vip");
+        try { if (typeof saveNow === "function") saveNow(); } catch {}
+        _sudoPending.delete(key);
+        _sudoPending.delete(jid);
+        if (cmdKey) { try { await sock.sendMessage(jid, { react: { text: "✅", key: cmdKey } }); } catch {} }
+        try { await react(sock, msg, "✅"); } catch {}
+        await sendReply(sock, msg, `✅ @${tNum} granted *SUDO VIP* (Group + DM).`, [target]);
+      } else if (pick === "3") {
+        sudoUsers.delete(tNum);
+        sudoUsers.delete(tNum+":vip");
+        try { if (typeof saveNow === "function") saveNow(); } catch {}
+        _sudoPending.delete(key);
+        _sudoPending.delete(jid);
+        if (cmdKey) { try { await sock.sendMessage(jid, { react: { text: "✅", key: cmdKey } }); } catch {} }
+        try { await react(sock, msg, "✅"); } catch {}
+        await sendReply(sock, msg, `🗑️ All sudo access removed for @${tNum}.`, [target]);
+      }
+    }
     return true;
-  } catch { return false; }
+  } catch (e) {
+    console.error("[sudo-numeric]", e);
+    return false;
+  }
 };
 
 
@@ -44258,42 +44310,69 @@ try {
     if (typeof _origSave === "function") {
       const wrapped = async (sock, msg, args, ...rest) => {
         try { await react(sock, msg, "🌀"); } catch {}
-        const out = await _origSave(sock, msg, args, ...rest);
-        try { await react(sock, msg, "✅"); } catch {}
-        return out;
+        try {
+          const out = await _origSave(sock, msg, args, ...rest);
+          try { await react(sock, msg, "✅"); } catch {}
+          return out;
+        } catch (err) {
+          try { await react(sock, msg, "❌"); } catch {}
+          throw err;
+        }
       };
-      if (_sv.run) _sv.run = wrapped; else if (_sv.execute) _sv.execute = wrapped; else if (_sv.handler) _sv.handler = wrapped;
+      if (_sv.run) _sv.run = wrapped;
+      if (_sv.execute) _sv.execute = wrapped;
+      if (_sv.handler) _sv.handler = wrapped;
       _sv.__miasReactWrapped = true;
     }
   }
 } catch {}
 
 
-// ── Multi-select forward: reply with .1/.2/.3 to mark (🌀), then .forward <num> ──
+// ── Multi-select forward: reply with .1/.2/.3 or 1/2/3 to mark (📌/🌀 -> ✅), then .forward <num> ──
 const _fwdMarks = new Map(); // ownerKey -> [ {jid, id, msg} ]
 globalThis.__miasForwardMark = async (sock, msg, body) => {
   try {
-    const m = String(body||"").trim().match(/^\.(\d{1,2})$/);
+    const raw = String(body||"").trim();
+    const m = raw.match(/^[.!#/]?(\d{1,2})$/);
     if (!m) return false;
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
     if (!ctx?.stanzaId || !ctx?.quotedMessage) return false;
+    
+    // Ignore if quoting a known interactive menu card
+    const _qt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || (typeof __v31QuotedText === "function" ? __v31QuotedText(msg) : "");
+    if (/SUDO|GRANT SUDO|REMOVE SUDO|PLAYER|CHOOSE A FORMAT|CHOICE/i.test(_qt)) return false;
+
     const oKey = _cleanNum(getSender(msg));
     if (!_fwdMarks.has(oKey)) _fwdMarks.set(oKey, []);
-    _fwdMarks.get(oKey).push({ jid: msg.key.remoteJid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || msg.key.remoteJid });
+    
+    // React loading on mark cmd
     try { await react(sock, msg, "🌀"); } catch {}
-    await sendReply(sock, msg, `🌀 Marked *${_fwdMarks.get(oKey).length}* message(s). When done, send *${CONFIG.PREFIX}forward <targetNumber>*`);
+    
+    _fwdMarks.get(oKey).push({ jid: msg.key.remoteJid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || msg.key.remoteJid, _markMsg: msg });
+    
+    // Mark target message with pin emoji
+    try {
+      await sock.sendMessage(msg.key.remoteJid, { react: { text: "📌", key: { remoteJid: msg.key.remoteJid, id: ctx.stanzaId } } });
+    } catch {}
+    
+    // Mark cmd with checkmark
+    try { await react(sock, msg, "✅"); } catch {}
+    
+    await sendReply(sock, msg, `📌 Marked message *#${m[1]}* (${_fwdMarks.get(oKey).length} queued). Quote next with .<num> or send *${CONFIG.PREFIX}forward <number>* to forward all.`);
     return true;
   } catch { return false; }
 };
+
 cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message to a number", category: "WHATSAPP", ownerOnly: true }, async (sock, msg, args) => {
   const oKey = _cleanNum(getSender(msg));
   const jid = msg.key.remoteJid;
   const tRaw = String(args[0]||"").replace(/[^0-9]/g,"");
-  // Direct quoted forward (no marks)
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
   const marked = _fwdMarks.get(oKey) || [];
   if (!marked.length && !ctx?.quotedMessage) { await sendReply(sock, msg, `❌ Reply to a message with ${CONFIG.PREFIX}forward <number>, or mark several with .1 .2 .3 first.`); return; }
   if (!tRaw || tRaw.length < 7) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <targetNumber>`); return; }
+  
+  try { await react(sock, msg, "🌀"); } catch {}
   const target = tRaw + "@s.whatsapp.net";
   const items = marked.length ? marked : [{ jid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || jid, _markMsg: msg }];
   let ok = 0, failed = [];
@@ -44313,9 +44392,9 @@ cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message t
     } catch (e) { failed.push(it); if (it._markMsg) { try { await react(sock, it._markMsg, "❌"); } catch {} } }
   }
   _fwdMarks.delete(oKey);
+  try { await react(sock, msg, "✅"); } catch {}
   await sendReply(sock, msg, `📤 Forwarded *${ok}* message(s) to +${tRaw}${failed.length?`\n❌ ${failed.length} failed`:""}`);
 });
-
 
 // ── Download stability: keep bot alive during big/parallel downloads ──
 globalThis.__miasDownloadGuard = async function guardHeavy(buf) {
