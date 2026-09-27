@@ -329,10 +329,24 @@ function countForRoute(key) { return counts().byRoute[key] || 0; }
 // Is the library account paired at all? (complete creds on disk)
 function libraryCredsExist() {
   try {
-    const sp = require('../../sessionPaths');
-    const dir = sp.sessionDirFor(LIBRARY_DIGITS);
-    const creds = JSON.parse(fs.readFileSync(path.join(dir, 'creds.json'), 'utf8'));
-    return !!(creds && creds.registered === true && creds.me && creds.me.id);
+    const candidates = [
+      '/app/nexstore/pairing/' + LIBRARY_DIGITS + '@s.whatsapp.net',
+      path.join(__dirname, '..', '..', 'nexstore', 'pairing', LIBRARY_DIGITS + '@s.whatsapp.net'),
+    ];
+    try {
+      const sp = require('../../sessionPaths');
+      candidates.unshift(sp.sessionDirFor(LIBRARY_DIGITS));
+    } catch {}
+    for (const dir of candidates) {
+      const credFile = path.join(dir, 'creds.json');
+      if (fs.existsSync(credFile)) {
+        try {
+          const creds = JSON.parse(fs.readFileSync(credFile, 'utf8'));
+          if (creds && creds.registered === true && creds.me && creds.me.id) return true;
+        } catch {}
+      }
+    }
+    return false;
   } catch { return false; }
 }
 
@@ -368,7 +382,7 @@ function printStartupBanner() {
     '',
     '📱 ANIME GC LIBRARY',
   ];
-  if (_librarySock) {
+  if (_librarySock || libraryCredsExist()) {
     lines.push(`✅ Library number connected: ${LIBRARY_NUMBER}`);
     lines.push('🎬 GC route animes: CONNECTED');
   } else {

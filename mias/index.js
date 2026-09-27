@@ -697,8 +697,7 @@ makeWASocket = function __wrappedMakeWASocket(opts) {
       globalThis.__miasInstallConnectSync(sock);
     }
   } catch {}
-  // Reaction stripper disabled: allow loading and done reactions catch (_ee) {}
-  }
+  // Reaction stripper disabled: allow loading and done reactions
   try { __miasInstallProfilePicShim(sock); } catch (e) {
     try { console.log("[pp-shim] install failed:", e?.message || e); } catch {}
   }

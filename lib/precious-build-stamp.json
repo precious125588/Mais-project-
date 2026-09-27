@@ -3,9 +3,10 @@
   "builtAt": "2026-09-27T01:18:20.629720+00:00",
   "files": {
     "server.js": "4bd52305ae9fba2335d5ed721f50ac9e6a36480ef50744e8b6f7c2fbef0b408a",
-    "mias/index.js": "261970c1693cd6d29a0d896640f8681628a072fea1812918334fc0ba4b2b2b37",
+    "mias/index.js": "b90ba944640a34c47e1981245835bbeb1e50ce20aacd860b51564656ca5d1ca9",
     "lib/precious-cache-clear.cjs": "f40cc625a9b807157d2227861632eaf51708d51dcbb50f963dbc3d47c4230284",
-    "lib/precious-stale-guard.cjs": "f885075a84864a8c80f5f9d903a51ecf329df907f14f0a164230c179e4bad3b1"
+    "lib/precious-stale-guard.cjs": "f885075a84864a8c80f5f9d903a51ecf329df907f14f0a164230c179e4bad3b1",
+    "mias/features/animeGcLibrary.cjs": "427ab0c59f9f132a645397a24bff8e6cf531351b592c0b4f555900b902e92893"
   },
   "mustNotExist": [
     "mias/lib/nsfwAdultPack.cjs",
