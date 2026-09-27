@@ -219,9 +219,23 @@ function registerPicker(jid, sent, options, onPick, label) {
   }, PICKER_TTL + 1000).unref?.();
 }
 
-function consumePicker(jid, msg, body) {
-  const arr = pickKeyOf(jid);
-  if (!arr.length) return null;
+  function consumePicker(jid, msg, body) {
+    const arr = pickKeyOf(jid);
+    if (!arr.length) return null;
+    // [SUDO-QUOTE] diagnostics — a quote-reply to a SUDO image card must never
+    // die silently: log detection + quoted type + stanza id (no content logged).
+    try {
+      const _sqc = msg?.message?.extendedTextMessage?.contextInfo;
+      const _sqm = _sqc?.quotedMessage;
+      if (_sqm && (_sqm.imageMessage || _sqm.videoMessage || _sqm.interactiveMessage)) {
+        const _sqCap = String(_sqm.imageMessage?.caption || _sqm.videoMessage?.caption || _sqm.interactiveMessage?.body?.text || '');
+        if (/SUDO/i.test(_sqCap)) {
+          console.log('[SUDO-QUOTE] reply detected');
+          console.log('[SUDO-QUOTE] quoted type: ' + (_sqm.imageMessage ? 'imageMessage' : _sqm.videoMessage ? 'videoMessage' : 'interactiveMessage'));
+          console.log('[SUDO-QUOTE] quoted ID: ' + (_sqc.stanzaId || ''));
+        }
+      }
+    } catch {}
   const choice = String(body || '').trim().replace(/^[.*_~\s>]+/, '');
   if (!/^\d{1,2}$/.test(choice)) {
     const _qctx = msg?.message?.extendedTextMessage?.contextInfo
@@ -348,7 +362,9 @@ module.exports.install = function install(P) {
     try {
       const hit = consumePicker(jid, msg, body);
       if (hit && hit.picker) {
-        try { await hit.picker.onPick(sock, msg, hit.n); } catch (e) {
+        try { console.log('[SUDO-QUOTE] handler matched'); } catch {}
+        try { await hit.picker.onPick(sock, msg, hit.n); console.log('[SUDO-QUOTE] response sent'); } catch (e) {
+          try { console.error('[SUDO-QUOTE] failed: ' + (e?.message || e)); } catch {}
           await P.sendReply(sock, msg, `❌ Failed: ${e?.message || e}`).catch(() => {});
         }
         return true;

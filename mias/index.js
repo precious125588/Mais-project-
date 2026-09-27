@@ -4203,7 +4203,15 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
               if (_wUrl) { const _wr = await axios.get(_wUrl, { responseType: "arraybuffer", timeout: 10000 }); if (_wr?.data && _wr.data.length > 200) _wPp = Buffer.from(_wr.data); }
             } catch {}
             let _wCard = _wPp;
-            try { if (typeof globalThis._passportCard === "function") _wCard = await globalThis._passportCard(_wPp, "WELCOME"); } catch {}
+            try {
+              // v35: render the TARGET member's username INSIDE the image, beside the avatar
+              const _wc = require("./lib/welcomeCards.cjs");
+              _wCard = await _wc.renderMemberCard(_wPp, "WELCOME", display, `${groupName} • Member #${memberCount}`);
+              console.log(`[WELCOME] card rendered with username for target=${num}`);
+            } catch (_we) {
+              console.error("[WELCOME] card render failed, falling back:", _we?.message);
+              try { if (typeof globalThis._passportCard === "function") _wCard = await globalThis._passportCard(_wPp, "WELCOME", display, groupName); } catch {}
+            }
             try {
               console.log(`[WELCOME] Sending welcome for ${num} in ${groupName}`);
               let _sent = false;
@@ -4248,7 +4256,15 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
               if (_gUrl) { const _gr = await axios.get(_gUrl, { responseType: "arraybuffer", timeout: 10000 }); if (_gr?.data && _gr.data.length > 200) _gPp = Buffer.from(_gr.data); }
             } catch {}
             let _gCard = _gPp;
-            try { if (typeof globalThis._passportCard === "function") _gCard = await globalThis._passportCard(_gPp, "GOODBYE"); } catch {}
+            try {
+              // v35: render the DEPARTING member's username INSIDE the image, beside the avatar
+              const _gc2 = require("./lib/welcomeCards.cjs");
+              _gCard = await _gc2.renderMemberCard(_gPp, "GOODBYE", display, `${groupName} • ${memberCount} members remain`);
+              console.log(`[GOODBYE] card rendered with username for target=${num}`);
+            } catch (_ge) {
+              console.error("[GOODBYE] card render failed, falling back:", _ge?.message);
+              try { if (typeof globalThis._passportCard === "function") _gCard = await globalThis._passportCard(_gPp, "GOODBYE", display, groupName); } catch {}
+            }
             try {
               console.log(`[GOODBYE] Sending goodbye for ${num} in ${groupName}`);
               let _sent = false;
@@ -44261,6 +44277,16 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     const raw = String(body||"").trim();
     const pickMatch = raw.match(/^[.!#/]?([123])$/);
     if (!pickMatch) return false;
+    // [SUDO-QUOTE] diagnostics: trace reply-to-card handling (never log content)
+    try {
+      const _sqc = msg.message?.extendedTextMessage?.contextInfo;
+      const _sqm = _sqc?.quotedMessage;
+      if (_sqm) {
+        console.log('[SUDO-QUOTE] reply detected');
+        console.log('[SUDO-QUOTE] quoted type: ' + (Object.keys(_sqm)[0] || 'unknown'));
+        console.log('[SUDO-QUOTE] quoted ID: ' + (_sqc.stanzaId || ''));
+      }
+    } catch {}
     const pick = pickMatch[1];
     const jid = msg.key.remoteJid;
     const sNum = _cleanNum(getSender(msg));
@@ -44326,6 +44352,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     try { await react(sock, msg, "🌀"); } catch {}
 
     const { target, tNum, cmdKey } = pend;
+    try { console.log('[SUDO-QUOTE] handler matched'); } catch {}
     if (typeof sudoUsers !== "undefined") {
       if (pick === "1") {
         sudoUsers.add(tNum);
@@ -44355,9 +44382,11 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
         await sendReply(sock, msg, `🗑️ All sudo access removed for @${tNum}.`, [target]);
       }
     }
+    try { console.log('[SUDO-QUOTE] response sent'); } catch {}
     return true;
   } catch (e) {
     console.error("[sudo-numeric]", e);
+    try { console.error('[SUDO-QUOTE] failed: ' + (e?.message || e)); } catch {}
     return false;
   }
 };

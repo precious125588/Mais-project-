@@ -165,11 +165,23 @@ async function getJson(url, timeout = 15000) {
   if (r.status >= 400 || !r.data) return null;
   return typeof r.data === 'string' ? (() => { try { return JSON.parse(r.data); } catch { return null; } })() : r.data;
 }
+// Heavy-download protection: anime video fetches run through the global
+// bounded queue so simultaneous anime commands can never spike memory and
+// OOM-restart the process. Fails open (direct fetch) if the guard is absent.
+let _heavyGuard = null;
+try { _heavyGuard = require('./lib/heavyTaskGuard.cjs'); } catch {}
 async function getBuf(url, timeout = 90000) {
-  const r = await axios.get(url, { headers: { ...UA, Referer: 'https://www.tiktok.com/' }, responseType: 'arraybuffer', timeout, maxContentLength: 400 * 1024 * 1024, validateStatus: () => true });
-  if (r.status >= 400) return null;
-  const b = Buffer.from(r.data || []);
-  return b.length ? b : null;
+  const _fetch = async () => {
+    const r = await axios.get(url, { headers: { ...UA, Referer: 'https://www.tiktok.com/' }, responseType: 'arraybuffer', timeout, maxContentLength: 400 * 1024 * 1024, validateStatus: () => true });
+    if (r.status >= 400) return null;
+    const b = Buffer.from(r.data || []);
+    return b.length ? b : null;
+  };
+  if (_heavyGuard && typeof _heavyGuard.runHeavy === 'function') {
+    try { return await _heavyGuard.runHeavy(_fetch, { tag: 'anime-edit-dl', timeoutMs: timeout + 30000 }); }
+    catch { return null; }    // a failed/timed-out edit download degrades, never crashes
+  }
+  return _fetch();
 }
 
 // ── TikTok info resolvers (multi-API with fallback) ──────────────────────
