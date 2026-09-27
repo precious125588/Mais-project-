@@ -43087,7 +43087,14 @@ try {
           } catch (_) {}
           return false;
         }
-        if (qt && /reply with|reply here with|choose a number|pick a number|select a number|number you want/i.test(qt)) {
+        // Check sudo numeric handler first so sudo replies are never hijacked
+        if (typeof globalThis.__miasSudoNumeric === "function") {
+          try {
+            const _sHit = await globalThis.__miasSudoNumeric(sock, msg, body);
+            if (_sHit) return true;
+          } catch {}
+        }
+        if (qt && !/SUDO|GRANT SUDO|REMOVE SUDO|SETTINGS/i.test(qt) && /reply with|reply here with|choose a number|pick a number|select a number|number you want/i.test(qt) && /(?:tiktok|tikwm|movie|savetube|yt|youtube|audio|video|mp3|mp4|stream|quality|format)/i.test(qt)) {
           const p = (typeof CONFIG !== "undefined" && CONFIG.PREFIX) || ".";
           try {
             await sendReply(sock, msg,
@@ -44212,9 +44219,27 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     const pick = String(body||"").trim();
     if (!/^[123]$/.test(pick)) return false;
     const jid = msg.key.remoteJid;
-    const key = _cleanNum(getSender(msg)) + "|" + jid;
-    const pend = _sudoPending.get(key);
-    if (!pend || (Date.now()-pend.ts) > 10*60*1000) { _sudoPending.delete(key); return false; }
+    const sNum = _cleanNum(getSender(msg));
+    const key = sNum + "|" + jid;
+    let pend = _sudoPending.get(key);
+    if (!pend) {
+      // Flexible lookup: check if any pending entry exists for this chat
+      for (const [k, v] of _sudoPending.entries()) {
+        if (k.endsWith("|" + jid) && (Date.now() - v.ts) <= 10*60*1000) {
+          pend = v;
+          break;
+        }
+      }
+    }
+    if (!pend || (Date.now()-pend.ts) > 10*60*1000) {
+      if (pend) _sudoPending.delete(key);
+      const _qt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || (typeof __v31QuotedText === "function" ? __v31QuotedText(msg) : "");
+      if (_qt && /SUDO|GRANT SUDO|REMOVE SUDO/i.test(_qt)) {
+        await sendReply(sock, msg, "⌛ That *Sudo* menu has expired. Please run .sudo again.");
+        return true;
+      }
+      return false;
+    }
     const { target, tNum } = pend;
     if (typeof sudoUsers === "undefined") return false;
     if (pick === "1") { sudoUsers.add(tNum); _sudoPending.delete(key); await sendReply(sock, msg, `✅ @${tNum} granted *SUDO (DM)* access.`, [target]); }
