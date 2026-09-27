@@ -53,6 +53,13 @@ try {
   if (_failed.length) console.log('[manifest] ❌ not loading: ' + _failed.join(' | '));
 } catch (_eM) { console.log('[manifest] report error:', _eM && _eM.message); }
 
+// Startup Anime GC Library banner
+try {
+  require('./mias/features/animeGcLibrary.cjs').printStartupBanner();
+} catch (_gcErr) {
+  console.log('[anime-banner] notice:', _gcErr && _gcErr.message);
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 
 
