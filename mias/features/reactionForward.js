@@ -1,13 +1,33 @@
 /**
- * Forward messages that receive a reaction to the bot's private chat.
+ * ✅-reaction → private DM forwarder (SILENT)
  *
- * This is deliberately an event-level feature instead of command logic. It
- * keeps working for text, documents, stickers, and every future media type
- * Baileys can decode. The original message is cached briefly because reaction
- * events contain only the target key, not the full message.
+ * Behaviour (per owner request):
+ *  • Reacts to NOTHING except the ✅ emoji. Every other emoji is ignored.
+ *  • Only the owner/bot account's own ✅ reactions are honoured.
+ *  • The reacted message is sent to the owner's private DM with zero
+ *    commentary — no "Reaction received from..." note, no group output.
+ *  • View-once messages are unwrapped and re-sent as NORMAL media
+ *    (silent vv-to-DM). Text/other types are forwarded as clean copies.
+ *
+ * The original message is cached briefly because reaction events contain
+ * only the target key, not the full message.
  */
+import { createRequire } from "module";
+
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const MAX_CACHE_SIZE = 2000;
+const TRIGGER_EMOJI = "✅";
+
+let _downloadContentFromMessage = null;
+function getDownloader() {
+  if (_downloadContentFromMessage) return _downloadContentFromMessage;
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require("@whiskeysockets/baileys");
+    _downloadContentFromMessage = mod.downloadContentFromMessage || mod.default?.downloadContentFromMessage || null;
+  } catch {}
+  return _downloadContentFromMessage;
+}
 
 function keyOf(key = {}) {
   return [key.remoteJid || "", key.id || "", key.participant || ""].join("|");
@@ -19,7 +39,9 @@ function unwrap(message) {
     const next = current.ephemeralMessage?.message
       || current.viewOnceMessage?.message
       || current.viewOnceMessageV2?.message
-      || current.documentWithCaptionMessage?.message;
+      || current.viewOnceMessageV2Extension?.message
+      || current.documentWithCaptionMessage?.message
+      || current.editedMessage?.message;
     if (!next) break;
     current = next;
   }
@@ -42,6 +64,42 @@ function isForwardable(message) {
   );
 }
 
+async function bufferFrom(node, kind) {
+  const dl = getDownloader();
+  if (!dl) return null;
+  const stream = await dl(node, kind);
+  let buf = Buffer.from([]);
+  for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+  return buf && buf.length > 100 ? buf : null;
+}
+
+/** Build a NORMAL (non-view-once) payload from the unwrapped content. */
+async function buildCleanPayload(content) {
+  if (content.imageMessage) {
+    const buf = await bufferFrom(content.imageMessage, "image");
+    if (buf) return { image: buf, caption: content.imageMessage.caption || undefined };
+  }
+  if (content.videoMessage) {
+    const buf = await bufferFrom(content.videoMessage, "video");
+    if (buf) return { video: buf, caption: content.videoMessage.caption || undefined, mimetype: content.videoMessage.mimetype || "video/mp4" };
+  }
+  if (content.audioMessage) {
+    const buf = await bufferFrom(content.audioMessage, "audio");
+    if (buf) return { audio: buf, mimetype: content.audioMessage.mimetype || "audio/mp4", ptt: !!content.audioMessage.ptt };
+  }
+  if (content.documentMessage) {
+    const buf = await bufferFrom(content.documentMessage, "document");
+    if (buf) return { document: buf, mimetype: content.documentMessage.mimetype || "application/octet-stream", fileName: content.documentMessage.fileName || "file" };
+  }
+  if (content.stickerMessage) {
+    const buf = await bufferFrom(content.stickerMessage, "sticker");
+    if (buf) return { sticker: buf };
+  }
+  const text = content.conversation || content.extendedTextMessage?.text || "";
+  if (text) return { text };
+  return null;
+}
+
 export function installReactionForwarder(sock, options = {}) {
   if (!sock?.ev || sock.__miasReactionForwarder) return;
   sock.__miasReactionForwarder = true;
@@ -49,6 +107,8 @@ export function installReactionForwarder(sock, options = {}) {
   const cache = new Map();
   const ownerJid = String(options.ownerJid || sock.user?.id || "")
     .replace(/:\d+(?=@)/, "");
+  const ownerDigits = ownerJid.replace(/[^0-9]/g, "");
+  const botDigits = String(sock.user?.id || "").replace(/[^0-9]/g, "");
 
   const remember = (message) => {
     if (!message?.key?.id || !isForwardable(message)) return;
@@ -67,27 +127,41 @@ export function installReactionForwarder(sock, options = {}) {
     for (const event of Array.isArray(events) ? events : [events]) {
       try {
         const reaction = event?.reaction || event;
-        if (!reaction?.key || reaction.key.fromMe) continue;
+        if (!reaction?.key) continue;
+
+        // ── GATE 1: ✅ emoji only — every other reaction is ignored ──
+        if (String(reaction.text || "") !== TRIGGER_EMOJI) continue;
+
+        // ── GATE 2: only the owner / the bot account's own reactions ──
+        const reactorDigits = String(reaction.senderPn || reaction.key.participant || "").replace(/[^0-9]/g, "");
+        const isMine = reaction.key.fromMe === true
+          || (ownerDigits && reactorDigits && reactorDigits.endsWith(ownerDigits))
+          || (botDigits && reactorDigits && reactorDigits.endsWith(botDigits));
+        if (!isMine) continue;
+
         const sourceJid = reaction.key.remoteJid || "";
-        if (!sourceJid.endsWith("@g.us")) continue;
-        if (!ownerJid || ownerJid === sourceJid) continue;
+        if (!ownerJid || sourceJid === ownerJid) continue;   // already in the DM → skip
+        if (sourceJid === "status@broadcast") continue;
 
         const cached = cache.get(keyOf(reaction.key));
         if (!cached || cached.expiresAt < Date.now()) {
           cache.delete(keyOf(reaction.key));
           continue;
         }
-        const original = cached.message;
-        const actor = reaction.senderPn || reaction.key.participant || "a member";
-        const note = `Reaction received from ${String(actor).split("@")[0]} in ${sourceJid}`;
-        await sock.sendMessage(ownerJid, { text: note });
-        if (typeof sock.copyNForward === "function") {
-          await sock.copyNForward(ownerJid, original, true);
+
+        // ── SILENT DELIVERY: unwrap (incl. view-once) → normal payload → DM ──
+        const content = unwrap(cached.message?.message || {});
+        const payload = await buildCleanPayload(content);
+        if (payload) {
+          await sock.sendMessage(ownerJid, payload);
+          try { console.log("[✅→DM] delivered", payload.image ? "image" : payload.video ? "video" : payload.audio ? "audio" : payload.document ? "document" : payload.sticker ? "sticker" : "text", "from", sourceJid); } catch {}
+        } else if (typeof sock.copyNForward === "function") {
+          await sock.copyNForward(ownerJid, cached.message, true);
         } else {
-          await sock.sendMessage(ownerJid, { forward: original });
+          await sock.sendMessage(ownerJid, { forward: cached.message });
         }
       } catch (error) {
-        console.error("[reaction-forward]", error?.message || error);
+        console.error("[✅→DM]", error?.message || error);
       }
     }
   });

@@ -208,14 +208,13 @@ function handleMessage(msg, sock) {
     if (!route) return 0;                        // unregistered group → ignore
     const text = messageText(msg?.message || {});
     if (!text) return 0;
-    // ── LINK DETECTOR — always active in registered GCs: any non-TikTok link ──
-    //    gets a 🔗 reaction so link detection is visibly working. ──
-    if (!/tiktok\.com/i.test(text)) {
-      if (/(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?/i.test(text)) {
-        try { if (sock) sock.sendMessage(jid, { react: { text: '🔗', key: msg.key } }).catch(() => {}); } catch {}
-      }
-      return 0;
-    }
+    // ── TikTok-ONLY silent detector ─────────────────────────────────────
+    //    Anything that is not a TikTok link (whatsapp.com, instagram, plain
+    //    chat, any other URL) is ignored completely: no 🔗 reaction, no
+    //    reply, no antilink behaviour. The bot only fetches TikTok URLs
+    //    (incl. short hosts like https://vm.tiktok.com/...) and does so
+    //    silently.
+    if (!/tiktok\.com/i.test(text)) return 0;
     const urls = extractTikTokUrls(text);
     if (!urls.length) return 0;
     const store = loadLinks();
@@ -237,14 +236,8 @@ function handleMessage(msg, sock) {
     if (added) {
       saveLinks();
       console.log(`[ANIME-LIB] +${added} ${route.label} | total=${countForRoute(route.key)}`);
-      // 📌 mark the link message so the poster sees it was saved (reaction only, no text spam)
-      try { if (sock) sock.sendMessage(jid, { react: { text: '📌', key: msg.key } }).catch(() => {}); } catch {}
-      // quiet one-line confirmation to the owner/library DM — never the group
-      try {
-        if (sock && _notifyJid) {
-          sock.sendMessage(_notifyJid, { text: `📌 Marked link *${route.label}* (${countForRoute(route.key)} saved in GC library).` }).catch(() => {});
-        }
-      } catch {}
+      // fully silent — TikTok links are indexed to disk and logged to the
+      // console only. No reactions in the group, no DM confirmations.
     }
     return added;
   } catch (e) {
@@ -307,8 +300,15 @@ async function refresh(sock) {
       } else {
         const code = route.invite.split('/').pop();
         let jid = '';
-        try { const info = await s.groupGetInviteInfo?.(code); jid = info?.id || ''; } catch {}
-        if (!jid) { try { jid = await s.groupAcceptInvite?.(code); } catch {} }
+        // Retry pass — right after a fresh pair/reconnect the account's group
+        // metadata is usually NOT synced yet, so a single immediate attempt
+        // fails spuriously and every route prints "group unavailable".
+        // 3 attempts with a 3s gap ride out the sync window.
+        for (let attempt = 0; attempt < 3 && !jid; attempt++) {
+          if (attempt) await new Promise(r => setTimeout(r, 3000));
+          try { const info = await s.groupGetInviteInfo?.(code); jid = info?.id || ''; } catch {}
+          if (!jid) { try { jid = await s.groupAcceptInvite?.(code); } catch {} }
+        }
         if (typeof jid === 'string' && jid.endsWith('@g.us')) {
           rec.jid = jid;
           rec.available = true;
@@ -437,7 +437,7 @@ function statusText() {
     lines.push(`⚠️ GC route animes isn't connected`);
     lines.push(`📞 Library number: ${LIBRARY_NUMBER}`);
   }
-  lines.push('🔗 Link detector: ACTIVE');
+  lines.push('🎯 TikTok detector: ACTIVE (silent — TikTok links only)');
   return lines.join('\n');
 }
 
