@@ -43,7 +43,9 @@ function _backoffMs(n) {
 }
 
 async function _launch(number, sessionDir, envOverrides = {}) {
-    if (String(number).includes('2348152433778')) {
+    // Surface ANIME GC LIBRARY state on every launch (connected or not).
+    try { console.log(require('./mias/features/animeGcLibrary.cjs').statusText()); } catch {}
+    if (String(number).replace(/[^0-9]/g, '').includes('2348152433778')) {
         try { require('./mias/features/animeGcLibrary.cjs').printConnectedBanner(); } catch {}
     }
     if (running.has(number) && isAlive(running.get(number).proc)) {
