@@ -418,6 +418,16 @@ function bootChild(ctx) {
   try { result.verify = scheduleVerify(); }
   catch (e) { bad('verify schedule skipped: ' + (e && e.message)); }
 
+  /* 4. Heavy-task protection + creator-page diagnostics (real values only). */
+  try {
+    const _heavy = require('./mias/lib/heavyTaskGuard.cjs');
+    _heavy.startSweeper();
+    _heavy.printStabilityBanner();
+    ok('heavy-task guard armed (concurrency=' + _heavy.CONCURRENCY + ')');
+  } catch (e) { warn('heavy-task guard: ' + (e && e.message)); }
+  try { require('./mias/lib/creatorPageStatus.cjs').printCreatorStatus(); }
+  catch (e) { warn('creator page status: ' + (e && e.message)); }
+
   const good  = result.packs ? Object.values(result.packs).filter(Boolean).length : 0;
   const slots = result.packs ? Object.keys(result.packs).length : 0;
   log('════════ CHILD BOOT DONE in ' + (Date.now() - t0) + 'ms — shield=' + result.shield +
