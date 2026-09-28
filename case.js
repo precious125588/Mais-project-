@@ -124,11 +124,23 @@ async function styletext(text) {
     return styles;
 }
 
+function _normJid(j) {
+    return String(j || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+}
+
 function loadSudoList() {
-    if (!fs.existsSync(SUDO_FILE)) {
-        fs.writeFileSync(SUDO_FILE, JSON.stringify([]));
+    // Persistent storage: disk-backed and survives restarts. Falls back to an
+    // empty array on any corruption so the bot never crashes on a bad read.
+    try {
+        if (!fs.existsSync(SUDO_FILE)) {
+            fs.writeFileSync(SUDO_FILE, JSON.stringify([], null, 2));
+        }
+        const parsed = JSON.parse(fs.readFileSync(SUDO_FILE, 'utf8') || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        console.error('[sudo] load failed, using empty list:', e.message);
+        return [];
     }
-    return JSON.parse(fs.readFileSync(SUDO_FILE));
 }
 
 function saveSudoList(data) {
@@ -320,7 +332,8 @@ const isCreator = !!_mSenderNumStrict && _creatorAllowlist.includes(_mSenderNumS
 const isOwner = isCreator;
 const isPremium = [botNumber, ...Premium].map(v => v.replace(/[^0-9]/g, '') + '@s.whatsapp.net').includes(m.sender)
 const sudoList = loadSudoList();
-const isSudo = sudoList.includes(m.sender);
+const _sudoNum = _normJid(m.sender);
+const isSudo = sudoList.some(j => _normJid(j) === _sudoNum) || isCreator;
 const qtext = text
 const quoted = m.quoted ? m.quoted : m
 const { spawn, exec } = require('child_process')
@@ -472,7 +485,7 @@ const _OWNER_VCF_STR = `BEGIN:VCARD\nVERSION:3.0\nFN:ＺＵＫＯ－ＸＭＤ �
 const _OWNER_DISPLAY  = 'ＺＵＫＯ－ＸＭＤ 👽';
 
 // ── Enhanced reply with Status-Blue branding & Auto-Vcard ───────────────────
-const _statusBlueOn = getSetting(m.sender, 'statusBlue', false);
+const _statusBlueOn = getSetting('bot', 'statusBlue', false);
 const _autoVcardOn  = getSetting(m.sender, 'autoVcard',  false);
 
 const reply = async (teks) => {
@@ -2843,11 +2856,14 @@ case 'setsudo': case 'sudo': case 'addsudo': {
   const jid = number + '@s.whatsapp.net';
   const sudoList = loadSudoList();
 
-  if (sudoList.includes(jid)) return reply(`❌ @${number} is already in the sudo list.`);
+  const targetNum = _normJid(jid);
+  if (sudoList.some(j => _normJid(j) === targetNum)) {
+    return reply(`ℹ️ @${number} is *already* in the sudo list.\n\n_No action done._`, { mentions: [jid] });
+  }
   sudoList.push(jid);
   saveSudoList(sudoList);
 
-  reply(`✅ Successfully added @${number} to the sudo list.`);
+  reply(`✅ Successfully added @${number} to the sudo list.`, { mentions: [jid] });
 }
 break;
 
@@ -2950,7 +2966,7 @@ case "statusblue": {
         `╭──────────────◆\n│ 🔵 *Status Blue*\n│\n│ Makes all bot replies show\n│ a WhatsApp·Status branded card.\n│\n│ Usage: *${prefix}statusblue on/off*\n╰──────────────◆`
     );
     const _sbOn = args[0].toLowerCase() === 'on';
-    setSetting(m.sender, 'statusBlue', _sbOn);
+    setSetting('bot', 'statusBlue', _sbOn);
     reply(_sbOn
         ? `✅ *Status Blue* is now *ON*\n\nAll my replies will display with the WhatsApp·Status banner 🔵`
         : `❌ *Status Blue* is now *OFF*`
