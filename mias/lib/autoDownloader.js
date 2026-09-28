@@ -1462,6 +1462,14 @@ export async function resolveMediaUrl(url, platform) {
 }
 
 export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
+  // Per-chat opt-in (settings UI option 30): enabling auto-DL for THIS chat
+  // forces download here even when the global mode is off/dm — other chats
+  // stay untouched.
+  try {
+    const _cid = msg?.key?.remoteJid || "";
+    const _chatS = (typeof globalThis.__miasGetSettings === "function") ? globalThis.__miasGetSettings(_cid) : null;
+    if (_chatS && _chatS.autoDlChat === true && (!mode || mode === "off" || mode === "dm")) mode = "global";
+  } catch {}
   if (!mode || mode === "off") return false;
   const isGroup = String(msg?.key?.remoteJid || "").endsWith("@g.us");
   if (mode === "dm" && isGroup) return false;

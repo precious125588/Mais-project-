@@ -71,8 +71,11 @@ async function renderMemberCard(avatarBuf, label, username, sub) {
 
   // ── the TARGET username beside the circular profile image ─────────────
   const name = _truncate(_sanitize(username) || 'Member', 26);
+  // Auto-fit: long usernames drop to the smaller font so the name always
+  // fits beside the avatar without clipping or overflowing the card.
+  const nameFont = name.length > 14 ? await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE) : fontName;
   base.print(
-    fontName,
+    nameFont,
     TEXT_X, 58 + 40,
     { text: name, alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT },
     TEXT_W, 48,            // clip box — prevents overflow / overlap
