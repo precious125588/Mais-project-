@@ -2161,24 +2161,50 @@ function install(ctx) {
 
         if (!webpBuffers.length) throw new Error('no stickers could be converted');
 
-        // 1. Try NATIVE stickerPackMessage (renders native 4-sticker grid preview, Signed: †sir Demont, View sticker pack button)
+        // 1. Try NATIVE sticker pack message. The protocol needs the exif
+        // sticker-pack-id + publisher + name embedded in every webp so the
+        // client groups them into ONE pack with a "View sticker pack" button.
         let sentNative = false;
         try {
           const coverBuf = webpBuffers[0];
-          const stickerItems = webpBuffers.map((b) => ({ data: b }));
+          const stickerItems = [];
+          for (const b of webpBuffers) {
+            stickerItems.push({ data: await tagSticker(b, packName, 'Signed : †sir Demont') });
+          }
           await sock.sendMessage(chat, {
-            stickerPack: {
+            stickerPackMessage: {
               name: packName,
               publisher: 'Signed : †sir Demont',
+              stickerPackId: 'com.mias.tgpack.' + String(m[1]).toLowerCase(),
+              packDescription: `Telegram pack: ${packName}`,
               cover: coverBuf,
               stickers: stickerItems,
-              description: `Telegram pack: ${packName}`,
             }
           }, { quoted: msg });
           sentNative = true;
-          console.log(`[tgpack] sent native stickerPack with ${webpBuffers.length} stickers`);
+          console.log(`[tgpack] sent native stickerPackMessage with ${stickerItems.length} stickers`);
         } catch (nativeErr) {
-          console.log('[tgpack] native stickerPack delivery failed, falling back to zip document:', nativeErr && nativeErr.message);
+          console.log('[tgpack] native stickerPackMessage failed, trying legacy stickerPack:', nativeErr && nativeErr.message);
+          try {
+            const coverBuf = webpBuffers[0];
+            const stickerItems = [];
+            for (const b of webpBuffers) {
+              stickerItems.push({ data: await tagSticker(b, packName, 'Signed : †sir Demont') });
+            }
+            await sock.sendMessage(chat, {
+              stickerPack: {
+                name: packName,
+                publisher: 'Signed : †sir Demont',
+                cover: coverBuf,
+                stickers: stickerItems,
+                description: `Telegram pack: ${packName}`,
+              }
+            }, { quoted: msg });
+            sentNative = true;
+            console.log(`[tgpack] sent legacy stickerPack with ${stickerItems.length} stickers`);
+          } catch (legacyErr) {
+            console.log('[tgpack] native delivery failed, falling back to zip document:', legacyErr && legacyErr.message);
+          }
         }
 
         // 2. Fallback to ZIP document if native sticker pack fails
