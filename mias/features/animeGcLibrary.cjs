@@ -453,6 +453,8 @@ function statusText() {
     lines.push(`📞 Library number: ${LIBRARY_NUMBER}`);
   }
   lines.push('🎯 TikTok detector: ACTIVE (silent — TikTok links only)');
+  // Creator-page status: log the true configured state so it's never silent.
+  try { const _cp = require('../lib/creatorPageStatus.cjs'); lines.push(..._cp.statusLines()); } catch {}
   return lines.join('\n');
 }
 
