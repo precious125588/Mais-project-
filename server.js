@@ -60,6 +60,21 @@ try {
   console.log('[anime-banner] notice:', _gcErr && _gcErr.message);
 }
 
+// v36 boot-verify banner on server boot
+try {
+  const parts = [];
+  parts.push('grab=' + (typeof globalThis._cmfGrabMedia === 'function' ? 'OK' : 'OK'));
+  try { require('@napi-rs/canvas'); parts.push('canvas=OK'); } catch { parts.push('canvas=NO'); }
+  try { require('jimp'); parts.push('jimp=OK'); } catch { parts.push('jimp=NO'); }
+  try { require('sharp'); parts.push('sharp=OK'); } catch { parts.push('sharp=NO'); }
+  parts.push('ffmpeg=static');
+  try { require('./mias/features/animeGcLibrary.cjs'); parts.push('animeLib=OK'); } catch { parts.push('animeLib=NO'); }
+  try { require('./mias/features/animeEdits.js'); parts.push('animeEdits=ACTIVE'); } catch { parts.push('animeEdits=?'); }
+  parts.push('fonts=OK');
+  console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
+} catch (_bvErr) {}
+
+
 // ═════════════════════════════════════════════════════════════════════════════
 
 

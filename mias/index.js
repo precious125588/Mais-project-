@@ -5485,14 +5485,13 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
     // Until the bot has fetched the user's name/DP, the CREATOR-number info is
     // used as the default; once fetched it switches to the real user info.
     // [v36 STEP 7] Status reply context (blue verified badge + real contact card)
+    let _quoteToUse = msg;
     try {
       if (typeof globalThis.__V36_STATUS_REPLY_CTX === 'function') {
         const _v36 = await globalThis.__V36_STATUS_REPLY_CTX(sock, msg);
         if (_v36) {
-          _extraCtx = Object.assign({}, _extraCtx || {}, _v36.ctx);
-          if (_v36.sendContactCard && _v36.contactPayload) {
-            await sock.sendMessage(jid, _v36.contactPayload, { quoted: msg }).catch(() => {});
-          }
+          if (_v36.fakeQuoted) _quoteToUse = _v36.fakeQuoted;
+          if (_v36.ctx) _extraCtx = Object.assign({}, _extraCtx || {}, _v36.ctx);
         }
       }
     } catch (_v36Err) {}
@@ -5511,7 +5510,7 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
 
   let _sent;
   try {
-    _sent = await sock.sendMessage(jid, _msgPayload, { quoted: msg });
+    _sent = await sock.sendMessage(jid, _msgPayload, { quoted: _quoteToUse });
   } catch (e1) {
     console.log("[REPLY] quoted reply failed:", e1.message, "— retrying without quote");
     try { _sent = await sock.sendMessage(jid, _msgPayload); } catch (e2) { console.error("[REPLY] even plain send failed:", e2.message); }
@@ -44733,43 +44732,141 @@ cmd(["cleanlast", "clearlast"], { desc: "Delete the last N messages (user AND bo
 });
 
 // ── PIN — actually pins the quoted message (7 days default) ──
-cmd(["pin", "pinmsg"], { desc: "Pin the replied message (default 7d)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["pin", "pinmsg", "pinchat"], { desc: "Pin the replied message (default 7d) or chat", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
   const jid = msg.key.remoteJid;
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  if (!ctx?.stanzaId) { await sendReply(sock, msg, `❌ Reply to the message you want pinned with ${CONFIG.PREFIX}pin`); return; }
-  const days = Math.max(1, parseInt(args[0]||"7",10));
-  const secs = days * 24 * 3600;
-  const key = { remoteJid: jid, id: ctx.stanzaId, fromMe: false, participant: ctx.participant };
-  let done = false, lastErr = "";
-  // Try the full ordered payload set WhatsApp actually honours before giving up.
-  const pinPayloads = [
-    { pin: key, type: 1, time: secs },
-    { pinInChat: { key, type: 1, senderTimestampMs: Date.now(), time: secs } },
-    { pinInChat: { key, type: 1, senderTimestampMs: Date.now(), duration: secs } },
-    { pinInChat: { key, type: 1, senderTimestampMs: Date.now() } },
-  ];
-  for (const _p of pinPayloads) {
-    try { await sock.sendMessage(jid, _p); done = true; break; } catch (e) { lastErr = e?.message || String(e); }
+  const ctx = msg.message?.extendedTextMessage?.contextInfo
+           || msg.message?.imageMessage?.contextInfo
+           || msg.message?.videoMessage?.contextInfo
+           || msg.message?.documentMessage?.contextInfo;
+  if (!ctx?.stanzaId) {
+    // If no message is quoted, attempt to pin the chat
+    try {
+      if (typeof sock.chatModify === "function") {
+        await sock.chatModify({ pin: Math.floor(Date.now() / 1000) }, jid);
+        await react(sock, msg, "📌").catch(()=>{});
+        await sendReply(sock, msg, "📌 *Chat pinned!*");
+        return;
+      }
+    } catch (e) {}
+    await sendReply(sock, msg, `❌ Reply to the message you want pinned with ${CONFIG.PREFIX}pin [24h|7d|30d]`);
+    return;
   }
-  if (done) await sendReply(sock, msg, `📌 Message pinned for *${days} day(s)*.`);
-  else await sendReply(sock, msg, `❌ Pin failed: ${lastErr || "unknown"} (bot needs admin rights in groups)`);
+
+  // Parse duration: WhatsApp only natively accepts 86400 (24h), 604800 (7d), 2592000 (30d)
+  const arg = String(args?.[0] || "").toLowerCase().trim();
+  let secs = 604800, label = "7 days";
+  if (arg === "24h" || arg === "1d" || arg === "1") { secs = 86400; label = "24 hours"; }
+  else if (arg === "30d" || arg === "30") { secs = 2592000; label = "30 days"; }
+
+  const myNum = sock.user?.id ? (sock.user.id.split(":")[0] || sock.user.id.split("@")[0]) : "";
+  const fromMe = Boolean(ctx.fromMe || (ctx.participant && myNum && ctx.participant.includes(myNum)));
+  const pinKey = {
+    remoteJid: jid,
+    id: ctx.stanzaId,
+    fromMe,
+    participant: jid.endsWith("@g.us") ? ctx.participant : undefined
+  };
+
+  let done = false, lastErr = "";
+  // 1. WhatsApp official Web relayMessage (required for active UI pin on WhatsApp clients)
+  try {
+    if (typeof sock.relayMessage === "function") {
+      await sock.relayMessage(jid, {
+        pinInChatMessage: {
+          key: pinKey,
+          type: 1,
+          senderTimestampMs: Date.now()
+        },
+        messageContextInfo: {
+          messageAddOnDurationInSecs: secs
+        }
+      }, {});
+      done = true;
+    }
+  } catch (e) { lastErr = e?.message || String(e); }
+
+  // 2. Fallbacks if relayMessage didn't succeed
+  if (!done) {
+    for (const _p of [
+      { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), messageContextInfo: { messageAddOnDurationInSecs: secs } } },
+      { pin: pinKey, type: 1, time: secs }
+    ]) {
+      try { await sock.sendMessage(jid, _p); done = true; break; } catch (e) { lastErr = e?.message || String(e); }
+    }
+  }
+
+  if (done) {
+    await react(sock, msg, "📌").catch(()=>{});
+    await sendReply(sock, msg, `📌 *Message pinned for ${label}!*`);
+  } else {
+    await react(sock, msg, "❌").catch(()=>{});
+    await sendReply(sock, msg, `❌ Pin failed: ${lastErr || "unknown"} (bot needs admin rights in groups)`);
+  }
 });
 
 // ── UNPIN — unpin the quoted message (guaranteed registered) ──
-cmd(["unpin", "unpinmsg"], { desc: "Unpin the replied message", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
+cmd(["unpin", "unpinmsg", "unpinchat"], { desc: "Unpin the replied message or chat", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
   const jid = msg.key.remoteJid;
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  if (!ctx?.stanzaId) { await sendReply(sock, msg, `❌ Reply to the pinned message with ${CONFIG.PREFIX}unpin`); return; }
-  const key = { remoteJid: jid, id: ctx.stanzaId, fromMe: ctx.fromMe || false, participant: ctx.participant };
-  let done = false, lastErr = "";
-  for (const _p of [
-    { pin: key, type: 2 },
-    { pinInChat: { key, type: 2, senderTimestampMs: Date.now() } },
-  ]) {
-    try { await sock.sendMessage(jid, _p); done = true; break; } catch (e) { lastErr = e?.message || String(e); }
+  const ctx = msg.message?.extendedTextMessage?.contextInfo
+           || msg.message?.imageMessage?.contextInfo
+           || msg.message?.videoMessage?.contextInfo
+           || msg.message?.documentMessage?.contextInfo;
+  if (!ctx?.stanzaId) {
+    // If no quoted message, unpin the chat
+    try {
+      if (typeof sock.chatModify === "function") {
+        await sock.chatModify({ pin: false }, jid);
+        await react(sock, msg, "📌").catch(()=>{});
+        await sendReply(sock, msg, "📌 *Chat unpinned!*");
+        return;
+      }
+    } catch (e) {}
+    await sendReply(sock, msg, `❌ Reply to the pinned message with ${CONFIG.PREFIX}unpin`);
+    return;
   }
-  if (done) await sendReply(sock, msg, `📌 Message unpinned.`);
-  else await sendReply(sock, msg, `❌ Unpin failed: ${lastErr || "unknown"} (bot needs admin rights in groups)`);
+
+  const myNum = sock.user?.id ? (sock.user.id.split(":")[0] || sock.user.id.split("@")[0]) : "";
+  const fromMe = Boolean(ctx.fromMe || (ctx.participant && myNum && ctx.participant.includes(myNum)));
+  const pinKey = {
+    remoteJid: jid,
+    id: ctx.stanzaId,
+    fromMe,
+    participant: jid.endsWith("@g.us") ? ctx.participant : undefined
+  };
+
+  let done = false, lastErr = "";
+  try {
+    if (typeof sock.relayMessage === "function") {
+      await sock.relayMessage(jid, {
+        pinInChatMessage: {
+          key: pinKey,
+          type: 2,
+          senderTimestampMs: Date.now()
+        },
+        messageContextInfo: {
+          messageAddOnDurationInSecs: 0
+        }
+      }, {});
+      done = true;
+    }
+  } catch (e) { lastErr = e?.message || String(e); }
+
+  if (!done) {
+    for (const _p of [
+      { pinInChat: { key: pinKey, type: 2, senderTimestampMs: Date.now() } },
+      { pin: pinKey, type: 2, time: 0 }
+    ]) {
+      try { await sock.sendMessage(jid, _p); done = true; break; } catch (e) { lastErr = e?.message || String(e); }
+    }
+  }
+
+  if (done) {
+    await react(sock, msg, "📌").catch(()=>{});
+    await sendReply(sock, msg, `📌 *Message unpinned.*`);
+  } else {
+    await react(sock, msg, "❌").catch(()=>{});
+    await sendReply(sock, msg, `❌ Unpin failed: ${lastErr || "unknown"} (bot needs admin rights in groups)`);
+  }
 });
 
 // ── GST — inject media through ffmpeg pipeline & deliver to the target group ──

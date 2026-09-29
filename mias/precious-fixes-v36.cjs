@@ -161,36 +161,30 @@ module.exports = function installV36(ctx) {
   // ── 5. STATUS/CONTACT REPLY — real blue verified badge + real vCard ──────
   //     mediaType:1 + showAdAttribution:true is the blue-tick trigger.
   globalThis.__V36_STATUS_REPLY_CTX = async function (sock, msg) {
-    const owS = (typeof getSettings === 'function' ? getSettings(getOwnerJid()) : null) || {};
+    const owS = (typeof getSettings === "function" ? getSettings(getOwnerJid()) : null) || {};
     if (!owS.statusReply && !owS.contactReply) return null;
-    const ownerNum = String(CONFIG.OWNER_NUMBER || '').replace(/\D/g, '');
-    const ownerName = String(CONFIG.BOT_NAME || 'Meta AI');
-    let thumb = null;
-    try { const bp = await getBotPic().catch(() => null); if (bp && bp.length > 500) thumb = bp; } catch {}
-    const ctx = {
-      forwardingScore: 999, isForwarded: true,
-      externalAdReply: {
-        title: ownerName,
-        body: 'Meta AI · Status',
-        mediaType: 1,
-        showAdAttribution: true,
-        renderLargerThumbnail: false,
-        sourceType: 'MESSAGE_STATUS',
-        sourceUrl: 'https://wa.me/' + ownerNum,
-        sourceId: 'meta-ai-verified'
+    const ownerNum = String(CONFIG.OWNER_NUMBER || "").replace(/\D/g, "");
+    const contactName = String(CONFIG.OWNER_NAME || "QADEER XTECH");
+
+    // Exact replica of verified status quote (as in Screenshot_20260928-202949.jpg):
+    // Quoting status@broadcast with participant 13135550002@s.whatsapp.net (official Meta AI)
+    // with a contactMessage gives the blue verified badge + "Meta AI · Status" + "Contact: © <Name>"
+    const fakeQuoted = {
+      key: {
+        remoteJid: "status@broadcast",
+        fromMe: false,
+        id: "META_AI_VERIFIED_" + Date.now(),
+        participant: "13135550002@s.whatsapp.net"
+      },
+      message: {
+        contactMessage: {
+          displayName: "© " + contactName,
+          vcard: `BEGIN:VCARD\nVERSION:3.0\nN:;${contactName};;;\nFN:© ${contactName}\nitem1.TEL;waid=${ownerNum}:+${ownerNum}\nitem1.X-ABLabel:Mobile\nEND:VCARD`
+        }
       }
     };
-    if (thumb) ctx.externalAdReply.thumbnail = thumb;
-    const contactPayload = {
-      contacts: {
-        displayName: ownerName,
-        contacts: [{
-          displayName: ownerName,
-          vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:${ownerName}\nORG:MIAX MDX;\nTEL;type=CELL;waid=${ownerNum}:+${ownerNum}\nEND:VCARD`
-        }]
-      }
-    };
-    return { ctx, sendContactCard: !!owS.contactReply, contactPayload };
+
+    return { fakeQuoted };
   };
 
   // ── 6. CREATEGC — bot DP + MIAX description + full-details reply ─────────
@@ -254,5 +248,5 @@ module.exports = function installV36(ctx) {
     '/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf'
   ];
   parts.push('fonts=' + (fontFiles.some(f => { try { return fs.existsSync(f); } catch { return false; } }) ? 'OK' : 'JIMP-FALLBACK'));
-  console.log('MIAX MDX creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
+  console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
 };
