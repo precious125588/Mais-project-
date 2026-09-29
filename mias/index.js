@@ -9007,7 +9007,10 @@ cmd(["setting", "settings", "config"], { desc: "Open bot settings", category: "S
   ];
 
   let nativeSuccess = false;
-  try {
+  // [FIX] Owner request: the native interactive-list settings panel (added in
+  // 2574cc8) is disabled — always use the classic boxed settings UI (the one
+  // with the < Category > sections + Open Categories / Open settings buttons).
+  if (false) try {
     const { sendList } = await import("./handlers/interactiveHandler.js");
     await sendList(sock, jid, `⚙️ *${CONFIG.BOT_NAME} Settings*
 Select a setting from the interactive menu below to toggle:`, settingsSections, {
@@ -22457,8 +22460,21 @@ Your profile picture becomes the group icon — change it with *.setgcpic*.`);
   try {
     const created = await sock.groupCreate(subject, participants);
 
+    let _descSet = !desc;
     if (desc) {
-      try { await sock.groupUpdateDescription(created.id, desc); } catch {}
+      // [FIX] groupUpdateDescription fired in the same tick as groupCreate is
+      // silently dropped — the group is not fully provisioned yet. Wait for
+      // WhatsApp to finish creating it, then retry up to 3 times.
+      for (let _da = 0; _da < 3 && !_descSet; _da++) {
+        try {
+          await new Promise(r => setTimeout(r, 2000 + _da * 2000));
+          await sock.groupUpdateDescription(created.id, desc);
+          _descSet = true;
+        } catch (_dErr) { /* retry */ }
+      }
+      if (!_descSet) {
+        try { await sendReply(sock, msg, `⚠️ Group created, but WhatsApp refused the description. Re-apply it from inside the new group.`); } catch {}
+      }
     }
 
     const inviteCode = await sock.groupInviteCode(created.id).catch(() => "");
@@ -33981,9 +33997,9 @@ const variants = realLastMsgs
       // before falling back to the legacy pinInChat envelope. Same reply text.
       let _pinnedR = false, _pinErrR = null;
       for (const _p of [
+        { pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now(), time: duration } },
         { pin: pinKey, type: 1, time: duration },
-        { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), time: duration } },
-        { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), duration } },
+        { pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now() } },
         { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now() } },
       ]) {
         try { await sock.sendMessage(jid, _p); _pinnedR = true; break; } catch (e) { _pinErrR = e; }
@@ -34024,10 +34040,9 @@ const variants = realLastMsgs
       // PRECIOUS v28 FIX: same payload reorder for the send+pin path.
       let _pinnedS = false, _pinErrS = null;
       for (const _p of [
+        { pinInChatMessage: { key: sentMsg.key, type: 1, senderTimestampMs: Date.now(), time: duration } },
         { pin: sentMsg.key, type: 1, time: duration },
-        { pinInChat: { key: sentMsg.key, type: 1, senderTimestampMs: Date.now(), time: duration } },
-        { pinInChat: { key: sentMsg.key, type: 1, senderTimestampMs: Date.now(), duration } },
-        { pinInChat: { key: sentMsg.key, type: 1, senderTimestampMs: Date.now() } },
+        { pinInChatMessage: { key: sentMsg.key, type: 1, senderTimestampMs: Date.now() } },
       ]) {
         try { await sock.sendMessage(jid, _p); _pinnedS = true; break; } catch (e) { _pinErrS = e; }
       }
@@ -34069,10 +34084,17 @@ const variants = realLastMsgs
       id:          ctx.stanzaId,
       participant: ctx.participant || undefined,
     };
+    // [FIX] WhatsApp silently ignores a pin whose key.fromMe does not match the
+    // original message. Derive it from the quoted sender vs the bot account.
+    try {
+      const _botNum = String(sock?.user?.id || "").split(":")[0].split("@")[0].replace(/\D/g, "");
+      const _qNum   = String(ctx.participant || "").split(":")[0].split("@")[0].replace(/\D/g, "");
+      if (_botNum && _qNum) pinKey.fromMe = (_qNum === _botNum || _qNum.endsWith(_botNum) || _botNum.endsWith(_qNum));
+    } catch {}
     await react(sock, msg, "⏳");
     try {
       await sock.sendMessage(jid, {
-        pinInChat: { key: pinKey, type: 2, senderTimestampMs: Date.now() }
+        pinInChatMessage: { key: pinKey, type: 2, senderTimestampMs: Date.now() }
       });
       await react(sock, msg, "✅");
       await sendReply(sock, msg, "📌 *Message unpinned!*");
@@ -34856,13 +34878,32 @@ const __miasGst = async (sock, msg, args) => {
         }
         if (!buf.length) return reply("❌ Downloaded 0 bytes — media may be expired.");
 
+        // [FIX] Group-status audio: WhatsApp only renders VOICE-NOTE style audio
+        // (ogg/opus ptt) on the status ring. A plain mp3/aac post shows
+        // "You shared a status but your version of WhatsApp doesn't support it."
+        // Convert any audio to ogg/opus before upload.
+        if (qInner.kind === "audio" && !/ogg|opus/.test(String(_rawMedia.mimetype || ""))) {
+          try {
+            const _ffBin = (() => { try { return require("ffmpeg-static"); } catch { return null; } })() || "ffmpeg";
+            const { execFileSync: _execFF } = require("child_process");
+            const _tinA  = path.join(__dirname, "..", "database", `gst_in_${Date.now()}.bin`);
+            const _toutA = _tinA.replace(/\.bin$/, ".ogg");
+            fs.writeFileSync(_tinA, buf);
+            _execFF(_ffBin, ["-y", "-i", _tinA, "-vn", "-c:a", "libopus", "-b:a", "64k", _toutA], { stdio: "ignore", timeout: 90000 });
+            const _convA = fs.readFileSync(_toutA);
+            try { fs.unlinkSync(_tinA); } catch {}
+            try { fs.unlinkSync(_toutA); } catch {}
+            if (_convA.length > 100) { buf = _convA; _rawMedia.mimetype = "audio/ogg; codecs=opus"; }
+          } catch (_cvErr) { _v10log(".gst opus convert failed:", _cvErr?.message); }
+        }
+
         // Step 2 — re-upload via generateWAMessageContent so WA gets a fresh URL
         // that is valid for every group member (not just the original sender).
         const _mime = _rawMedia.mimetype || "";
         const _uploadInput =
           qInner.kind === "image"    ? { image:    buf, caption: text || (_rawMedia.caption || "") } :
           qInner.kind === "video"    ? { video:    buf, caption: text || (_rawMedia.caption || ""), mimetype: _mime || "video/mp4" } :
-          qInner.kind === "audio"    ? { audio:    buf, mimetype: /ogg|opus/.test(_mime) ? "audio/ogg; codecs=opus" : "audio/mpeg", ptt: false } :
+          qInner.kind === "audio"    ? { audio:    buf, mimetype: /ogg|opus/.test(_mime) ? "audio/ogg; codecs=opus" : "audio/mpeg", ptt: /ogg|opus/.test(_mime) } :
           qInner.kind === "sticker"  ? { sticker:  buf } :
           { document: buf, fileName: _rawMedia.fileName || "file", mimetype: _mime || "application/octet-stream", caption: text || "" };
 
