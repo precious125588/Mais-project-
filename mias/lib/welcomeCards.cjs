@@ -1,29 +1,29 @@
 // =========================================================================
-//  welcomeCards.cjs — Jimp-based welcome/goodbye image cards with the
-//  TARGET MEMBER'S USERNAME rendered INSIDE the image beside the avatar.
+//  welcomeCards.cjs — v35 UNICODE-SAFE welcome/goodbye image cards.
 //
-//  Root-cause context: the repo's passport card
-//  (mias/index.js globalThis._passportCard) already lays out a circular
-//  avatar on the left and title/subtitle text on the right — but the
-//  welcome/goodbye event handler called it WITHOUT passing the member's
-//  name, so the area beside the avatar stayed empty. This module is the
-//  renderer the event handler now calls with the resolved target name.
+//  ROOT CAUSE OF THE "???" BUG: the old renderer used Jimp's built-in
+//  bitmap fonts, which contain ONLY basic Latin glyphs. Any styled Unicode
+//  name (ᴍɪɴɪ, 𝑸𝒂𝒅𝒆𝒆𝒓), emoji (🔥☠️), Arabic, CJK, etc. was drawn as
+//  question marks / blank boxes.
 //
-//  Rendering safety:
-//   • Unicode / emoji / long names are wrapped and hard-clipped to the
-//     text box (x = avatar-right, width = card-minus-avatar) so nothing
-//     overflows the card or overlaps the avatar.
-//   • Jimp's print() with a max width + height clips glyphs to the box.
-//   • No username is ever hardcoded; a safe fallback chain is applied.
+//  FIX: render with @napi-rs/canvas (already in package.json) using the
+//  system Noto/DejaVu font stack, which covers styled Unicode, emoji,
+//  Arabic, CJK and every other script. If a glyph truly has no font, the
+//  codepoint is KEPT (never replaced with "?"). Jimp remains only as a
+//  last-resort fallback when the canvas engine is unavailable.
+//
+//  The TARGET member's username + their DP are rendered beside the round
+//  avatar. When the bot has not fetched the member's name/DP yet, the
+//  caller passes the creator-number fallback — this module NEVER hardcodes
+//  a name.
 // =========================================================================
 'use strict';
 
-const Jimp = require('jimp');
-
 const W = 640, H = 300, PAD = 18;
-const AV = 150;               // avatar diameter
-const AV_X = PAD + 17;        // avatar left
-const TEXT_X = AV_X + AV + 24; // text starts right of the avatar + gutter
+const AV = 150;                 // avatar diameter
+const AV_X = PAD + 17;          // avatar left
+const AV_Y = 58 + 27;           // avatar top
+const TEXT_X = AV_X + AV + 24;  // text starts right of the avatar + gutter
 const TEXT_W = W - TEXT_X - PAD; // clip width so text never leaves the card
 
 // ── safe text helpers ────────────────────────────────────────────────────
@@ -31,30 +31,116 @@ function _truncate(str, max) {
   const s = String(str || '');
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
-// strip characters that break layout (control chars, zero-width joiners ok)
+// strip control chars ONLY — every real character (styled letters, emoji,
+// Arabic, CJK, ZWJ sequences) is preserved so it can never become "?"
 function _sanitize(str) {
   return String(str || '')
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')   // control chars
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-/**
- * Render a welcome/goodbye card.
- * @param {Buffer|null} avatarBuf  member profile image (fallback used if null)
- * @param {string} label           "WELCOME" | "GOODBYE" (top bar)
- * @param {string} username        the TARGET member's display name/username
- * @param {string} sub             extra line (group / member count)
- * @returns {Promise<Buffer>}      JPEG image buffer
- */
-async function renderMemberCard(avatarBuf, label, username, sub) {
+// ── @napi-rs/canvas engine + Unicode font registration ──────────────────
+let _napi = null, _napiTried = false;
+function napi() {
+  if (_napiTried) return _napi;
+  _napiTried = true;
+  try {
+    _napi = require('@napi-rs/canvas');
+    const fs = require('fs');
+    const { GlobalFonts } = _napi;
+    const candidates = [
+      '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+      '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
+      '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+      '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+      '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+      '/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf',
+      '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+      '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+      '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    ];
+    for (const p of candidates) {
+      try { if (fs.existsSync(p)) GlobalFonts.registerFromPath(p); } catch {}
+    }
+  } catch { _napi = null; }
+  return _napi;
+}
+const FAMILY = '"Noto Sans","Noto Sans CJK SC","Noto Color Emoji","Noto Emoji","DejaVu Sans","Liberation Sans",sans-serif';
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+function wrapText(c, text, x, y, maxW, lh, maxLines) {
+  const words = String(text).split(' ');
+  let line = '', yy = y, lines = 0;
+  for (const w of words) {
+    const t = line ? line + ' ' + w : w;
+    if (c.measureText(t).width > maxW && line) {
+      c.fillText(line, x, yy); yy += lh; line = w;
+      if (++lines >= maxLines - 1) break;
+    } else line = t;
+  }
+  if (line && lines < maxLines) c.fillText(line, x, yy);
+}
+
+// ── canvas renderer (PRIMARY — full Unicode / emoji / styled names) ─────
+async function renderCanvas(avatarBuf, label, username, sub) {
+  const { createCanvas, loadImage } = napi();
+  const cv = createCanvas(W, H);
+  const c = cv.getContext('2d');
+
+  c.fillStyle = '#171a21'; c.fillRect(0, 0, W, H);
+  c.fillStyle = label === 'GOODBYE' ? '#b03a48' : '#2f80ed'; c.fillRect(0, 0, W, 58);
+  c.fillStyle = '#232936'; roundRect(c, PAD, 66, W - PAD * 2, H - 66 - PAD - 2, 12); c.fill();
+
+  // avatar ring + circular-clipped DP (neutral disc fallback)
+  c.save(); c.beginPath(); c.arc(AV_X + AV / 2, AV_Y + AV / 2, AV / 2 + 5, 0, Math.PI * 2); c.fillStyle = '#2f80ed'; c.fill(); c.restore();
+  c.save();
+  c.beginPath(); c.arc(AV_X + AV / 2, AV_Y + AV / 2, AV / 2, 0, Math.PI * 2); c.closePath(); c.clip();
+  let drew = false;
+  if (avatarBuf) { try { const img = await loadImage(avatarBuf); c.drawImage(img, AV_X, AV_Y, AV, AV); drew = true; } catch {} }
+  if (!drew) {
+    c.fillStyle = '#4b5563'; c.fillRect(AV_X, AV_Y, AV, AV);
+    c.fillStyle = '#9ca3af'; c.font = 'bold 64px ' + FAMILY; c.textAlign = 'center';
+    c.fillText('👤', AV_X + AV / 2, AV_Y + AV / 2 + 22); c.textAlign = 'left';
+  }
+  c.restore();
+
+  // top label bar
+  c.fillStyle = '#ffffff'; c.textBaseline = 'alphabetic';
+  c.font = 'bold 24px ' + FAMILY;
+  c.fillText(_truncate(String(label || ''), 24), 18, 38);
+
+  // ── TARGET username beside the avatar — auto-shrink so ANY name fits ──
+  const name = _truncate(_sanitize(username) || 'Member', 40);
+  let size = 30;
+  c.font = `bold ${size}px ${FAMILY}`;
+  while (size > 13 && c.measureText(name).width > TEXT_W) { size -= 2; c.font = `bold ${size}px ${FAMILY}`; }
+  c.fillStyle = '#ffffff';
+  c.fillText(name, TEXT_X, 58 + 70);
+
+  if (sub) {
+    c.font = '16px ' + FAMILY; c.fillStyle = '#c8ccd4';
+    wrapText(c, _sanitize(sub), TEXT_X, 58 + 104, TEXT_W, 20, 3);
+  }
+  return cv.encode('jpeg', 88);
+}
+
+// ── Jimp fallback (LAST RESORT only, when the canvas engine is missing) ──
+async function renderJimp(avatarBuf, label, username, sub) {
+  const Jimp = require('jimp');
   const base = new Jimp(W, H, 0x171a21ff);
   const bar = new Jimp(W, 58, label === 'GOODBYE' ? 0xb03a48ff : 0x2f80edff);
   base.composite(bar, 0, 0);
   const inner = new Jimp(W - PAD * 2, H - 58 - PAD - 10, 0x232936ff);
   base.composite(inner, PAD, 58 + 8);
-
-  // avatar (fallback to a neutral disc when the DP can't be fetched)
   let avatar;
   try { avatar = avatarBuf ? await Jimp.read(avatarBuf) : new Jimp(AV, AV, 0x4b5563ff); }
   catch { avatar = new Jimp(AV, AV, 0x4b5563ff); }
@@ -62,33 +148,33 @@ async function renderMemberCard(avatarBuf, label, username, sub) {
   const ring = new Jimp(AV + 10, AV + 10, 0x2f80edff).circle();
   base.composite(ring, AV_X - 5, 58 + 22 - 5);
   base.composite(avatar, AV_X, 58 + 22);
-
-  const fontBar  = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  const fontBar = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
   const fontName = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-  const fontSub  = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
-
+  const fontSub = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
   base.print(fontBar, 18, 18, { text: String(label || ''), alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT }, W - 36, 30);
-
-  // ── the TARGET username beside the circular profile image ─────────────
   const name = _truncate(_sanitize(username) || 'Member', 26);
-  // Auto-fit: long usernames drop to the smaller font so the name always
-  // fits beside the avatar without clipping or overflowing the card.
-  const nameFont = name.length > 14 ? await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE) : fontName;
-  base.print(
-    nameFont,
-    TEXT_X, 58 + 40,
-    { text: name, alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT },
-    TEXT_W, 48,            // clip box — prevents overflow / overlap
-  );
-  if (sub) {
-    base.print(
-      fontSub,
-      TEXT_X, 58 + 96,
-      { text: _truncate(_sanitize(sub), 60), alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT },
-      TEXT_W, 90,
-    );
-  }
+  const nameFont = name.length > 14 ? fontSub : fontName;
+  base.print(nameFont, TEXT_X, 58 + 40, { text: name, alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT }, TEXT_W, 48);
+  if (sub) base.print(fontSub, TEXT_X, 58 + 96, { text: _truncate(_sanitize(sub), 60), alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT }, TEXT_W, 90);
   return base.quality(88).getBufferAsync(Jimp.MIME_JPEG);
+}
+
+/**
+ * Render a welcome/goodbye card with the member's REAL name (any Unicode,
+ * styled font, emoji, Arabic, CJK — never question marks).
+ * @param {Buffer|null} avatarBuf  member profile image (fallback disc if null)
+ * @param {string} label           "WELCOME" | "GOODBYE"
+ * @param {string} username        TARGET member's display name (caller falls
+ *                                 back to creator number when not fetched yet)
+ * @param {string} sub             extra line (group / member count)
+ * @returns {Promise<Buffer>}      JPEG image buffer
+ */
+async function renderMemberCard(avatarBuf, label, username, sub) {
+  if (napi()) {
+    try { return await renderCanvas(avatarBuf, label, username, sub); }
+    catch (e) { try { console.error('[welcomeCards] canvas render failed, falling back:', e?.message || e); } catch {} }
+  }
+  return renderJimp(avatarBuf, label, username, sub);
 }
 
 module.exports = { renderMemberCard };

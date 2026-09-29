@@ -273,8 +273,8 @@ async function resolveRouteJid(s, route, participatingIds) {
   // synced yet, so a single immediate attempt fails spuriously and every
   // route prints "group unavailable". 3 attempts with a gap ride out sync.
   let lastErr = '';
-  for (let attempt = 0; attempt < 3 && !jid; attempt++) {
-    if (attempt) await new Promise(r => setTimeout(r, 3000));
+  for (let attempt = 0; attempt < 6 && !jid; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 5000));
     try {
       if (typeof s.groupGetInviteInfo === 'function') {
         const info = await s.groupGetInviteInfo(code);
@@ -479,6 +479,25 @@ function attach(sock, opts) {
       if (!_notifyJid) _notifyJid = LIBRARY_DIGITS + '@s.whatsapp.net';
       printConnectedBanner();
       refresh(sock).then(() => printRouteHealth()).catch(() => {});
+      // v35 SELF-HEAL — the library number (+2348152433778) creates/owns the
+      // anime groups and is always inside them as admin, but right after a
+      // pair/reconnect WhatsApp hasn't synced group metadata yet, so the first
+      // refresh marked every route "couldn't configure group" and it never
+      // recovered until a manual restart. We now re-run refresh every 60s
+      // until ALL routes resolve, then stop. It never blocks the socket and
+      // a failing pass is silent (fail-closed, like every other path here).
+      if (!globalThis.__animeGcHealer) {
+        globalThis.__animeGcHealer = setInterval(() => {
+          try {
+            const g = loadGroups();
+            const allOk = ROUTES.every(r => g.routes[r.key] && g.routes[r.key].available && g.routes[r.key].jid);
+            if (allOk) { clearInterval(globalThis.__animeGcHealer); globalThis.__animeGcHealer = null; return; }
+            const s = _librarySock || sock;
+            if (s) refresh(s).then(() => printRouteHealth()).catch(() => {});
+          } catch {}
+        }, 60000);
+        if (typeof globalThis.__animeGcHealer.unref === 'function') { try { globalThis.__animeGcHealer.unref(); } catch {} }
+      }
     }
     return true;
   } catch { return false; }

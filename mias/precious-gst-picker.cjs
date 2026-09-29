@@ -94,7 +94,30 @@ module.exports = {
           if (payload.kind === 'text') inner = await g({ text: payload.text || '' }, genOpts);
           else if (payload.kind === 'image') inner = await g({ image: payload.buf, caption: payload.caption || '' }, genOpts);
           else if (payload.kind === 'video') inner = await g({ video: payload.buf, caption: payload.caption || '', mimetype: 'video/mp4' }, genOpts);
-          else if (payload.kind === 'audio') inner = await g({ audio: payload.buf, mimetype: 'audio/ogg; codecs=opus', ptt: false }, genOpts);
+          else if (payload.kind === 'audio') {
+            // v35 FIX — "outdated WhatsApp" error on audio statuses:
+            // the old code sent the RAW audio bytes (mp3/m4a/webm from the
+            // phone) while CLAIMING 'audio/ogg; codecs=opus'. Every client
+            // that could not decode the mislabelled envelope showed the
+            // "seems you're using an outdated WhatsApp" placeholder. We now
+            // TRANSCODE to genuine ogg/opus (ffmpeg) before building the
+            // groupStatusMessageV2 envelope, so the bytes match the mimetype.
+            let _aBuf = payload.buf;
+            try {
+              const { execFile } = require('child_process');
+              let _ff = 'ffmpeg';
+              try { const _p = require('ffmpeg-static'); if (_p && typeof _p === 'string') _ff = _p; } catch {}
+              const _os = require('os'), _path = require('path'), _fs = require('fs');
+              const _in = _path.join(_os.tmpdir(), 'gst_' + Date.now() + '.bin');
+              const _out = _path.join(_os.tmpdir(), 'gst_' + Date.now() + '.ogg');
+              _fs.writeFileSync(_in, payload.buf);
+              await new Promise((res) => execFile(_ff, ['-y', '-i', _in, '-vn', '-ac', '1', '-ar', '48000', '-c:a', 'libopus', '-b:a', '96k', _out], { timeout: 120000 }, () => res()));
+              if (_fs.existsSync(_out) && _fs.statSync(_out).size > 100) _aBuf = _fs.readFileSync(_out);
+              try { _fs.unlinkSync(_in); } catch {}
+              try { _fs.unlinkSync(_out); } catch {}
+            } catch {}
+            inner = await g({ audio: _aBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, genOpts);
+          }
           else if (payload.kind === 'sticker') inner = await g({ sticker: payload.buf }, genOpts);
         } catch (e) {
           return { ok: false, error: 'media upload failed: ' + ((e && e.message) || e) };

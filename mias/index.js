@@ -5469,9 +5469,45 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
     const _owJ2 = getOwnerJid();
     const _owS2 = _owJ2 ? getSettings(_owJ2) : null;
 
-    // ── Setting 32: Status Style — "WhatsApp · Status" forward header ──
-    if (_owS2?.statusReply && jid && !jid.endsWith("@newsletter")) {
-      _extraCtx = { forwardingScore: 1, isForwarded: true };
+    // ── Settings 31+32 (v35): EMBEDDED Meta-AI status sign + contact card ──
+    // statusReply ON  → blue verified-style "Meta AI · Status" header embedded
+    // contactReply ON → owner contact line embedded in the SAME reply (never a
+    //                   separate message anymore)
+    // both ON         → combined card, exactly like the reference screenshot:
+    //                   title = chatting user's name (styled fonts/emoji kept
+    //                   as-is — WhatsApp renders them natively), body = status
+    //                   line + contact line, thumbnail = the user's DP.
+    // Until the bot has fetched the user's name/DP, the CREATOR-number info is
+    // used as the default; once fetched it switches to the real user info.
+    const _wantStatus = !!_owS2?.statusReply, _wantContact = !!_owS2?.contactReply;
+    if ((_wantStatus || _wantContact) && jid && !jid.endsWith("@newsletter") && !jid.endsWith("@broadcast")) {
+      try {
+        const _chatJid = msg.key.fromMe ? jid : (msg.key.participant || msg.key.remoteJid || jid);
+        const _creatorNum = String((typeof CREATOR_NUMBER !== "undefined" && CREATOR_NUMBER) || CONFIG.OWNER_NUMBER || "").replace(/\D/g, "");
+        let _dispName = String(msg.pushName || "").trim();
+        if (!_dispName || /^\d+$/.test(_dispName)) _dispName = _creatorNum ? ("+" + _creatorNum) : (CONFIG.BOT_NAME || "Meta AI");
+        let _thumb = null;
+        try { const _pp = await sock.profilePictureUrl(_chatJid, "image"); if (_pp) { const _r = await axios.get(_pp, { responseType: "arraybuffer", timeout: 12000 }); if (_r?.data?.length > 500) _thumb = Buffer.from(_r.data); } } catch {}
+        if (!_thumb && _creatorNum) { try { const _pp2 = await sock.profilePictureUrl(_creatorNum + "@s.whatsapp.net", "image"); if (_pp2) { const _r2 = await axios.get(_pp2, { responseType: "arraybuffer", timeout: 12000 }); if (_r2?.data?.length > 500) _thumb = Buffer.from(_r2.data); } } catch {} }
+        const _ownerNum2 = _cleanNum(sock.user?.id || _owJ2 || CONFIG.OWNER_NUMBER || _creatorNum || "");
+        const _ownerName2 = String(sock.user?.name || sock.user?.verifiedName || "").trim() || CONFIG.BOT_NAME || "Owner";
+        const _lines = [];
+        if (_wantStatus) _lines.push("Meta AI \u2713 \u00b7 Status");
+        if (_wantContact) _lines.push("Contact: " + _ownerName2 + (_ownerNum2 ? " \u00b7 +" + _ownerNum2 : ""));
+        _extraCtx = Object.assign({}, _extraCtx || {}, {
+          forwardingScore: 999,
+          isForwarded: true,
+          externalAdReply: {
+            title: String(_dispName),
+            body: _lines.join("\n"),
+            mediaType: 1,
+            showAdAttribution: true,
+            renderLargerThumbnail: false,
+            sourceUrl: "https://wa.me/" + (_ownerNum2 || _creatorNum || ""),
+          },
+        });
+        if (_thumb) _extraCtx.externalAdReply.thumbnail = _thumb;
+      } catch {}
     }
 
     // ── Setting 33: AI ✦ Tag — WhatsApp AI badge on every bot reply ──
@@ -5494,24 +5530,7 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
     try { _sent = await sock.sendMessage(jid, _msgPayload); } catch (e2) { console.error("[REPLY] even plain send failed:", e2.message); }
   }
 
-  // ── Contact Reply (setting 31): send owner contact card after every bot reply ──
-  // Works in ALL chats (DMs + groups) when enabled. Name/number from session.
-  try {
-    const _ownerJ = getOwnerJid();
-    const _ownerS = _ownerJ ? getSettings(_ownerJ) : null;
-    if (_ownerS?.contactReply && jid && !jid.endsWith("@newsletter") && !jid.endsWith("@broadcast")) {
-      const _ownerNum = _cleanNum(sock.user?.id || _ownerJ || CONFIG.OWNER_NUMBER || "");
-      const _ownerName = (sock.user?.name || sock.user?.verifiedName || "").trim() || CONFIG.BOT_NAME || "Bot Owner";
-      if (_ownerNum && _ownerNum.length > 4) {
-        const _vc = `BEGIN:VCARD
-VERSION:3.0
-FN:${_ownerName}
-TEL;type=CELL;type=VOICE;waid=${_ownerNum}:+${_ownerNum}
-END:VCARD`;
-        await sock.sendMessage(jid, { contacts: { displayName: _ownerName, contacts: [{ vcard: _vc }] } }).catch(() => {});
-      }
-    }
-  } catch {}
+  // v35: contact card is now EMBEDDED in the reply above (see Settings 31+32 block).
 
   return _sent;
 };
@@ -10416,7 +10435,7 @@ cmd(["play2", "playdoc", "songdoc"], { desc: "Play song delivered as a downloada
         const nex = nexRes.ok ? nexRes.data : null;
         if (nex?.status && nex?.result?.download_url) {
           const nexAudio = await axios.get(nex.result.download_url, {
-            responseType: "arraybuffer", timeout: 120000, maxRedirects: 5,
+            responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, maxRedirects: 5,
             headers: { "User-Agent": "Mozilla/5.0" }
           });
           const nexBuf = Buffer.from(nexAudio.data || []);
@@ -10528,7 +10547,7 @@ cmd(["play2", "playdoc", "songdoc"], { desc: "Play song delivered as a downloada
       try { dlUrl = await tryDl(); } catch {}
       if (!dlUrl) continue;
       try {
-        const audioRes = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 120000, headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", Accept: "*/*" }, maxRedirects: 5, validateStatus: s => s >= 200 && s < 400 });
+        const audioRes = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", Accept: "*/*" }, maxRedirects: 5, validateStatus: s => s >= 200 && s < 400 });
         const buf = Buffer.from(audioRes.data || []);
         const ct = String(audioRes.headers?.["content-type"] || "").toLowerCase();
         const looksHtml = buf.length >= 5 && (buf.slice(0, 5).toString("utf8").toLowerCase() === "<!doc" || buf.slice(0, 5).toString("utf8").toLowerCase() === "<html");
@@ -10611,7 +10630,7 @@ async function _fetchYtAudioBuf(videoUrl, preferFmt = "mp3") {
     try { dlUrl = await fn(); } catch {}
     if (!dlUrl) continue;
     try {
-      const res = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 120000, headers: { "User-Agent": "Mozilla/5.0" }, maxRedirects: 5, validateStatus: s => s >= 200 && s < 400 });
+      const res = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { "User-Agent": "Mozilla/5.0" }, maxRedirects: 5, validateStatus: s => s >= 200 && s < 400 });
       const buf = Buffer.from(res.data || []);
       if (buf.length < 5000) continue;
       const ct = String(res.headers?.["content-type"] || "").toLowerCase();
@@ -12946,7 +12965,7 @@ Examples:
     for (const fn of videoDlApis) { try { dlUrl = await fn(); if (dlUrl) break; } catch {} }
     if (!dlUrl) { await editMessage(sock, jid, sKey, `📹 *MIAS MDX Video*\n\n❌ All download providers are busy or blocked for this link.\nTry again in a moment, or use *${CONFIG.PREFIX}play* → option *4* for the same video.`); return; }
     await editMessage(sock, jid, sKey, `📹 *MIAS MDX Video*\n\n✅ Found: *${title}* ✅\n⬢ Download link ready ✅\n⏳ Fetching file...`);
-    const vidRes = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 120000, headers: { "User-Agent": "Mozilla/5.0" }, maxRedirects: 5 });
+    const vidRes = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { "User-Agent": "Mozilla/5.0" }, maxRedirects: 5 });
     const vidBuf = Buffer.from(vidRes.data || []);
     if (vidBuf.length < 10000) { await editMessage(sock, jid, sKey, `📹 *MIAS MDX Video*\n\n❌ Download returned empty/invalid file.`); return; }
     // ── Validate the buffer is actually playable video (ftyp / webm / matroska) ──
@@ -16591,7 +16610,9 @@ cmd("kick", { desc: "Kick member or N random members (e.g .kick 5)", category: "
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
 
     // Check if first arg is a number (bulk kick N members)
-    const bulkN = args[0] && /^\d+$/.test(args[0]) ? parseInt(args[0]) : 0;
+    // v35 FIX: a bare phone number (7+ digits) is a TARGET, not a bulk count —
+    // ".kick 2349068551055" used to hit the ">50" bulk guard and die.
+    const bulkN = (args[0] && /^\d{1,2}$/.test(args[0]) && parseInt(args[0]) <= 50) ? parseInt(args[0]) : 0;
     
     if (bulkN > 0) {
       // Bulk kick N random non-admin members
@@ -16626,6 +16647,8 @@ cmd("kick", { desc: "Kick member or N random members (e.g .kick 5)", category: "
         m = [found?.id || ctx.participant];
       } catch { m = [ctx.participant]; }
     }
+    // v35: bare target number support — .kick 2349068551055
+    if (!m.length && args[0] && /^\d{7,15}$/.test(args[0])) m = [args[0] + "@s.whatsapp.net"];
     if (!m.length) { await sendReply(sock, msg, `❌ Tag or reply to someone to kick.\n\nBulk kick: *${CONFIG.PREFIX}kick 5* (kicks 5 random members)`); return; }
     
     const statusMsg = await sock.sendMessage(jid, { text: `👢 *MIAS MDX Kick*\n\n⬡ Removing ${m.length} member(s)...` }, { quoted: msg });
@@ -18938,7 +18961,7 @@ for (const [pCmd, pInfo] of Object.entries(DL_PLATFORMS)) {
       const result = await universalDownload(args[0], pCmd);
       if (result?.dl) {
         await editMessage(sock, jid, dlKey, `${pInfo.emoji} *MIAS MDX — ${pInfo.name}*\n\n⬢ Fetching media... ✅\n⬡ Downloading...\n◻ Sending...`);
-        const buf = await axios.get(result.dl, { responseType: "arraybuffer", timeout: 120000 });
+        const buf = await axios.get(result.dl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity });
         await editMessage(sock, jid, dlKey, `${pInfo.emoji} *MIAS MDX — ${pInfo.name}*\n\n⬢ Fetching media... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
         const ct = buf.headers?.["content-type"] || "";
         if (ct.includes("audio") || pCmd === "spotify" || pCmd === "soundcloud") {
@@ -19013,7 +19036,7 @@ cmd(["facebook", "fb"], { desc: "Download from Facebook — .fb <URL> [video|aud
 
     if (result?.dl) {
       await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n⬢ Fetching media... ✅\n⬡ Downloading...\n◻ Sending...`);
-      const buf = Buffer.from((await axios.get(result.dl, { responseType: "arraybuffer", timeout: 120000, headers: { "User-Agent": "Mozilla/5.0" } })).data);
+      const buf = Buffer.from((await axios.get(result.dl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { "User-Agent": "Mozilla/5.0" } })).data);
       await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n⬢ Fetching media... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
       const cap = `📘 *Facebook${mode === "hd" ? " (HD)" : ""}*\n\n${result.title || ""}`;
       if (mode === "audio") {
@@ -19466,7 +19489,7 @@ cmd(["spotify","spot","spotdl"], { desc: "Download Spotify track as MP3 with cov
   let buf = _ytFallbackResult?.buf ?? null;
   if (!buf && dlUrl) {
     try {
-      const _dlRes = await axios.get(dlUrl, { responseType: 'arraybuffer', timeout: 90000, headers: { 'User-Agent': 'Mozilla/5.0' }, maxRedirects: 5 });
+      const _dlRes = await axios.get(dlUrl, { responseType: 'arraybuffer', timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { 'User-Agent': 'Mozilla/5.0' }, maxRedirects: 5 });
       const _dlBuf = Buffer.from(_dlRes.data || []);
       const _hasId3  = _dlBuf.length >= 3 && _dlBuf.slice(0,3).toString('utf8') === 'ID3';
       const _hasSync = _dlBuf.length >= 2 && _dlBuf[0] === 0xFF && (_dlBuf[1] & 0xE0) === 0xE0;
@@ -19479,7 +19502,7 @@ cmd(["spotify","spot","spotdl"], { desc: "Download Spotify track as MP3 with cov
     } catch {}
   }
   if (!buf && dlUrl) {
-    try { buf = Buffer.from((await axios.get(dlUrl, { responseType: 'arraybuffer', timeout: 90000 })).data); } catch {}
+    try { buf = Buffer.from((await axios.get(dlUrl, { responseType: 'arraybuffer', timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity })).data); } catch {}
   }
 
   // Fetch thumbnail cover art
@@ -26631,7 +26654,7 @@ cmd(["terabox","tera","teradl"], { desc: "Download Terabox file — .terabox <ur
       const fname = d?.data?.filename || d?.filename || d?.name || "terabox_file";
       if (!r.ok || !dlUrl) { await editMessage(sock, jid, stKey, `📦 *MIAS MDX — Terabox*\n\n✖ Could not get Terabox link. The file may be private.`); return; }
       await editMessage(sock, jid, stKey, `📦 *MIAS MDX — Terabox*\n\n⬢ Fetching file info... ✅\n⬡ Downloading *${fname}*...\n⬡ Sending...`);
-      const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 120000 })).data);
+      const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity })).data);
       const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
       await editMessage(sock, jid, stKey, `📦 *MIAS MDX — Terabox*\n\n⬢ Fetching info... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
       await sock.sendMessage(jid, { document: buf, mimetype: "application/octet-stream", fileName: fname, caption: `📦 *${fname}*${sz}` }, { quoted: msg });
@@ -29927,7 +29950,7 @@ cmd(["dcytmp4","ytmp4dc","youtubevideodl"], { desc: "YouTube to MP4 via DC — .
       try { const r = await dcGet(ep, { url }, 40000); const d = r.data?.data || r.data?.result || r.data; dlUrl = d?.download || d?.url || d?.video || d?.mp4 || (typeof d === "string" && d.startsWith("http") ? d : null); if (d?.title) title = d.title; } catch {}
     }
     if (!dlUrl) { await editMessage(sock, jid, st.key, `❌ Could not extract video.`); return; }
-    const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 120000 })).data);
+    const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity })).data);
     const sz = ` (${(buf.length/1048576).toFixed(1)}MB)`;
     const cap = `🎬 *YouTube Video*${sz}`;
     try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
@@ -32073,10 +32096,22 @@ for (const [name, endpoint] of Object.entries(_PREXZY_REACTIONS)) {
       } catch {}
     }
     if (!gifUrl) { await sendReply(sock, msg, `❌ Could not fetch ${name} GIF right now.`); return; }
+    // v35 FIX — sending { url: gif } made WhatsApp fetch the .gif directly;
+    // the saved file was unplayable ("this file isn't available"). We now
+    // download the bytes ourselves and convert GIF → real MP4 (ffmpeg) so
+    // gifPlayback always produces a playable, downloadable video.
+    let _gifSent = false;
     try {
-      await sock.sendMessage(jid, { video: { url: gifUrl }, gifPlayback: true, caption: `${em} *${name.toUpperCase()}!*` }, { quoted: msg });
-    } catch {
-      await sock.sendMessage(jid, { image: { url: gifUrl }, caption: `${em} *${name.toUpperCase()}!*` }, { quoted: msg });
+      const _gr = await axios.get(gifUrl, { responseType: "arraybuffer", timeout: 60000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { "User-Agent": "Mozilla/5.0" } });
+      let _gbuf = Buffer.from(_gr.data);
+      if (/\.gif($|\?)/i.test(gifUrl) || (_gbuf.length > 3 && _gbuf.slice(0, 3).toString() === "GIF")) {
+        try { _gbuf = await _cmfFfmpeg(_gbuf, "gif", "mp4", ["-movflags", "faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]); } catch {}
+      }
+      await sock.sendMessage(jid, { video: _gbuf, gifPlayback: true, mimetype: "video/mp4", caption: `${em} *${name.toUpperCase()}!*` }, { quoted: msg });
+      _gifSent = true;
+    } catch {}
+    if (!_gifSent) {
+      try { await sock.sendMessage(jid, { image: { url: gifUrl }, caption: `${em} *${name.toUpperCase()}!*` }, { quoted: msg }); } catch {}
     }
     await react(sock, msg, "✅");
   });
@@ -33301,7 +33336,7 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
         const r = await _axios.post(ep.post, ep.body, { timeout: 120000, headers: ep.headers || {} });
         const url = r?.data?.output || r?.data?.urls?.get || r?.data?.future_links?.[0] || r?.data?.url || (Array.isArray(r?.data?.output) ? r.data.output[0] : null);
         if (url) {
-          const r2 = await _axios.get(url, { responseType: "arraybuffer", timeout: 120000 });
+          const r2 = await _axios.get(url, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity });
           videoBuf = Buffer.from(r2.data);
           if (videoBuf.length > 1024) break;
         }
@@ -39039,7 +39074,7 @@ try {
           const r = await dcGet("/play", { query }, 30000);
           const d = r.data?.result;
           if (r.ok && d?.download_url) {
-            const a = await axios.get(d.download_url, { responseType: "arraybuffer", timeout: 120000, maxRedirects: 5, headers: { "User-Agent": "Mozilla/5.0" } });
+            const a = await axios.get(d.download_url, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, maxRedirects: 5, headers: { "User-Agent": "Mozilla/5.0" } });
             const b = Buffer.from(a.data || []);
             if (b.length > 8000) {
               audioBuf = b;
@@ -39060,7 +39095,7 @@ try {
                  || (await toxicCall("/d/ytmp3",     { url: isUrl ? query : "", q: isUrl ? "" : query })))
               : null;
             if (tox?.url) {
-              const a = await axios.get(tox.url, { responseType: "arraybuffer", timeout: 120000, maxRedirects: 5, headers: { "User-Agent": "Mozilla/5.0" } });
+              const a = await axios.get(tox.url, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, maxRedirects: 5, headers: { "User-Agent": "Mozilla/5.0" } });
               const b = Buffer.from(a.data || []);
               if (b.length > 8000) {
                 audioBuf = b;
@@ -42577,7 +42612,7 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       for (const p of providers) { try { dl = await p(); if (dl) break; } catch {} }
       if (!dl) { await sendReply(sock, msg, `❌ All video providers are busy for *${title}*. Try again shortly.`); return; }
       const buf = Buffer.from((await axios.get(dl, {
-        responseType: "arraybuffer", timeout: 120000, maxRedirects: 5,
+        responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, maxRedirects: 5,
         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", Referer: "https://www.youtube.com/" },
       })).data);
       if (!buf || buf.length < 20000) { await sendReply(sock, msg, "❌ Provider returned an invalid file. Try again."); return; }
@@ -43810,7 +43845,13 @@ try {
 
 // ── passport-size DP card helper (shared by welcome/goodbye/aza) ─────────────
 globalThis._passportCard = async function _passportCard(ppBuf, label, title, sub) {
-  // v2.1: draw the @username beside the round avatar (title/sub may carry it)
+  // v35: delegate to the Unicode-safe renderer — styled names, emoji, Arabic
+  // and CJK are drawn with real system fonts and can NEVER become "???" again.
+  try {
+    const _wc = require("./lib/welcomeCards.cjs");
+    return await _wc.renderMemberCard(ppBuf, label, title, sub);
+  } catch (e) { try { console.error("[passportCard] unicode renderer failed, legacy fallback:", e?.message || e); } catch {} }
+  // legacy Jimp fallback (Latin-only) — used only if the canvas engine is gone
   const Jimp = require("jimp");
   const W = 640, H = 300, PAD = 18;
   const base = new Jimp(W, H, 0x171a21ff);
@@ -43958,8 +43999,21 @@ const _tkickRecover = async (sock) => {
     if (!e || !e.gid || !e.target) continue;
     if (e.readdAt <= now) {
       let ok = false;
+      // v35 FIX — "always add back, no matter what": keep retrying every scan
+      // cycle (40 cycles ≈ 20 min) instead of dropping the user after 3 tries.
       for (let i = 0; i < 3 && !ok; i++) { try { await sock.groupParticipantsUpdate(e.gid, [e.target], "add"); ok = true; } catch { await new Promise(r => setTimeout(r, 3000)); } }
-      try { if (ok) await sock.sendMessage(e.gid, { text: `✅ @${e.target.split("@")[0]} has been re-added after the temp-kick.`, mentions: [e.target] }); } catch {}
+      if (ok) {
+        try { await sock.sendMessage(e.gid, { text: `✅ @${e.target.split("@")[0]} has been re-added after the temp-kick.`, mentions: [e.target] }); } catch {}
+      } else {
+        e.fails = (e.fails || 0) + 1;
+        if (e.fails < 40) { keep.push(e); continue; }
+        // last resort: DM the user a fresh invite link so they can return
+        try {
+          const code = await sock.groupInviteCode(e.gid);
+          if (code) await sock.sendMessage(e.target, { text: `👋 *Your temp-kick has ended.*\nRejoin: https://chat.whatsapp.com/${code}` });
+          await sock.sendMessage(e.gid, { text: `🔗 @${e.target.split("@")[0]} couldn't be re-added automatically — invite link DM'd to them.`, mentions: [e.target] });
+        } catch {}
+      }
     } else keep.push(e);
   }
   _tkickStore = keep;
@@ -44782,3 +44836,64 @@ cmd(["gst"], { desc: "Send media to a group via the bot pipeline (ffmpeg-injecte
   }
 });
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v35: HD / REMINI — image & video QUALITY ENHANCER
+//  Engines: sharp → jimp (image 2x lanczos + sharpen), ffmpeg 2x lanczos +
+//  CRF18 (video). ffmpeg + canvas engines are already project dependencies.
+//  Big outputs are delivered as DOCUMENTS so nothing ever fails to send;
+//  every temp file is deleted right after the send — nothing stays in memory.
+// ═══════════════════════════════════════════════════════════════════════════
+cmd(["hd", "remini", "enhance", "upscale"], { desc: "Enhance image/video quality — reply to a photo or video", category: "MEDIA" }, async (sock, msg) => {
+  const jid = msg.key.remoteJid;
+  const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
+  if (!buf || !["image", "video", "sticker", "document"].includes(kind)) {
+    await sendReply(sock, msg, `✨ *HD / Remini*\n\nReply to an *image* or *video* with ${CONFIG.PREFIX}hd\nImage → 2x lanczos upscale + sharpen\nVideo → 2x + CRF18 re-encode (sent as file when too big for inline play)`);
+    return;
+  }
+  await react(sock, msg, "✨");
+  const _st = await sock.sendMessage(jid, { text: "✨ *MIAS MDX HD Engine*\n\n⬡ Enhancing quality — big files take a moment, they WILL be delivered..." }, { quoted: msg });
+  const _done = async (t) => { try { await editMessage(sock, jid, _st.key, t); } catch {} };
+  try {
+    if (kind === "image" || kind === "sticker" || (kind === "document" && /image/i.test(String(msg.message?.documentMessage?.mimetype || "")))) {
+      let out = null;
+      try {
+        const sharp = require("sharp");
+        const meta = await sharp(buf).metadata();
+        const w = Math.min((meta.width || 1080) * 2, 8000), h = Math.min((meta.height || 1080) * 2, 8000);
+        out = await sharp(buf).resize(w, h, { kernel: "lanczos3", fit: "inside" }).sharpen({ sigma: 1.1 }).normalize().jpeg({ quality: 95, mozjpeg: true }).toBuffer();
+      } catch {}
+      if (!out) {
+        try { const Jimp2 = require("jimp"); const j = await Jimp2.read(buf); out = await j.scale(2).quality(95).getBufferAsync(Jimp2.MIME_JPEG); } catch {}
+      }
+      if (!out) throw new Error("no image engine available on this host");
+      const payload = out.length > 15 * 1024 * 1024
+        ? { document: out, mimetype: "image/jpeg", fileName: `hd_${Date.now()}.jpg`, caption: "✨ *HD Enhanced* (sent as file — big image)" }
+        : { image: out, caption: "✨ *HD Enhanced*" };
+      await sock.sendMessage(jid, payload, { quoted: msg });
+      out = null;
+    } else {
+      const { execFile } = require("child_process");
+      let ff = "ffmpeg"; try { const p = require("ffmpeg-static"); if (p && typeof p === "string") ff = p; } catch {}
+      const os = require("os"), path = require("path"), fs = require("fs");
+      const inp = path.join(os.tmpdir(), "hd_" + Date.now() + ".mp4");
+      const outp = path.join(os.tmpdir(), "hd_" + Date.now() + "_out.mp4");
+      fs.writeFileSync(inp, buf);
+      await new Promise((res, rej) => execFile(ff, ["-y", "-i", inp, "-vf", "scale=iw*2:ih*2:flags=lanczos", "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-c:a", "copy", "-movflags", "faststart", outp], { timeout: 600000 }, e => e ? rej(e) : res()));
+      const sz = fs.statSync(outp).size;
+      const vidBuf = fs.readFileSync(outp);
+      const payload = sz > 64 * 1024 * 1024
+        ? { document: vidBuf, mimetype: "video/mp4", fileName: `hd_${Date.now()}.mp4`, caption: "✨ *HD Enhanced* (sent as file — too big for inline play)" }
+        : { video: vidBuf, mimetype: "video/mp4", caption: "✨ *HD Enhanced*" };
+      await sock.sendMessage(jid, payload, { quoted: msg });
+      // delivered → wipe from disk AND memory immediately
+      try { fs.unlinkSync(inp); } catch {}
+      try { fs.unlinkSync(outp); } catch {}
+    }
+    await _done("✨ *HD Enhancement complete!* ✅");
+    await react(sock, msg, "✅");
+  } catch (e) {
+    await _done(`❌ HD failed: ${e?.message || e}`);
+    await react(sock, msg, "❌");
+  }
+});
