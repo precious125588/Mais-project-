@@ -30,7 +30,8 @@
 
 const fs    = require('fs');
 const path  = require('path');
-const axios = require('axios');
+let axios = (typeof globalThis !== 'undefined' && globalThis.axios) ? globalThis.axios : null;
+try { if (!axios) axios = require('axios'); } catch {}
 
 // SOURCE 3 (additive): WhatsApp Anime GC Library. Fails closed if absent.
 let GC = null;
@@ -331,6 +332,7 @@ function routeOrder(userJid) {
 module.exports = {
   install(P, helpers) {
     const { sendVideoRobust, isRealMedia } = helpers;
+    if (!axios && helpers.axios) axios = helpers.axios;
 
     async function runEditCmd(catKey, sock, msg) {
       const jid = msg.key.remoteJid;

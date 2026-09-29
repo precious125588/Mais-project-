@@ -320,17 +320,21 @@ module.exports = function installV36(ctx) {
         }, { quoted });
       }
     }
+    const P = {
+      cmd: ctx.cmd,
+      commands: ctx.commands,
+      CONFIG: ctx.CONFIG,
+      sendReply: ctx.sendReply,
+      react: ctx.react,
+    };
     const animeEdits = require('./precious-anime-edits.cjs');
     if (typeof animeEdits.install === 'function') {
-      animeEdits.install(P, { sendVideoRobust, isRealMedia });
+      const res = animeEdits.install(P, { sendVideoRobust, isRealMedia, axios: ctx.axios });
+      console.log('[v36] anime-edits installed:', res);
     }
   } catch (_aeErr) {
     console.log('[v36] anime-edits install notice:', _aeErr?.message || _aeErr);
   }
-
-  console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
-};
-
 
   // ── REMINI / HD: 🌀 while working, ✅ on success, ❌ on failure, no spam, no bot restart ──
   const wrapRemini = () => async (sock, msg, args) => {
@@ -370,5 +374,10 @@ module.exports = function installV36(ctx) {
     if (e) {
       e.handler = wrapRemini();
       commands.set(n, e);
+    } else if (typeof P.cmd === 'function') {
+      P.cmd(n, { desc: "Enhance image/video quality", category: "MEDIA" }, wrapRemini());
     }
   }
+
+  console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
+};
