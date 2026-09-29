@@ -8673,14 +8673,20 @@ async function handleSettingsNumericReply(sock, msg, body) {
   // PRECIOUS v22 hot-fix: bail out when the incoming message is a list /
   // button / native-flow response. The user tapped an in-bot card (.play,
   // .ytmate, .movie, ...) not a settings row; the picker handler must win.
+  // If the message is a button/list response, allow it if it matches a settings choice
   try {
     const _mm = msg && msg.message;
-    if (_mm && (
+    const isInteractive = _mm && (
       _mm.listResponseMessage
       || _mm.buttonsResponseMessage
       || _mm.interactiveResponseMessage
       || _mm.templateButtonReplyMessage
-    )) return false;
+    );
+    if (isInteractive) {
+      const norm = normalizeSettingsChoice(body);
+      const isSet = /^set:[\w]+(?::[\w]+)?$/i.test(norm) || /^\d{1,2}(\.\d{1,2})?$/.test(norm);
+      if (!isSet) return false;
+    }
   } catch {}
   // 🛠️ PRECIOUS FIX: native-button taps ("set:<key>:toggle") are handled HERE,
   // session-independent, so the owner can enable/disable any setting by tapping
@@ -8952,14 +8958,78 @@ cmd(["setting", "settings", "config"], { desc: "Open bot settings", category: "S
     if (!inGroup) { await sendReply(sock, msg, "🚫 Owner only."); return; }
   }
   settingsSession.set(jid, { sender }); setTimeout(() => settingsSession.delete(jid), 120000);
-  const settingsText = buildSettingsMenu(jid);
-  const settingsPic = await getBotPic();
-  if (settingsPic) {
-    try {
-      await sock.sendMessage(jid, { image: settingsPic, caption: settingsText }, { quoted: msg });
-    } catch { await sendReply(sock, msg, settingsText); }
-  } else {
-    await sendReply(sock, msg, settingsText);
+  const s = getSettings(jid);
+  const settingsPic = await getBotPic().catch(() => null);
+  const footerText = `${CONFIG.BOT_NAME} v${CONFIG.VERSION} • Tap to toggle`;
+
+  // Native interactive list sections for settings
+  const settingsSections = [
+    {
+      title: "🛡️ Moderation & Safety",
+      rows: [
+        { id: "1.1", title: `Block Calls [${s.blockCalls ? "ON" : "OFF"}]`, description: "Auto-reject incoming WhatsApp calls" },
+        { id: "2.1", title: `Link Guard [${s.linkGuard ? "ON" : "OFF"}]`, description: "Delete links or warn sender in groups" },
+        { id: "3.1", title: `Badword Filter [${s.badWords ? "ON" : "OFF"}]`, description: "Filter toxic and swear words" },
+        { id: "6.1", title: `Anti-Delete [${s.antiDelete ? "ON" : "OFF"}]`, description: "Forward deleted messages to owner DM" },
+        { id: "26.1", title: `Anti-Mention [${s.antiMention ? "ON" : "OFF"}]`, description: "Block everyone/channel mass mentions" },
+        { id: "27.1", title: `Anti-Bug [${s.antiBug ? "ON" : "OFF"}]`, description: "Drop crash and freeze payloads" },
+      ]
+    },
+    {
+      title: "🤖 Automation & Chatbot",
+      rows: [
+        { id: "21.1", title: `Chatbot [${s.chatBotMode ? "ON" : "OFF"}]`, description: "Toggle intelligent AI chatbot responses" },
+        { id: "7.1", title: `Auto-React [${s.autoReact ? "ON" : "OFF"}]`, description: "Automatically react with emoji to messages" },
+        { id: "10.1", title: `View Status [${s.viewStatus ? "ON" : "OFF"}]`, description: "Auto-view contacts' status updates" },
+        { id: "11.1", title: `React Status [${s.reactStatus ? "ON" : "OFF"}]`, description: "Auto-react to viewed statuses" },
+        { id: "15.1", title: `Auto-Reply [${s.autoReply ? "ON" : "OFF"}]`, description: "Auto-reply to incoming trigger keywords" },
+        { id: "13.1", title: `Auto-Voice [${s.autoVoice ? "ON" : "OFF"}]`, description: "Auto-reply with voice notes" },
+        { id: "14.1", title: `Auto-Sticker [${s.autoSticker ? "ON" : "OFF"}]`, description: "Auto-convert images to stickers" },
+      ]
+    },
+    {
+      title: "🏷️ Verified Badges & Context",
+      rows: [
+        { id: "32.1", title: `Status Reply (Meta AI) [${s.statusReply ? "ON" : "OFF"}]`, description: "Meta AI verified blue badge on replies" },
+        { id: "31.1", title: `Contact Reply [${s.contactReply ? "ON" : "OFF"}]`, description: "Embedded vCard contact card on replies" },
+        { id: "33.1", title: `AI Tag [${s.aiTag ? "ON" : "OFF"}]`, description: "Native AI Edited badge on bot replies" },
+      ]
+    },
+    {
+      title: "⚙️ Presence & Groups",
+      rows: [
+        { id: "12.1", title: `Welcome & Goodbye [${s.welcome ? "ON" : "OFF"}]`, description: "Welcome/farewell cards for new members" },
+        { id: "16.1", title: `Recording Status [${s.recording ? "ON" : "OFF"}]`, description: "Show 'recording audio...' presence" },
+        { id: "17.1", title: `Typing Status [${s.typing ? "ON" : "OFF"}]`, description: "Show 'typing...' presence" },
+        { id: "18.1", title: `Always Online [${s.alwaysOnline ? "ON" : "OFF"}]`, description: "Keep bot account active/online" },
+      ]
+    }
+  ];
+
+  let nativeSuccess = false;
+  try {
+    const { sendList } = await import("./handlers/interactiveHandler.js");
+    await sendList(sock, jid, `⚙️ *${CONFIG.BOT_NAME} Settings*
+Select a setting from the interactive menu below to toggle:`, settingsSections, {
+      title: "⚙️ BOT SETTINGS",
+      buttonText: "⚙️ Toggle Settings",
+      footer: footerText,
+      quoted: msg,
+    });
+    nativeSuccess = true;
+  } catch (errNative) {
+    console.log("[settings-native-list]", errNative?.message || errNative);
+  }
+
+  if (!nativeSuccess) {
+    const settingsText = buildSettingsMenu(jid);
+    if (settingsPic) {
+      try {
+        await sock.sendMessage(jid, { image: settingsPic, caption: settingsText }, { quoted: msg });
+      } catch { await sendReply(sock, msg, settingsText); }
+    } else {
+      await sendReply(sock, msg, settingsText);
+    }
   }
 });
 
