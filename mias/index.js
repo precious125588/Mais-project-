@@ -5490,8 +5490,9 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
       if (typeof globalThis.__V36_STATUS_REPLY_CTX === 'function') {
         const _v36 = await globalThis.__V36_STATUS_REPLY_CTX(sock, msg);
         if (_v36) {
-          if (_v36.fakeQuoted) _quoteToUse = _v36.fakeQuoted;
           if (_v36.ctx) _extraCtx = Object.assign({}, _extraCtx || {}, _v36.ctx);
+          // Never clobber the user's real command quote (like .ping)
+          if (_v36.fakeQuoted && !_quoteToUse) _quoteToUse = _v36.fakeQuoted;
         }
       }
     } catch (_v36Err) {}
@@ -8570,9 +8571,9 @@ _Reply *0* to close settings_`;
 const SETTINGS_MAP = {
   "1.1": s => { s.blockCalls = true; return "✅ Block Calls: ENABLED"; },
   "1.2": s => { s.blockCalls = false; return "❌ Block Calls: DISABLED"; },
-  "2.1": s => { s.linkGuard = "delete"; return "✅ Link Guard: DELETE"; },
-  "2.2": s => { s.linkGuard = "kick"; return "✅ Link Guard: KICK"; },
-  "2.3": s => { s.linkGuard = "warn"; return "✅ Link Guard: WARN"; },
+  "2.1": s => { s.linkGuard = "delete"; return "{ antilink on }"; },
+  "2.2": s => { s.linkGuard = "kick"; return "{ antilink kick }"; },
+  "2.3": s => { s.linkGuard = "warn"; return "{ antilink off }"; },
   "3.1": s => { s.badWordGuard = "delete"; return "✅ Bad Word Guard: DELETE"; },
   "3.2": s => { s.badWordGuard = "kick"; return "✅ Bad Word Guard: KICK"; },
   "3.3": s => { s.badWordGuard = "warn"; return "✅ Bad Word Guard: WARN"; },
@@ -8582,10 +8583,10 @@ const SETTINGS_MAP = {
   "4.4": s => { s.statusMention = "false"; return "❌ Status Mention: OFF"; },
   "5.1": s => { s.callAction = "cut"; return "✅ Call Action: CUT"; },
   "5.2": s => { s.callAction = "block"; return "✅ Call Action: BLOCK"; },
-  "6.1": s => { s.antiDelete = true; return "✅ Anti Delete: ON"; },
-  "6.2": s => { s.antiDelete = false; return "❌ Anti Delete: OFF"; },
-  "7.1": s => { s.autoReact = true; return "✅ Auto React: ON"; },
-  "7.2": s => { s.autoReact = false; return "❌ Auto React: OFF"; },
+  "6.1": s => { s.antiDelete = true; return "{ antidelete on }"; },
+  "6.2": s => { s.antiDelete = false; return "{ antidelete off }"; },
+  "7.1": s => { s.autoReact = true; return "{ autoreact on }"; },
+  "7.2": s => { s.autoReact = false; return "{ autoreact off }"; },
   "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 35._`; },
   "8.2": s => { s.autoBlock = false; return "❌ Auto Block: OFF"; },
   "9.1": s => { s.readMsgs = true; try { getSettings("bot").readMsgs = true; getSettings("bot").autoread = true; } catch {} return "✅ Read Msgs: ON"; },
@@ -8594,8 +8595,8 @@ const SETTINGS_MAP = {
   "10.2": s => { s.viewStatus = false; return "❌ View Status: OFF"; },
   "11.1": s => { s.reactStatus = true; return "✅ React Status: ON"; },
   "11.2": s => { s.reactStatus = false; return "❌ React Status: OFF"; },
-  "12.1": s => { s.welcome = true; return "✅ Welcome Msg: ON"; },
-  "12.2": s => { s.welcome = false; return "❌ Welcome Msg: OFF"; },
+  "12.1": s => { s.welcome = true; return "{ welcome on }"; },
+  "12.2": s => { s.welcome = false; return "{ welcome off }"; },
   "13.1": s => { s.autoVoice = true; return "✅ Auto Voice: ON"; },
   "13.2": s => { s.autoVoice = false; return "❌ Auto Voice: OFF"; },
   "14.1": s => { s.autoSticker = true; return "✅ Auto Sticker: ON"; },
@@ -8615,8 +8616,8 @@ const SETTINGS_MAP = {
   "20.1": s => { s.language = "en"; return "✅ Language: EN"; },
   "20.2": s => { s.language = "fr"; return "✅ Language: FR"; },
   // 21 = Chat Bot Mode — sets BOTH chatBotMode (display) AND autoReply (functional trigger)
-  "21.1": s => { s.chatBotMode = true; s.autoReply = true; return "✅ Chat Bot Mode: ON\n\n_Auto-chatbot is now active for this chat. The bot will reply to every non-command message with AI._"; },
-  "21.2": s => { s.chatBotMode = false; s.autoReply = false; return "❌ Chat Bot Mode: OFF\n\n_Auto-chatbot has been disabled for this chat._"; },
+  "21.1": s => { s.chatBotMode = true; s.autoReply = true; return "{ chatbot on }"; },
+  "21.2": s => { s.chatBotMode = false; s.autoReply = false; return "{ chatbot off }"; },
   "22.1": s => { s.ownerReact = true; return "✅ Owner React: ON"; },
   "22.2": s => { s.ownerReact = false; return "❌ Owner React: OFF"; },
   "23.1": s => { s.adultDl = true; s.adultMode = true; return "✅ Adult Mode: ON\n\n" +
@@ -8638,21 +8639,21 @@ const SETTINGS_MAP = {
   "27.2": s => { s.antiBug = false; return "❌ Anti-Bug Shield: OFF"; },
   "28.1": s => { s.forcePrivate = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_1_forcePrivate',true);  return "✅ Force Private: ON — Bot will only respond in DMs."; },
   "28.2": s => { s.forcePrivate = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_1_forcePrivate',false); return "❌ Force Private: OFF — Bot responds in all chats."; },
-  "29.1": s => { s.autoDownload = 'off';    if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','off');    return "❌ Auto-Downloader: OFF"; },
-  "29.2": s => { s.autoDownload = 'dm';     if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','dm');     return "✅ Auto-Downloader: DM only — downloads links in private chats."; },
-  "29.3": s => { s.autoDownload = 'global'; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','global'); return "✅ Auto-Downloader: ALL chats — downloads links everywhere."; },
-  "30.1": s => { s.autoDlChat = true;  if (typeof saveNow === "function") saveNow(); return "✅ Auto-Downloader: ON for THIS chat only — other chats stay untouched."; },
-  "30.2": s => { s.autoDlChat = false; if (typeof saveNow === "function") saveNow(); return "❌ Auto-Downloader: OFF for THIS chat."; },
-  "30.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "✅ Status Forwarder: ON — Status updates will be forwarded."; },
-  "30.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "❌ Status Forwarder: OFF"; },
-  "31.1": s => { s.contactReply = true;  return "✅ Contact Reply: ON — Bot sends your contact card after every DM reply. (Number auto-detected from session)"; },
-  "31.2": s => { s.contactReply = false; return "❌ Contact Reply: OFF"; },
-  "32.1": s => { s.statusReply = true;  return "✅ Status Reply: ON — Bot replies with your contact card when someone views your status."; },
-  "32.2": s => { s.statusReply = false; return "❌ Status Reply: OFF"; },
-  "33.1": s => { s.aiTag = true;  return "✅ AI ✦ Tag: ON — Bot replies will show the WhatsApp AI ✦ Edited badge."; },
-  "33.2": s => { s.aiTag = false; return "❌ AI ✦ Tag: OFF"; },
-  "34.1": s => { s.antiBroadcast = true;  return "✅ Anti-Broadcast: ON — broadcast senders will be auto-blocked."; },
-  "34.2": s => { s.antiBroadcast = false; return "❌ Anti-Broadcast: OFF"; },
+  "29.1": s => { s.autoDownload = 'off';    if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','off');    return "{ autodl off }"; },
+  "29.2": s => { s.autoDownload = 'dm';     if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','dm');     return "{ autodl dm }"; },
+  "29.3": s => { s.autoDownload = 'global'; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','global'); return "{ autodl all }"; },
+  "30.1": s => { s.autoDlChat = true;  if (typeof saveNow === "function") saveNow(); return "{ autodlchat on }"; },
+  "30.2": s => { s.autoDlChat = false; if (typeof saveNow === "function") saveNow(); return "{ autodlchat off }"; },
+  "36.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
+  "36.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
+  "31.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
+  "31.2": s => { s.contactReply = false; return "{ contactreply off }"; },
+  "32.1": s => { s.statusReply = true;  return "{ statusreply on }"; },
+  "32.2": s => { s.statusReply = false; return "{ statusreply off }"; },
+  "33.1": s => { s.aiTag = true;  return "{ aitag on }"; },
+  "33.2": s => { s.aiTag = false; return "{ aitag off }"; },
+  "34.1": s => { s.antiBroadcast = true;  return "{ antibroadcast on }"; },
+  "34.2": s => { s.antiBroadcast = false; return "{ antibroadcast off }"; },
   "35.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
   "35.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
   "35.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
@@ -42693,7 +42694,13 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       } catch {}
       try { settingsSession.set(jid, { ts: Date.now() }); } catch {}
       try { saveNow && saveNow(); } catch {}
-      await sendReply(sock, msg, typeof out === "string" ? out : "✅ Setting updated.");
+      let formattedOut = typeof out === "string" ? out : "✅ Setting updated.";
+      if (!formattedOut.startsWith("{") && !formattedOut.startsWith("❌")) {
+        const cleanName = choice.replace(/[^0-9.]/g, "");
+        const state = choice.endsWith(".1") ? "on" : "off";
+        formattedOut = `{ setting_${cleanName} ${state} }`;
+      }
+      await sendReply(sock, msg, formattedOut);
     } catch (e) { await sendReply(sock, msg, `❌ Settings error: ${e?.message || e}`); }
     return true;
   };
@@ -44983,3 +44990,166 @@ try {
 } catch (e) {
   console.log("[v36] load error:", e.message);
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIMED ACTIONS ENGINE (KICK & ADD) — Persistent across bot restarts
+// ═══════════════════════════════════════════════════════════════════════════
+const TIMED_ACTIONS_FILE = require('path').join(__dirname, '../data/timed_actions.json');
+function loadTimedActions() {
+  try {
+    if (!fs.existsSync(TIMED_ACTIONS_FILE)) return [];
+    return JSON.parse(fs.readFileSync(TIMED_ACTIONS_FILE, 'utf8') || '[]');
+  } catch { return []; }
+}
+function saveTimedActions(list) {
+  try {
+    const dir = require('path').dirname(TIMED_ACTIONS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(TIMED_ACTIONS_FILE, JSON.stringify(list, null, 2));
+  } catch {}
+}
+function scheduleAction(action) {
+  const list = loadTimedActions();
+  list.push(action);
+  saveTimedActions(list);
+  armAction(action);
+}
+function armAction(action) {
+  const delay = action.executeAt - Date.now();
+  if (delay <= 0) {
+    executeTimedAction(action);
+  } else {
+    setTimeout(() => executeTimedAction(action), Math.min(delay, 2147483647));
+  }
+}
+async function executeTimedAction(action) {
+  let list = loadTimedActions();
+  list = list.filter(a => a.id !== action.id);
+  saveTimedActions(list);
+
+  const sock = globalThis._sockInstance;
+  if (!sock) return;
+
+  const targetJid = action.target.includes('@') ? action.target : (action.target + '@s.whatsapp.net');
+  try {
+    if (action.type === 'kick') {
+      await sock.groupParticipantsUpdate(action.groupJid, [targetJid], 'remove');
+    } else if (action.type === 'add') {
+      await sock.groupParticipantsUpdate(action.groupJid, [targetJid], 'add');
+    }
+  } catch (e) {
+    console.error('[timed-action error]', e?.message || e);
+  }
+}
+function parseTimeInput(timeStr) {
+  if (!timeStr) return null;
+  const s = timeStr.trim().toLowerCase();
+
+  // 1. Duration: 30s, 1m, 5m, 2h, 1d
+  const durMatch = s.match(/^(\d+)\s*(s|sec|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/);
+  if (durMatch) {
+    const val = parseInt(durMatch[1], 10);
+    const unit = durMatch[2];
+    let ms = val * 1000;
+    if (unit.startsWith('m')) ms = val * 60 * 1000;
+    else if (unit.startsWith('h')) ms = val * 3600 * 1000;
+    else if (unit.startsWith('d')) ms = val * 86400 * 1000;
+    return { executeAt: Date.now() + ms, label: val + (unit.startsWith('m') ? ' minute(s)' : unit.startsWith('h') ? ' hour(s)' : unit.startsWith('d') ? ' day(s)' : ' second(s)') };
+  }
+
+  // 2. Clock time: 10:00pm, 8:30am, 22:00
+  const clockMatch = s.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/);
+  if (clockMatch) {
+    let hours = parseInt(clockMatch[1], 10);
+    const mins = parseInt(clockMatch[2], 10);
+    const meridiem = clockMatch[3];
+    if (meridiem === 'pm' && hours < 12) hours += 12;
+    if (meridiem === 'am' && hours === 12) hours = 0;
+
+    const targetDate = new Date();
+    targetDate.setHours(hours, mins, 0, 0);
+    if (targetDate.getTime() <= Date.now()) {
+      targetDate.setDate(targetDate.getDate() + 1); // next day
+    }
+    const diffMs = targetDate.getTime() - Date.now();
+    const diffMins = Math.round(diffMs / 60000);
+    return { executeAt: targetDate.getTime(), label: `${timeStr} (in ~${diffMins} mins)` };
+  }
+
+  return null;
+}
+// Arm all saved actions on boot
+try {
+  setTimeout(() => {
+    const list = loadTimedActions();
+    for (const act of list) armAction(act);
+  }, 5000);
+} catch {}
+
+
+cmd(["tkick", "timedkick"], { desc: "Timed kick — .tkick <number> <time> (e.g. 1m, 5m, 10:00pm)", category: "GROUP", adminOnly: true }, async (sock, msg, args) => {
+  if (!requireGroup(msg)) return;
+  globalThis._sockInstance = sock;
+  const gJid = msg.key.remoteJid;
+  const target = (args[0] || "").replace(/\D/g, "");
+  const timeArg = args[1] || "1m";
+
+  if (!target || target.length < 7) {
+    await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}tkick <phone> <time>\nExample: ${CONFIG.PREFIX}tkick 2349068551055 1m\nExample: ${CONFIG.PREFIX}tkick 2349068551055 10:00pm`);
+    return;
+  }
+
+  const parsed = parseTimeInput(timeArg);
+  if (!parsed) {
+    await sendReply(sock, msg, "❌ Invalid time format. Use: 1m, 5m, 2h, or 10:00pm");
+    return;
+  }
+
+  const targetJid = target + "@s.whatsapp.net";
+  try {
+    // 1. Kick now
+    await sock.groupParticipantsUpdate(gJid, [targetJid], "remove");
+    await sendReply(sock, msg, `⏳ User ++${target} kicked. Will be re-added in ${parsed.label}.`);
+
+    // 2. Schedule re-add
+    scheduleAction({
+      id: "tkick_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      type: "add",
+      groupJid: gJid,
+      target: target,
+      executeAt: parsed.executeAt
+    });
+  } catch (e) {
+    await sendReply(sock, msg, "❌ Failed to kick user: " + (e?.message || e));
+  }
+});
+
+cmd(["timedadd", "tadd"], { desc: "Timed add — .tadd <number> <time> (e.g. 1m, 10:00pm)", category: "GROUP", adminOnly: true }, async (sock, msg, args) => {
+  if (!requireGroup(msg)) return;
+  globalThis._sockInstance = sock;
+  const gJid = msg.key.remoteJid;
+  const target = (args[0] || "").replace(/\D/g, "");
+  const timeArg = args[1];
+
+  if (!target || target.length < 7) {
+    await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}tadd <phone> <time>\nExample: ${CONFIG.PREFIX}tadd 2349068551055 1m\nExample: ${CONFIG.PREFIX}tadd 2349068551055 10:00pm`);
+    return;
+  }
+
+  const parsed = parseTimeInput(timeArg);
+  if (!parsed) {
+    await sendReply(sock, msg, "❌ Invalid time format. Use: 1m, 5m, 2h, or 10:00pm");
+    return;
+  }
+
+  scheduleAction({
+    id: "add_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+    type: "add",
+    groupJid: gJid,
+    target: target,
+    executeAt: parsed.executeAt
+  });
+
+  await sendReply(sock, msg, `⏳ Scheduled: User ++${target} will be added at ${parsed.label}.`);
+});

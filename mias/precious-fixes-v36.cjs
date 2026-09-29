@@ -63,17 +63,17 @@ module.exports = function installV36(ctx) {
     finally { try { fs.unlinkSync(inp); } catch {} try { fs.unlinkSync(out); } catch {} }
     return buf;
   }
-  async function audioToMp3(buf) {
-    // WHY: status@broadcast + audio/ogg;codecs=opus renders as "update WhatsApp"
-    // on many clients. MP3 is the only universally playable status audio.
-    const inp = path.join(os.tmpdir(), 'v36_' + Date.now() + '.ogg');
-    const out = path.join(os.tmpdir(), 'v36_' + Date.now() + '.mp3');
+  async function audioToOpus(buf) {
+    // WhatsApp status voice note strictly requires audio/ogg with opus codec and ptt: true.
+    // Raw MP3 triggers "You shared a status but your version of WhatsApp doesn't support it. Update WhatsApp".
+    const inp = path.join(os.tmpdir(), 'v37_' + Date.now() + '.input');
+    const out = path.join(os.tmpdir(), 'v37_' + Date.now() + '.ogg');
     try {
       fs.writeFileSync(inp, buf);
-      await runFF(['-y','-i',inp,'-vn','-c:a','libmp3lame','-b:a','192k',out]);
+      await runFF(['-y', '-i', inp, '-c:a', 'libopus', '-b:a', '64k', '-vbr', 'on', '-compression_level', '10', '-vn', out]);
       const ob = fs.readFileSync(out);
-      if (ob.length > 1000) return ob;
-    } catch (e) { console.error('[v36 audio] ' + e.message); }
+      if (ob.length > 100) return ob;
+    } catch (e) { console.error('[v37 opus transcode] ' + e.message); }
     finally { try { fs.unlinkSync(inp); } catch {} try { fs.unlinkSync(out); } catch {} }
     return buf;
   }
@@ -92,12 +92,12 @@ module.exports = function installV36(ctx) {
       if (q.audioMessage) {
         const st = await downloadContentFromMessage(q.audioMessage, 'audio');
         const chunks = []; for await (const c of st) chunks.push(c);
-        const mp3 = await audioToMp3(Buffer.concat(chunks));
+        const mp3 = await audioToOpus(Buffer.concat(chunks));
         const meta = await sock.groupMetadata(jid).catch(() => ({ participants: [] }));
         const members = memberJids(meta);
         await react(sock, msg, '🌀').catch(() => {});
         await sock.sendMessage('status@broadcast',
-          { audio: mp3, mimetype: 'audio/mpeg', ptt: false, contextInfo: { isGroupStatus: true } },
+          { audio: mp3, mimetype: 'audio/ogg; codecs=opus', ptt: true, contextInfo: { isGroupStatus: true } },
           { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() });
         await react(sock, msg, '✅').catch(() => {});
         await sendReply(sock, msg, `🎵 *Audio uploaded to ${meta.subject || 'this group'}*\n✅ Sent to *${members.length}* group members.`);
@@ -151,8 +151,8 @@ module.exports = function installV36(ctx) {
       } else if (quoted?.audioMessage) {
         const st = await downloadContentFromMessage(quoted.audioMessage, 'audio');
         const chunks = []; for await (const c of st) chunks.push(c);
-        const mp3 = await audioToMp3(Buffer.concat(chunks));
-        await sock.sendMessage(requester, { audio: mp3, mimetype: 'audio/mpeg' });
+        const mp3 = await audioToOpus(Buffer.concat(chunks));
+        await sock.sendMessage(requester, { audio: mp3, mimetype: 'audio/ogg; codecs=opus', ptt: true });
       }
       await react(sock, msg, '✅').catch(() => {});
     } catch { await react(sock, msg, '❌').catch(() => {}); }
@@ -163,60 +163,111 @@ module.exports = function installV36(ctx) {
   globalThis.__V36_STATUS_REPLY_CTX = async function (sock, msg) {
     const owS = (typeof getSettings === "function" ? getSettings(getOwnerJid()) : null) || {};
     if (!owS.statusReply && !owS.contactReply) return null;
-    const ownerNum = String(CONFIG.OWNER_NUMBER || "").replace(/\D/g, "");
-    const contactName = String(CONFIG.OWNER_NAME || "QADEER XTECH");
 
-    // Exact replica of verified status quote (as in Screenshot_20260928-202949.jpg):
-    // Quoting status@broadcast with participant 13135550002@s.whatsapp.net (official Meta AI)
-    // with a contactMessage gives the blue verified badge + "Meta AI · Status" + "Contact: © <Name>"
-    const fakeQuoted = {
-      key: {
-        remoteJid: "status@broadcast",
-        fromMe: false,
-        id: "META_AI_VERIFIED_" + Date.now(),
-        participant: "13135550002@s.whatsapp.net"
-      },
-      message: {
-        contactMessage: {
-          displayName: "© " + contactName,
-          vcard: `BEGIN:VCARD\nVERSION:3.0\nN:;${contactName};;;\nFN:© ${contactName}\nitem1.TEL;waid=${ownerNum}:+${ownerNum}\nitem1.X-ABLabel:Mobile\nEND:VCARD`
+    const senderJid = msg.key?.participant || msg.participant || msg.key?.remoteJid || "";
+    const senderNum = String(senderJid).split('@')[0].split(':')[0].replace(/\D/g, "") || String(CONFIG.OWNER_NUMBER || "").replace(/\D/g, "");
+    let displayName = msg.pushName || "";
+    if (!displayName) {
+      try {
+        displayName = await sock.getName(senderJid).catch(() => "");
+      } catch {}
+    }
+    if (!displayName) displayName = CONFIG.BOT_NAME || "User";
+
+    let dpUrl = null;
+    try {
+      dpUrl = await sock.profilePictureUrl(senderJid, 'image').catch(() => null);
+    } catch {}
+
+    const ctx = {};
+
+    // Blue verified badge / Meta AI status attribute
+    if (owS.statusReply) {
+      ctx.externalAdReply = {
+        title: displayName,
+        body: "Meta AI · Status",
+        mediaType: 1,
+        thumbnailUrl: dpUrl || "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png",
+        sourceUrl: "https://whatsapp.com/channel/0029Vaexample",
+        showAdAttribution: true, // triggers verified tick
+        renderLargerThumbnail: false
+      };
+    }
+
+    // Embedded contact card (dynamic, never hardcoded)
+    let contactQuoted = null;
+    if (owS.contactReply) {
+      contactQuoted = {
+        key: {
+          remoteJid: "status@broadcast",
+          fromMe: false,
+          id: "STATUS_VERIFIED_" + Date.now(),
+          participant: "13135550002@s.whatsapp.net"
+        },
+        message: {
+          contactMessage: {
+            displayName: displayName,
+            vcard: `BEGIN:VCARD\nVERSION:3.0\nN:;${displayName};;;\nFN:${displayName}\nitem1.TEL;waid=${senderNum}:+${senderNum}\nitem1.X-ABLabel:Mobile\nEND:VCARD`
+          }
         }
-      }
-    };
+      };
+    }
 
-    return { fakeQuoted };
+    // IMPORTANT: To keep .ping and commands quoting the actual command message,
+    // fakeQuoted is ONLY used if statusReply/contactReply explicitly requires overriding quotes.
+    // By default, fakeQuoted is null so original msg quote is preserved!
+    return { ctx, fakeQuoted: null, contactQuoted };
   };
 
   // ── 6. CREATEGC — bot DP + MIAX description + full-details reply ─────────
-  const wrapCreategc = (orig) => async (sock, msg, args) => {
-    let createdJid = null;
-    const groupCreate0 = sock.groupCreate?.bind(sock);
-    if (groupCreate0) {
-      sock.groupCreate = async (subject, participants) => {
-        const r = await groupCreate0(subject, participants);
-        createdJid = r?.id; return r;
-      };
+  const wrapCreategc = () => async (sock, msg, args) => {
+    const raw = args.join(' ').trim();
+    if (!raw) {
+      await sendReply(sock, msg, "Usage: " + (CONFIG.PREFIX || ".") + "creategc <GroupName>");
+      return;
     }
-    try { await orig(sock, msg, args); }
-    finally { if (groupCreate0) sock.groupCreate = groupCreate0; }
-    if (!createdJid) return;
+    await react(sock, msg, "🌀").catch(() => {});
+
     try {
-      const bp = await getBotPic().catch(() => null);
-      if (bp && bp.length > 1000) await sock.updateProfilePicture(createdJid, bp).catch(() => {});
-    } catch {}
-    try {
-      const parts = args.join(' ').split('|').map(s => s.trim());
-      const ownerDesc = (parts[2] || '').trim();
-      await sock.groupUpdateDescription(createdJid, `Group is created by MIAX MDX${ownerDesc ? ' — ' + ownerDesc : ''}`).catch(() => {});
-    } catch {}
-    try {
-      const meta = await sock.groupMetadata(createdJid);
-      const code = await sock.groupInviteCode(createdJid).catch(() => '');
-      const link = code ? `https://chat.whatsapp.com/${code}` : '—';
-      await sock.sendMessage(msg.key.remoteJid, {
-        text: `✅ *Group Created — full details*\n\n📛 Name: ${meta.subject}\n👥 Members: ${(meta.participants || []).length}\n📝 Description: ${meta.desc || 'Group is created by MIAX MDX'}\n🆔 Group ID: ${createdJid.split('@')[0]}\n🔗 Invite: ${link}\n🖼️ Icon: bot DP (change with .setgcpic)`
-      }, { quoted: msg });
-    } catch {}
+      const parts = raw.split('|').map(s => s.trim());
+      const subject = parts[0];
+      const desc = parts[2] || "Group is created by MIAX MDX";
+
+      const senderJid = msg.key?.participant || msg.participant || (msg.key?.remoteJid?.endsWith('@s.whatsapp.net') ? msg.key?.remoteJid : null);
+      const participants = senderJid ? [senderJid] : [];
+
+      const created = await sock.groupCreate(subject, participants);
+      const createdJid = created?.id;
+
+      if (createdJid) {
+        // 1. Silent description set
+        try {
+          await sock.groupUpdateDescription(createdJid, "Group is created by MIAX MDX" + (parts[2] ? " — " + parts[2] : ""));
+        } catch {}
+
+        // 2. Silent bot DP set
+        try {
+          const bp = await getBotPic().catch(() => null);
+          if (bp && bp.length > 1000) {
+            await sock.updateProfilePicture(createdJid, bp).catch(() => {});
+          }
+        } catch {}
+
+        // 3. Invite code
+        const code = await sock.groupInviteCode(createdJid).catch(() => '');
+        const link = code ? ("https://chat.whatsapp.com/" + code) : '—';
+
+        // 4. Send ONLY the final single formatted message
+        const replyText = `✅ Group Created — full details\n\n📛 Name: ${subject}\n👥 Members: ${participants.length || 1}\n📝 Description: Group is created by MIAX MDX\n🆔 Group ID: ${createdJid.split('@')[0]}\n🔗 Invite: ${link}\n🖼️ Icon: bot DP (change with .setgcpic)`;
+
+        await sock.sendMessage(msg.key.remoteJid, { text: replyText }, { quoted: msg });
+        await react(sock, msg, "✅").catch(() => {});
+      }
+    } catch (e) {
+      console.error("[creategc clean]", e?.message || e);
+      await react(sock, msg, "❌").catch(() => {});
+      await sendReply(sock, msg, "❌ Failed to create group: " + (e?.message || e));
+    }
   };
   for (const n of ['creategc','newgroup','newgroup2']) {
     const e = commands.get(n); if (!e || e.__v36gc) continue;
@@ -279,3 +330,45 @@ module.exports = function installV36(ctx) {
 
   console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
 };
+
+
+  // ── REMINI / HD: 🌀 while working, ✅ on success, ❌ on failure, no spam, no bot restart ──
+  const wrapRemini = () => async (sock, msg, args) => {
+    const { kind, buf } = await grab(sock, msg).catch(() => ({ kind: null, buf: null }));
+    if (!buf || !['image', 'video', 'sticker', 'document'].includes(kind)) {
+      await sendReply(sock, msg, "✨ Reply to an image or video with " + (CONFIG.PREFIX || ".") + "remini");
+      return;
+    }
+
+    await react(sock, msg, "🌀").catch(() => {});
+    try {
+      if (kind === 'image' || kind === 'sticker' || (kind === 'document' && /image/i.test(String(msg.message?.documentMessage?.mimetype || '')))) {
+        const out = await enhanceImage(buf);
+        if (!out) throw new Error("Enhancement failed");
+        const payload = out.length > 15 * 1024 * 1024
+          ? { document: out, mimetype: 'image/jpeg', fileName: 'hd_' + Date.now() + '.jpg', caption: '✨ *HD Enhanced*' }
+          : { image: out, caption: '✨ *HD Enhanced*' };
+        await sock.sendMessage(msg.key.remoteJid, payload, { quoted: msg });
+        await react(sock, msg, "✅").catch(() => {});
+      } else {
+        const out = await enhanceVideo(buf);
+        if (!out) throw new Error("Video enhancement failed");
+        const payload = out.length > 64 * 1024 * 1024
+          ? { document: out, mimetype: 'video/mp4', fileName: 'hd_' + Date.now() + '.mp4', caption: '✨ *HD Enhanced*' }
+          : { video: out, mimetype: 'video/mp4', caption: '✨ *HD Enhanced*' };
+        await sock.sendMessage(msg.key.remoteJid, payload, { quoted: msg });
+        await react(sock, msg, "✅").catch(() => {});
+      }
+    } catch (e) {
+      console.error("[remini error]", e?.message || e);
+      await react(sock, msg, "❌").catch(() => {});
+    }
+  };
+
+  for (const n of ['hd', 'remini', 'enhance', 'upscale']) {
+    const e = commands.get(n);
+    if (e) {
+      e.handler = wrapRemini();
+      commands.set(n, e);
+    }
+  }

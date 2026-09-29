@@ -33,7 +33,47 @@ function _truncate(str, max) {
 }
 // strip control chars ONLY — every real character (styled letters, emoji,
 // Arabic, CJK, ZWJ sequences) is preserved so it can never become "?"
+
+// Transliterate Mathematical Alphanumeric Symbols & fancy stylized Unicode to ASCII Latin
+function _unfancy(str) {
+  if (!str) return "";
+  let out = "";
+  for (const char of String(str)) {
+    const cp = char.codePointAt(0);
+    // Mathematical Alphanumeric Symbols: 0x1D400 - 0x1D7FF
+    if (cp >= 0x1D400 && cp <= 0x1D7FF) {
+      // Bold, Italic, Bold Italic, Script, Bold Script, Fraktur, Double-struck, etc.
+      // Modulo 52/26 mapping to A-Z, a-z
+      if (cp >= 0x1D400 && cp <= 0x1D433) out += String.fromCharCode(cp <= 0x1D419 ? 65 + (cp - 0x1D400) : 97 + (cp - 0x1D41A)); // Bold
+      else if (cp >= 0x1D434 && cp <= 0x1D467) out += String.fromCharCode(cp <= 0x1D44D ? 65 + (cp - 0x1D434) : 97 + (cp - 0x1D44E)); // Italic
+      else if (cp >= 0x1D468 && cp <= 0x1D49B) out += String.fromCharCode(cp <= 0x1D481 ? 65 + (cp - 0x1D468) : 97 + (cp - 0x1D482)); // Bold Italic
+      else if (cp >= 0x1D49C && cp <= 0x1D4CF) out += String.fromCharCode(cp <= 0x1D4B5 ? 65 + (cp - 0x1D49C) : 97 + (cp - 0x1D4B6)); // Script
+      else if (cp >= 0x1D4D0 && cp <= 0x1D503) out += String.fromCharCode(cp <= 0x1D4E9 ? 65 + (cp - 0x1D4D0) : 97 + (cp - 0x1D4EA)); // Bold Script
+      else if (cp >= 0x1D504 && cp <= 0x1D537) out += String.fromCharCode(cp <= 0x1D51D ? 65 + (cp - 0x1D504) : 97 + (cp - 0x1D51E)); // Fraktur
+      else if (cp >= 0x1D538 && cp <= 0x1D56B) out += String.fromCharCode(cp <= 0x1D551 ? 65 + (cp - 0x1D538) : 97 + (cp - 0x1D552)); // Double-struck
+      else if (cp >= 0x1D56C && cp <= 0x1D59F) out += String.fromCharCode(cp <= 0x1D585 ? 65 + (cp - 0x1D56C) : 97 + (cp - 0x1D586)); // Bold Fraktur
+      else if (cp >= 0x1D5A0 && cp <= 0x1D5D3) out += String.fromCharCode(cp <= 0x1D5B9 ? 65 + (cp - 0x1D5A0) : 97 + (cp - 0x1D5BA)); // Sans-serif
+      else if (cp >= 0x1D5D4 && cp <= 0x1D607) out += String.fromCharCode(cp <= 0x1D5ED ? 65 + (cp - 0x1D5D4) : 97 + (cp - 0x1D5EE)); // Sans-serif Bold
+      else if (cp >= 0x1D608 && cp <= 0x1D63B) out += String.fromCharCode(cp <= 0x1D621 ? 65 + (cp - 0x1D608) : 97 + (cp - 0x1D622)); // Sans-serif Italic
+      else if (cp >= 0x1D63C && cp <= 0x1D66F) out += String.fromCharCode(cp <= 0x1D655 ? 65 + (cp - 0x1D63C) : 97 + (cp - 0x1D656)); // Sans-serif Bold Italic
+      else if (cp >= 0x1D670 && cp <= 0x1D6A3) out += String.fromCharCode(cp <= 0x1D689 ? 65 + (cp - 0x1D670) : 97 + (cp - 0x1D68A)); // Monospace
+      else if (cp >= 0x1D7CE && cp <= 0x1D7FF) out += String.fromCharCode(48 + ((cp - 0x1D7CE) % 10)); // Digits
+      else out += char;
+    } else if (cp >= 0xFF01 && cp <= 0xFF5E) {
+      // Fullwidth ASCII
+      out += String.fromCharCode(cp - 0xFEE0);
+    } else if (cp >= 0x24B6 && cp <= 0x24E9) {
+      // Circled Latin
+      out += String.fromCharCode(cp <= 0x24CF ? 65 + (cp - 0x24B6) : 97 + (cp - 0x24D0));
+    } else {
+      out += char;
+    }
+  }
+  return out;
+}
+
 function _sanitize(str) {
+  str = _unfancy(str);
   return String(str || '')
     .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
