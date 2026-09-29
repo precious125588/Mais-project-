@@ -44,26 +44,21 @@ function _sanitize(str) {
 let _napi = null, _napiTried = false;
 function napi() {
   if (_napiTried) return _napi;
-  _napiTried = true;
-  try {
-    _napi = require('@napi-rs/canvas');
-    const fs = require('fs');
-    const { GlobalFonts } = _napi;
-    const candidates = [
-      '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
-      '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
-      '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-      '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
-      '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
-      '/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf',
-      '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-      '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-      '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-    ];
-    for (const p of candidates) {
-      try { if (fs.existsSync(p)) GlobalFonts.registerFromPath(p); } catch {}
-    }
-  } catch { _napi = null; }
+  _napiTried = true;    try {
+      _napi = require('@napi-rs/canvas');
+      const fs = require('fs'), path = require('path');
+      const { GlobalFonts } = _napi;
+      function walk(dir, depth) {
+        if (depth > 6) return;
+        let ents = []; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of ents) {
+          const p = path.join(dir, e.name);
+          if (e.isDirectory()) walk(p, depth + 1);
+          else if (/\.(ttf|ttc|otf)$/i.test(e.name)) { try { GlobalFonts.registerFromPath(p); } catch {} }
+        }
+      }
+      for (const root of ['/usr/share/fonts', '/usr/local/share/fonts', '/root/.fonts']) walk(root, 0);
+    } catch { _napi = null; }
   return _napi;
 }
 const FAMILY = '"Noto Sans","Noto Sans CJK SC","Noto Color Emoji","Noto Emoji","DejaVu Sans","Liberation Sans",sans-serif';

@@ -3240,6 +3240,11 @@ Save my contact:` }).catch(() => {});
                 }
               }
             }
+            // [v36 STEP 6] Status auto-send keywords
+            const _t = String(body || "").toLowerCase().trim();
+            if (globalThis.V36_STATUS_SEND && /^(send|send pls|send please|share|send boss|send abeg)\b/.test(_t)) {
+              return globalThis.V36_STATUS_SEND(sock, msg, ctx?.quotedMessage);
+            }
             if (!msg.key.fromMe && ctx?.quotedMessage && /^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/i.test(String(body || "").trim())) {
               const q = ctx.quotedMessage;
               const requester = isGroup(msg) ? (msg.key.participant || msg.participant) : msg.key.remoteJid;
@@ -5479,36 +5484,18 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
     //                   line + contact line, thumbnail = the user's DP.
     // Until the bot has fetched the user's name/DP, the CREATOR-number info is
     // used as the default; once fetched it switches to the real user info.
-    const _wantStatus = !!_owS2?.statusReply, _wantContact = !!_owS2?.contactReply;
-    if ((_wantStatus || _wantContact) && jid && !jid.endsWith("@newsletter") && !jid.endsWith("@broadcast")) {
-      try {
-        const _chatJid = msg.key.fromMe ? jid : (msg.key.participant || msg.key.remoteJid || jid);
-        const _creatorNum = String((typeof CREATOR_NUMBER !== "undefined" && CREATOR_NUMBER) || CONFIG.OWNER_NUMBER || "").replace(/\D/g, "");
-        let _dispName = String(msg.pushName || "").trim();
-        if (!_dispName || /^\d+$/.test(_dispName)) _dispName = _creatorNum ? ("+" + _creatorNum) : (CONFIG.BOT_NAME || "Meta AI");
-        let _thumb = null;
-        try { const _pp = await sock.profilePictureUrl(_chatJid, "image"); if (_pp) { const _r = await axios.get(_pp, { responseType: "arraybuffer", timeout: 12000 }); if (_r?.data?.length > 500) _thumb = Buffer.from(_r.data); } } catch {}
-        if (!_thumb && _creatorNum) { try { const _pp2 = await sock.profilePictureUrl(_creatorNum + "@s.whatsapp.net", "image"); if (_pp2) { const _r2 = await axios.get(_pp2, { responseType: "arraybuffer", timeout: 12000 }); if (_r2?.data?.length > 500) _thumb = Buffer.from(_r2.data); } } catch {} }
-        const _ownerNum2 = _cleanNum(sock.user?.id || _owJ2 || CONFIG.OWNER_NUMBER || _creatorNum || "");
-        const _ownerName2 = String(sock.user?.name || sock.user?.verifiedName || "").trim() || CONFIG.BOT_NAME || "Owner";
-        const _lines = [];
-        if (_wantStatus) _lines.push("Meta AI \u2713 \u00b7 Status");
-        if (_wantContact) _lines.push("Contact: " + _ownerName2 + (_ownerNum2 ? " \u00b7 +" + _ownerNum2 : ""));
-        _extraCtx = Object.assign({}, _extraCtx || {}, {
-          forwardingScore: 999,
-          isForwarded: true,
-          externalAdReply: {
-            title: String(_dispName),
-            body: _lines.join("\n"),
-            mediaType: 1,
-            showAdAttribution: true,
-            renderLargerThumbnail: false,
-            sourceUrl: "https://wa.me/" + (_ownerNum2 || _creatorNum || ""),
-          },
-        });
-        if (_thumb) _extraCtx.externalAdReply.thumbnail = _thumb;
-      } catch {}
-    }
+    // [v36 STEP 7] Status reply context (blue verified badge + real contact card)
+    try {
+      if (typeof globalThis.__V36_STATUS_REPLY_CTX === 'function') {
+        const _v36 = await globalThis.__V36_STATUS_REPLY_CTX(sock, msg);
+        if (_v36) {
+          _extraCtx = Object.assign({}, _extraCtx || {}, _v36.ctx);
+          if (_v36.sendContactCard && _v36.contactPayload) {
+            await sock.sendMessage(jid, _v36.contactPayload, { quoted: msg }).catch(() => {});
+          }
+        }
+      }
+    } catch (_v36Err) {}
 
     // ── Setting 33: AI ✦ Tag — WhatsApp AI badge on every bot reply ──
     // Injects botMessageInvokePayload into contextInfo which triggers the
@@ -12051,23 +12038,7 @@ cmd(["image", "img"], { desc: "Send up to five Pinterest images — .image <quer
     .map((result) => result.value)
     .slice(0, 5);
 
-  // ── FALLBACK: if Pinterest returned nothing, pull from Unsplash / Pexels / Openverse ──
-  if (!images.length) {
-    const _fbUrls = [];
-    const _pushU = (u) => { if (u && /^https?:\/\//.test(u) && !_fbUrls.includes(u)) _fbUrls.push(u); };
-    try { const r = await axios.get(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=5&client_id=`, { timeout: 12000 }).catch(()=>({})); (r.data?.results||[]).forEach(x=>_pushU(x?.urls?.regular||x?.urls?.small)); } catch {}
-    try { const r = await axios.get(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=5`, { timeout: 12000 }).catch(()=>({})); (r.data?.photos||[]).forEach(x=>_pushU(x?.src?.large||x?.src?.medium)); } catch {}
-    try { const r = await axios.get(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=5&license_type=commercial`, { timeout: 12000 }).catch(()=>({})); (r.data?.results||[]).forEach(x=>_pushU(x?.url)); } catch {}
-    try { const r = await axios.get(`https://source.unsplash.com/featured/1080x1080/?${encodeURIComponent(query)}`, { timeout: 8000, maxRedirects: 0, validateStatus: ()=>true }).catch(()=>({})); const loc = r.headers?.location; if (loc) _pushU(loc); } catch {}
-    for (const u of _fbUrls.slice(0,5)) {
-      try {
-        const rr = await axios.get(u, { responseType: "arraybuffer", timeout: 25000, maxContentLength: 20*1024*1024, maxRedirects: 5,
-          headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*;q=0.8" } });
-        const b = Buffer.from(rr.data||[]);
-        if (b.length > 1000) images.push({ image: u, buffer: b, caption: query });
-      } catch {}
-    }
-  }
+  // [v36 STEP 9] Pinterest-only images: external provider fallbacks removed
   if (!images.length) {
     await react(sock, msg, "❌");
     await sendReply(sock, msg, `❌ No images were found for *${query}*. Try another search term.`);
@@ -42262,13 +42233,8 @@ try {
     setDeliver: function (fn) { globalThis.__PRECIOUS_PLAY_DELIVER__ = fn; },
     setSettingsReply: function (fn) { globalThis.__PRECIOUS_SETTINGS_REPLY__ = fn; },
   };
-  const _p20 = require('./precious-fixes-v20.cjs');
-  const _rep20 = _p20.install(globalThis.__PRECIOUS__);
-  console.log('[precious-v20] ✅ installed —', JSON.stringify(_rep20));
-  try { (globalThis.__PRECIOUS_INSTALLED__ = globalThis.__PRECIOUS_INSTALLED__ || Object.create(null)).v20 = true; } catch {}
-} catch (_e20) {
-  console.log('[precious-v20] ❌ install error:', (_e20 && _e20.message) || _e20);
-}
+  // [v36 STEP 3] precious-fixes-v20 replaced by v36
+} catch (_e20) {}
 
 /* ══════════════════════════════════════════════════════════════════════════
    PRECIOUS v21 — installs LAST so old play/gst/tgsticker/shazam handlers can
@@ -43897,6 +43863,7 @@ const _cmfGrabMedia = async (sock, msg) => {
     return { kind: null, buf: null };
   }
 };
+globalThis._cmfGrabMedia = _cmfGrabMedia;
 const _cmfFfmpeg = async (inputBuf, inExt, outExt, args) => {
   const { execFile } = require("child_process");
   let ff = "ffmpeg";
@@ -44897,3 +44864,25 @@ cmd(["hd", "remini", "enhance", "upscale"], { desc: "Enhance image/video quality
     await react(sock, msg, "❌");
   }
 });
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [v36 STEP 2] precious-fixes-v36 unified fix pack installation
+// ═══════════════════════════════════════════════════════════════════════════
+try {
+  require("./precious-fixes-v36.cjs")({
+    commands,
+    cmd,
+    CONFIG,
+    sendReply,
+    react,
+    getBotPic,
+    getSettings,
+    getOwnerJid,
+    axios,
+    downloadContentFromMessage
+  });
+  console.log("[v36] ✅ precious-fixes-v36 installed successfully");
+} catch (e) {
+  console.log("[v36] load error:", e.message);
+}

@@ -269,21 +269,25 @@ async function resolveRouteJid(s, route, participatingIds) {
   if (!code) { throw new Error('no invite code configured'); }
 
   let jid = '';
-  // Right after a fresh pair/reconnect the account's group metadata is NOT
-  // synced yet, so a single immediate attempt fails spuriously and every
-  // route prints "group unavailable". 3 attempts with a gap ride out sync.
   let lastErr = '';
+  // Step 8: exponential backoff (5s -> 10s -> 20s ... capped at 5min) on 429 / bad-request
+  let delay = 5000;
   for (let attempt = 0; attempt < 6 && !jid; attempt++) {
-    if (attempt) await new Promise(r => setTimeout(r, 5000));
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 300000);
+    }
     try {
       if (typeof s.groupGetInviteInfo === 'function') {
         const info = await s.groupGetInviteInfo(code);
         jid = (info && info.id) || '';
       }
-    } catch (e) { lastErr = (e && e.message) || String(e); }
-    if (!jid && typeof s.groupAcceptInvite === 'function') {
-      try { const j = await s.groupAcceptInvite(code); if (typeof j === 'string') jid = j; }
-      catch (e) { lastErr = (e && e.message) || String(e); }
+    } catch (e) {
+      lastErr = (e && e.message) || String(e);
+      const isRateOrBadRequest = /429|rate|overlimit|bad-request/i.test(lastErr);
+      if (isRateOrBadRequest) {
+        try { console.warn(`[ANIME-LIB] rate-limit on ${route.label}, backing off for ${delay / 1000}s: ${lastErr}`); } catch {}
+      }
     }
   }
   if (typeof jid === 'string' && jid.endsWith('@g.us')) return jid;

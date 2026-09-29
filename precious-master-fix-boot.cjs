@@ -272,40 +272,18 @@ function installAll(ctx) {
   try { require('./sessionPaths').ensureSessionRoot(); result.sessionRoot = true; }
   catch (e) { pbad('sessionPaths.ensureSessionRoot: ' + (e && e.message)); result.sessionRoot = false; }
 
-  /* 1. v20 — mias/index.js installs it inline (it must exist BEFORE the v26
-     IIFE and v30 tail wrap commands) and sets the registry marker, so this is
-     a guarded no-op. Kept as a fallback for any entry that skipped the inline
-     install. */
-  result.v20 = runPack(multiRequire('./mias/precious-fixes-v20.cjs'), ctx, 'precious-fixes-v20', 'v20');
-
-  /* 2. v21 (mias copy, root fallback) */
-  result.v21 = runPack(multiRequire('./mias/precious-fixes-v21.cjs'), ctx, 'precious-fixes-v21 (mias)', 'v21');
-  if (!result.v21) {
-    result.v21root = runPack(multiRequire('./precious-fixes-v21.cjs'), ctx, 'precious-fixes-v21 (root fallback)', 'v21');
-  } else {
-    plog('precious-fixes-v21 (root) — skipped (mias copy already installed)');
-  }
-
-  /* 3. gst picker */
+  /* [v36 STEP 3] v20, v21, v24, v27, v28, v29 replaced by precious-fixes-v36.cjs
+     Keeping gstPicker and v23rc, disabled conflicting older packs */
+  result.v20 = false;
+  result.v21 = false;
   result.gstPicker = runPack(multiRequire('./mias/precious-gst-picker.cjs'), ctx, 'precious-gst-picker', 'gstPicker');
-
-  /* 4. v23-rc */
   result.v23rc = runPack(multiRequire('./patches/precious-fixes-v23-rc.cjs'), ctx, 'precious-fixes-v23-rc', 'v23rc');
-
-  /* 5. v24 — final override for the older handlers */
-  result.v24 = runPack(multiRequire('./mias/precious-fixes-v24.cjs'), ctx, 'precious-fixes-v24 (final override)', 'v24');
-
-  /* 6. v27 — CORRECT SLOT (after v24, before v28/v29). Was installed at
-        require-time by the injected __V27_PACK_ENTRY__ block, which let v24
-        overwrite it. That block is deleted; this is the only v27 install. */
-  result.v27 = runPack(multiRequire('./precious-fixes-v27.cjs'), ctx, 'precious-fixes-v27', 'v27');
-
-  /* 7. v28 — movie/nkiri reply-quote logic */
-  result.v28 = runPack(multiRequire('./precious-fixes-v28.cjs'), ctx, 'precious-fixes-v28', 'v28');
-
-  /* 8. v29 — master fix pack, DEAD LAST, with deferred retry so it survives
-        the commands map not being exposed yet at require-time. */
-  result.v29 = (function installV29() {
+  result.v24 = false;
+  result.v27 = false;
+  result.v28 = false;
+  result.v29 = false;
+  /* 8. v29 disabled in favor of v36 */
+  const _disabled_v29 = (function installV29() {
     const key = 'v29';
     if (isInstalled(key)) { pskip('precious-fixes-v29 already installed'); return true; }
     const loaded = multiRequire('./precious-fixes-v29.cjs');

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpixman-1-dev \
     libvips-dev \
     ffmpeg \
-    fonts-noto fonts-noto-cjk fonts-noto-color-emoji fonts-dejavu \
+    fonts-noto fonts-noto-math fonts-noto-cjk fonts-noto-color-emoji fonts-dejavu \
     python3 \
     make \
     g++ \
