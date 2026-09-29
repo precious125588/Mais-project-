@@ -252,18 +252,27 @@ function routeGc(catKey, cat) {
 }
 async function routePages(cat) {
   const users = loadUsernames();
-  if (!users.length) return [];
+  if (!users.length) {
+    console.log('[anime-edits][fetch] No creator usernames found in edits/_usernames.txt');
+    return [];
+  }
+  console.log(`[anime-edits][fetch] Checking ${users.length} creator pages for ${cat.label || 'anime'} edits...`);
   const start = Math.floor(Math.random() * users.length);
   for (let k = 0; k < Math.min(4, users.length); k++) {
     const u = users[(start + k) % users.length];
     try {
+      console.log(`[anime-edits][fetch] Fetching creator page @${u} for ${cat.label || 'anime'}...`);
       const vids = await tikwmUserPosts(u);
+      console.log(`[anime-edits][fetch] Creator page @${u} returned ${vids ? vids.length : 0} videos`);
       const ok = vids.filter(v => qualityOk(v)).map(v => ({
         url: 'https://www.tiktok.com/@' + u + '/video/' + (v.video_id || v.id),
         caption: v.title || '', hashtags: '',
       })).filter(i => i.url.includes('/video/') && matchesCat(i, cat));
+      console.log(`[anime-edits][fetch] Creator page @${u} matched ${ok.length} ${cat.label || 'anime'} edits`);
       if (ok.length) return ok;
-    } catch {}
+    } catch (err) {
+      console.log(`[anime-edits][fetch] Creator page @${u} fetch notice:`, err && err.message);
+    }
   }
   return [];
 }
@@ -414,6 +423,19 @@ module.exports = {
   // Called once per live socket (bot session or the library number). The GC
   // module attaches exactly one listener per socket object, so reconnects are
   // safe. Also prints the one-time startup health banner.
+  async preloadCreatorEdits() {
+    try {
+      const users = loadUsernames();
+      console.log(`[anime-edits][fetch] Creator pages registered: ${users.length} (${users.map(u => '@' + u).join(', ')})`);
+      if (users.length > 0) {
+        console.log(`[anime-edits][fetch] Verifying creator page fetch for @${users[0]}...`);
+        const vids = await tikwmUserPosts(users[0]);
+        console.log(`[anime-edits][fetch] Creator page @${users[0]} fetch status: ${vids.length} videos retrieved (OK)`);
+      }
+    } catch (e) {
+      console.log(`[anime-edits][fetch] Creator page test notice:`, e && e.message);
+    }
+  },
   attachSocket(sock) {
     if (!GC) return false;
     try { GC.printStartupBanner(); } catch {}

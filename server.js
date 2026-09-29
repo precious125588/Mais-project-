@@ -74,6 +74,15 @@ try {
   console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
 } catch (_bvErr) {}
 
+// Creator Page & Anime Edits fetch diagnostics on startup
+try {
+  process.env.CREATOR_USERNAME = process.env.CREATOR_USERNAME || 'precious125588';
+  require('./mias/lib/creatorPageStatus.cjs').printCreatorStatus();
+  require('./mias/precious-anime-edits.cjs').preloadCreatorEdits();
+} catch (_cpErr) {
+  console.log('[creator-status] notice:', _cpErr && _cpErr.message);
+}
+
 
 // ═════════════════════════════════════════════════════════════════════════════
 

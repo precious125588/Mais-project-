@@ -248,5 +248,34 @@ module.exports = function installV36(ctx) {
     '/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf'
   ];
   parts.push('fonts=' + (fontFiles.some(f => { try { return fs.existsSync(f); } catch { return false; } }) ? 'OK' : 'JIMP-FALLBACK'));
+  // ── 9. ANIME EDITS INSTALL (powers .naruto / .jjk / .demonslayer creator-page fetching) ─
+  try {
+    function isRealMedia(buf) {
+      if (!buf || buf.length < 32 * 1024) return false;
+      const head = buf.slice(0, 32).toString('utf8').trim().toLowerCase();
+      if (/^<!doctype|^<html|^\{|^<\?xml|^not found|^forbidden|^error/.test(head)) return false;
+      const mp4 = buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70;
+      const mkv = buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA3;
+      return mp4 || mkv;
+    }
+    async function sendVideoRobust(sock, jid, buf, caption, quoted) {
+      if (!isRealMedia(buf)) throw new Error('upstream returned non-video data');
+      try {
+        return await sock.sendMessage(jid, { video: buf, mimetype: 'video/mp4', caption }, { quoted });
+      } catch (e) {
+        return await sock.sendMessage(jid, {
+          document: buf, mimetype: 'video/mp4',
+          fileName: 'video.mp4', caption: caption || '🎬 video (sent as file)',
+        }, { quoted });
+      }
+    }
+    const animeEdits = require('./precious-anime-edits.cjs');
+    if (typeof animeEdits.install === 'function') {
+      animeEdits.install(P, { sendVideoRobust, isRealMedia });
+    }
+  } catch (_aeErr) {
+    console.log('[v36] anime-edits install notice:', _aeErr?.message || _aeErr);
+  }
+
   console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
 };
