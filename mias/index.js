@@ -8372,35 +8372,20 @@ function buildMenu(jid, senderName, sender) {
 
 
 cmd(["allmenu", "fullmenu"], {
-  desc: "Display all bot commands across all categories with bot info attachments and cover photo",
+  desc: "Display all bot commands across all categories attached with bot info and cover photo in a single message",
   category: "main",
   react: "📜"
 }, async ({ sock, msg, jid, sender, senderName, args }) => {
   try {
     const userQuote = _randomMenuQuoteForUser(sender || jid);
-    const botPic = await getBotPic();
+    let botPic = null;
+    try { botPic = await getBotPic(); } catch (_) {}
     const botName = CONFIG.BOT_NAME || "MAIS MDX";
     const botOwner = CONFIG.OWNER_NAME || "Precious";
+    const botJid = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
+    const botNumber = botJid.split("@")[0] || "Bot";
 
-    // 1. Send bot info attachment at top (vCard / document)
-    try {
-      const vcard = 'BEGIN:VCARD\n'
-        + 'VERSION:3.0\n'
-        + `FN:${botName}\n`
-        + `ORG:${botName} Official Bot;\n`
-        + `TEL;type=CELL;type=VOICE;waid=${(sock.user?.id || '').split(':')[0] || ''}:+${(sock.user?.id || '').split(':')[0] || ''}\n`
-        + 'END:VCARD';
-      await sock.sendMessage(jid, {
-        contacts: {
-          displayName: botName,
-          contacts: [{ vcard }]
-        }
-      }, { quoted: msg });
-    } catch (e) {
-      console.error('[ALLMENU] vCard attachment failed:', e.message);
-    }
-
-    // 2. Build complete allmenu text with all categories and commands
+    // Build complete allmenu text with all categories and commands
     const grouped = {};
     for (const c of COMMANDS) {
       const cat = (c.category || "other").toUpperCase();
@@ -8410,6 +8395,7 @@ cmd(["allmenu", "fullmenu"], {
 
     let allText = `┏━━━〔 🌟 *${botName.toUpperCase()} ALL-MENU* 🌟 〕━━━┓\n`;
     allText += `┃ 👑 *Owner:* ${botOwner}\n`;
+    allText += `┃ 🤖 *Bot:* @${botNumber}\n`;
     allText += `┃ 👤 *User:* ${senderName || "User"}\n`;
     allText += `┃ ⚡ *Mode:* ${isPublic ? "PUBLIC" : "PRIVATE"}\n`;
     allText += `┃ 📦 *Total Commands:* ${COMMANDS.length}\n`;
@@ -8429,12 +8415,46 @@ cmd(["allmenu", "fullmenu"], {
     }
     allText += `> © ${botName} • All rights reserved.`;
 
-    // 3. Send image with allText caption
+    const mentions = [sender, botJid].filter(Boolean);
+
+    // Send attached together in ONE message:
+    // A document message with the bot DP as thumbnail/attachment header and complete allmenu caption
     if (botPic && Buffer.isBuffer(botPic)) {
-      await sock.sendMessage(jid, { image: botPic, caption: allText }, { quoted: msg });
-    } else {
-      await sendReply(sock, msg, allText);
+      try {
+        await sock.sendMessage(jid, {
+          document: botPic,
+          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          fileName: `👑 ${botName} • @${botNumber} [${COMMANDS.length} CMDS]`,
+          fileLength: 999999999999,
+          pageCount: 2026,
+          caption: allText,
+          jpegThumbnail: botPic,
+          mentions,
+          contextInfo: {
+            mentionedJid: mentions,
+            forwardingScore: 999,
+            isForwarded: true
+          }
+        }, { quoted: msg });
+        return;
+      } catch (errDoc) {
+        console.error('[ALLMENU] Document send fallback to image:', errDoc.message);
+        // Fallback: single image message with caption
+        await sock.sendMessage(jid, {
+          image: botPic,
+          caption: allText,
+          mentions,
+          contextInfo: {
+            mentionedJid: mentions,
+            forwardingScore: 999,
+            isForwarded: true
+          }
+        }, { quoted: msg });
+        return;
+      }
     }
+
+    await sendReply(sock, msg, allText);
   } catch (err) {
     console.error('[ALLMENU ERROR]', err);
     await sendReply(sock, msg, `❌ Failed to generate allmenu: ${err.message}`);
