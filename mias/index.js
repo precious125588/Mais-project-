@@ -2384,6 +2384,33 @@ async function connectToWA(force = false) {
         // the 25s keepalive heartbeat fired, which made the bot look
         // dead and discouraged users from sending commands.
         try { await sock.sendPresenceUpdate("available").catch(() => {}); } catch {}
+        // ── ANONYMOUS MODE (Settings 37) — invisible online/last-seen, one-tick reads ──
+        try {
+          if (!sock.__miasAnonWrap) {
+            sock.__miasAnonWrap = true;
+            const _anonOn = () => { try { return !!(getSettings(getOwnerJid())?.anonymous); } catch { return false; } };
+            const _spu = sock.sendPresenceUpdate.bind(sock);
+            sock.sendPresenceUpdate = async (type, toJid) => { if (_anonOn() && type !== "unavailable") return; return _spu(type, toJid); };
+            if (typeof sock.readMessages === "function") {
+              const _rm = sock.readMessages.bind(sock);
+              sock.readMessages = async (...a) => { if (_anonOn()) return; return _rm(...a); };
+            }
+            if (typeof sock.sendNode === "function") {
+              const _sn = sock.sendNode.bind(sock);
+              sock.sendNode = (frame) => { try { if (_anonOn() && frame && frame.tag === "receipt") return; } catch {} return _sn(frame); };
+            }
+          }
+          // apply WA privacy (last seen / online / profile / status / read receipts) once per toggle
+          const _aS = getSettings(getOwnerJid());
+          if (_aS && _aS.anonymous !== _aS._anonPrivacyApplied) {
+            const _pairs = _aS.anonymous
+              ? [["last","none"],["online","match_last_seen"],["profile","none"],["status","none"],["readreceipts","none"]]
+              : [["last","all"],["online","all"],["profile","all"],["status","all"],["readreceipts","all"]];
+            for (const [k, v] of _pairs) { try { await sock.updatePrivacySettings(k, v); } catch {} }
+            _aS._anonPrivacyApplied = _aS.anonymous;
+            try { saveNow && saveNow(); } catch {}
+          }
+        } catch {}
         // v4.9.5 FIX: pre-warm app-state keys 5s after connect so pin/archive/clear
         // work immediately without waiting for a "not yet synced" error.
         setTimeout(() => { try { if (typeof sock.resyncAppState === "function") sock.resyncAppState(["critical_block","critical_unblock_low","regular","regular_low","regular_high"], false).catch(() => {}); } catch {} }, 5000);
@@ -2841,7 +2868,7 @@ async function connectToWA(force = false) {
                   }
                 } catch {}
               }
-              if (_ownerSStatus?.viewStatus && !_isExcluded && !_isMuted) {
+              if (_ownerSStatus?.viewStatus && !_ownerSStatus?.anonymous && !_isExcluded && !_isMuted) {
                 // Mark as viewed — supports optional queue/delay (statusViewDelay setting)
                 const _vDelay = Math.max(0, Number(_ownerSStatus?.statusViewDelay) || 0);
                 const _doMarkViewed = async () => {
@@ -2978,7 +3005,9 @@ Save my contact:` }).catch(() => {});
             // few lines below (rows are no longer BTN:-prefixed, so they
             // reach __miasHandleBareNumberReply unchanged).
             const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
-            if (_pickerChoice && (_pickerActive || _v32HasQuote || /reply with the number|reply with 1|reply here with a number|PLAYER/i.test((typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||""))) {
+            const _pQtxt = (typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||"";
+            const _pIsSettingsPanel = /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(_pQtxt);
+            if (!_pIsSettingsPanel && _pickerChoice && (_pickerActive || (_v32HasQuote && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test(_pQtxt)))) {
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
             }
           } catch (_pickerFirstErr) {
@@ -2998,7 +3027,8 @@ Save my contact:` }).catch(() => {});
               // like a picker choice AND (a picker is pending OR the reply
               // quotes a picker/player card).
               const _v28Quoted = !!__ttQuotedContext(msg)?.quotedMessage;
-              if (__miasHasPendingPicker(msg.key.remoteJid) || (_v28Quoted && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test((typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||""))) {
+              const _v28Qtxt = (typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||"";
+              if (__miasHasPendingPicker(msg.key.remoteJid) || (_v28Quoted && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test(_v28Qtxt) && !/SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(_v28Qtxt))) {
                 const _v28c = __miasNormalizeChoice(body);
                 if (_v28c && /^(?:pick\s+)?\d{1,2}(?:\.\d{1,2})?$/.test(String(_v28c).trim())) {
                   // Route through the bare-number dispatcher first — it owns
@@ -6169,7 +6199,7 @@ const _statusBlueCard = () => {
         body: "Meta AI · Status",
         thumbnailUrl: "https://files.catbox.moe/5axb5a.jpg",
         mediaType: 1,
-        showAdAttribution: true,
+        showAdAttribution: false,
         renderLargerThumbnail: false,
       },
     };
@@ -8561,6 +8591,10 @@ function buildSettingsMenu(jid) {
 ╭━━❮ *𝗔𝗜 ✦ 𝗧𝗮𝗴* ❯━━╮
 ┃ 33.1 ᴇɴᴀʙʟᴇ  ${s.aiTag ? "✅" : ""}
 ┃ 33.2 ᴅɪsᴀʙʟᴇ  ${!s.aiTag ? "✅" : ""}
+┃
+┃ 🕶️ *37 — ANONYMOUS MODE*
+┃ 37.1 ᴇɴᴀʙʟᴇ  ${s.anonymous ? "✅" : ""}
+┃ 37.2 ᴅɪꜱᴀʙʟᴇ  ${!s.anonymous ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
 _Reply: *<section>.<option>* — e.g. *1.1* or *7.2*_
@@ -8646,6 +8680,8 @@ const SETTINGS_MAP = {
   "30.2": s => { s.autoDlChat = false; if (typeof saveNow === "function") saveNow(); return "{ autodlchat off }"; },
   "36.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
   "36.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
+  "37.1": s => { s.anonymous = true;  return "🕶️ Anonymous Mode: ON\n_Nobody sees you online or your last seen — every chat you read stays on ONE tick._"; },
+  "37.2": s => { s.anonymous = false; return "✅ Anonymous Mode: OFF\n_Your online presence and read receipts are visible again._"; },
   "31.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
   "31.2": s => { s.contactReply = false; return "{ contactreply off }"; },
   "32.1": s => { s.statusReply = true;  return "{ statusreply on }"; },
@@ -8705,7 +8741,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       chatbot: ["21.1", "21.2"], ownerreact: ["22.1", "22.2"], adultmode: ["23.1", "23.2"],
       antimention: ["26.1", "26.2"], antibug: ["27.1", "27.2"], forceprivate: ["28.1", "28.2"],
       statusforwarder: ["30.1", "30.2"], contactreply: ["31.1", "31.2"], statusreply: ["32.1", "32.2"],
-      aitag: ["33.1", "33.2"], antibroadcast: ["34.1", "34.2"],
+      aitag: ["33.1", "33.2"], antibroadcast: ["34.1", "34.2"], anonymous: ["37.1", "37.2"],
     };
     const _btnPropMap = {
       blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReact", autoblock: "autoBlock",
@@ -8957,7 +8993,7 @@ cmd(["setting", "settings", "config"], { desc: "Open bot settings", category: "S
     if (inGroup && !isAdmin) { await sendReply(sock, msg, "🚫 Admins/Owner only."); return; }
     if (!inGroup) { await sendReply(sock, msg, "🚫 Owner only."); return; }
   }
-  settingsSession.set(jid, { sender }); setTimeout(() => settingsSession.delete(jid), 120000);
+  settingsSession.set(jid, { sender, ts: Date.now() }); setTimeout(() => settingsSession.delete(jid), 120000);
   const s = getSettings(jid);
   const settingsPic = await getBotPic().catch(() => null);
   const footerText = `${CONFIG.BOT_NAME} v${CONFIG.VERSION} • Tap to toggle`;
@@ -9002,6 +9038,7 @@ cmd(["setting", "settings", "config"], { desc: "Open bot settings", category: "S
         { id: "16.1", title: `Recording Status [${s.recording ? "ON" : "OFF"}]`, description: "Show 'recording audio...' presence" },
         { id: "17.1", title: `Typing Status [${s.typing ? "ON" : "OFF"}]`, description: "Show 'typing...' presence" },
         { id: "18.1", title: `Always Online [${s.alwaysOnline ? "ON" : "OFF"}]`, description: "Keep bot account active/online" },
+        { id: "37.1", title: `Anonymous Mode [${s.anonymous ? "ON" : "OFF"}]`, description: "Hide online/last seen — reads stay one tick" },
       ]
     }
   ];
@@ -9311,6 +9348,16 @@ cmd(["forward", "fwd"], { desc: "Forward a quoted message — .forward <number o
 
   const rawTarget = String(args?.[0] || "").trim();
   let targetJid = "";
+  // Group-link support: .forward https://chat.whatsapp.com/<code>
+  const _gcMatch = rawTarget.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
+  if (_gcMatch) {
+    try {
+      const _gj = await sock.groupAcceptInvite(_gcMatch[1]);
+      if (_gj) targetJid = _gj;
+    } catch {
+      try { const _gi = await sock.groupGetInviteInfo(_gcMatch[1]); if (_gi?.id) targetJid = _gi.id; } catch {}
+    }
+  }
   if (rawTarget) {
     if (rawTarget.includes("@")) {
       targetJid = String(resolveLid(rawTarget)).trim().toLowerCase();
@@ -9331,7 +9378,7 @@ cmd(["forward", "fwd"], { desc: "Forward a quoted message — .forward <number o
   }
   if (!targetJid) {
     await react(sock, msg, "❌").catch(() => {});
-    return sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <number|JID>\nExample: ${CONFIG.PREFIX}forward 2348012345678`);
+    return sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <number | JID | group link>\nExample: ${CONFIG.PREFIX}forward 2348012345678\nExample: ${CONFIG.PREFIX}forward https://chat.whatsapp.com/AbCdEf123`);
   }
 
   await react(sock, msg, "🌀").catch(() => {});
@@ -9938,6 +9985,31 @@ async function _p2VideoBuf(meta) {
       { url: ytUrl, downloadMode: 'video', videoQuality: '480' },
       { headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 });
     return res.data && res.data.url ? res.data.url : null;
+  });
+  if (ytUrl) tries.push(async () => {
+    const res = await axios.get('https://api.siputzx.my.id/api/d/ytmp4?url=' + encodeURIComponent(ytUrl), { timeout: 45000 });
+    const d = res.data && (res.data.data || res.data.result);
+    return d ? (d.dl || d.url || d.download || d.video || null) : null;
+  });
+  if (ytUrl) tries.push(async () => {
+    const res = await axios.get('https://api.nekorinn.my.id/downloader/ytmp4?url=' + encodeURIComponent(ytUrl), { timeout: 45000 });
+    const d = res.data && (res.data.result || res.data.data);
+    return d ? (d.downloadUrl || d.dl || d.url || d.mp4 || null) : null;
+  });
+  if (ytUrl) tries.push(async () => {
+    for (const base of ['https://cobalt-backend.canine.tools', 'https://capi.oak.li']) {
+      try {
+        const res = await axios.post(base + '/api/json', { url: ytUrl, downloadMode: 'auto', videoQuality: '720' }, { headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, timeout: 30000 });
+        if (res.data && res.data.url) return res.data.url;
+      } catch {}
+    }
+    return null;
+  });
+  if (ytUrl) tries.push(async () => {
+    const id = _p2YtId(ytUrl); if (!id) return null;
+    const res = await axios.get('https://inv.nadeko.net/api/v1/videos/' + id, { timeout: 20000 });
+    const f = ((res.data && res.data.formatStreams) || []).find(x => x.url && String(x.type || '').indexOf('video') !== -1);
+    return f ? f.url : null;
   });
   if (ytUrl) tries.push(async () => {
     const res = await axios.get('https://p.oceansaver.in/ajax/download.php?format=mp4&url=' + encodeURIComponent(ytUrl), { timeout: 30000 });
@@ -34889,12 +34961,18 @@ const __miasGst = async (sock, msg, args) => {
             const _tinA  = path.join(__dirname, "..", "database", `gst_in_${Date.now()}.bin`);
             const _toutA = _tinA.replace(/\.bin$/, ".ogg");
             fs.writeFileSync(_tinA, buf);
-            _execFF(_ffBin, ["-y", "-i", _tinA, "-vn", "-c:a", "libopus", "-b:a", "64k", _toutA], { stdio: "ignore", timeout: 90000 });
+            _execFF(_ffBin, ["-y", "-i", _tinA, "-vn", "-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1", "-vbr", "on", _toutA], { stdio: "ignore", timeout: 90000 });
             const _convA = fs.readFileSync(_toutA);
             try { fs.unlinkSync(_tinA); } catch {}
             try { fs.unlinkSync(_toutA); } catch {}
             if (_convA.length > 100) { buf = _convA; _rawMedia.mimetype = "audio/ogg; codecs=opus"; }
           } catch (_cvErr) { _v10log(".gst opus convert failed:", _cvErr?.message); }
+        }
+
+        // Hard-fail: never post a raw mp3 to the status ring — that is exactly
+        // what triggers "your version of WhatsApp doesn't support it".
+        if (qInner.kind === "audio" && !/ogg|opus/.test(String(_rawMedia.mimetype || ""))) {
+          return reply("❌ Could not convert audio to WhatsApp status format (ffmpeg unavailable). Install ffmpeg on the host and retry.");
         }
 
         // Step 2 — re-upload via generateWAMessageContent so WA gets a fresh URL
@@ -34903,7 +34981,7 @@ const __miasGst = async (sock, msg, args) => {
         const _uploadInput =
           qInner.kind === "image"    ? { image:    buf, caption: text || (_rawMedia.caption || "") } :
           qInner.kind === "video"    ? { video:    buf, caption: text || (_rawMedia.caption || ""), mimetype: _mime || "video/mp4" } :
-          qInner.kind === "audio"    ? { audio:    buf, mimetype: /ogg|opus/.test(_mime) ? "audio/ogg; codecs=opus" : "audio/mpeg", ptt: /ogg|opus/.test(_mime) } :
+          qInner.kind === "audio"    ? { audio:    buf, mimetype: "audio/ogg; codecs=opus", ptt: true, waveform: Buffer.from(Array.from({ length: 64 }, () => Math.floor(Math.random() * 96))) } :
           qInner.kind === "sticker"  ? { sticker:  buf } :
           { document: buf, fileName: _rawMedia.fileName || "file", mimetype: _mime || "application/octet-stream", caption: text || "" };
 
@@ -42785,9 +42863,12 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
     } catch {}
     let quotedIsSettings = false;
     try {
-      const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-      const t = String(q?.conversation || q?.extendedTextMessage?.text || "");
-      quotedIsSettings = /SETTINGS/i.test(t);
+      const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+        || msg.message?.imageMessage?.contextInfo?.quotedMessage
+        || msg.message?.videoMessage?.contextInfo?.quotedMessage
+        || null;
+      const t = String(q?.conversation || q?.extendedTextMessage?.text || q?.imageMessage?.caption || q?.videoMessage?.caption || q?.caption || "");
+      quotedIsSettings = /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(t);
     } catch {}
     let pickerPending = false;
     try {
@@ -44680,19 +44761,52 @@ globalThis.__miasForwardMark = async (sock, msg, body) => {
 cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message to a number", category: "WHATSAPP", ownerOnly: true }, async (sock, msg, args) => {
   const oKey = _cleanNum(getSender(msg));
   const jid = msg.key.remoteJid;
-  const tRaw = String(args[0]||"").replace(/[^0-9]/g,"");
+  const _fArg0 = String(args[0]||"").trim().replace(/^[{\[<]+|[}\]>]+$/g, "").trim();
+  const _fLink = _fArg0.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
+  let _fGroupJid = "", _fGroupName = "";
+  if (_fLink) {
+    try { _fGroupJid = (await sock.groupAcceptInvite(_fLink[1])) || ""; } catch { try { const _gi = await sock.groupGetInviteInfo(_fLink[1]); _fGroupJid = _gi?.id || ""; _fGroupName = _gi?.subject || ""; } catch {} }
+    if (_fGroupJid && !_fGroupName) { try { const _m2 = await sock.groupMetadata(_fGroupJid); _fGroupName = _m2?.subject || ""; } catch {} }
+  }
+  let _fJidTarget = "";
+  if (!_fGroupJid && _fArg0.includes("@")) {
+    _fJidTarget = String(resolveLid(_fArg0) || _fArg0).trim().toLowerCase();
+    if (_fJidTarget.endsWith("@lid") && isGroup(msg)) {
+      try { const meta = await sock.groupMetadata(msg.key.remoteJid); updateLidMappingsFromMeta(meta); _fJidTarget = resolveLid(_fJidTarget); } catch {}
+    }
+    if (!_fJidTarget.endsWith("@g.us") && !_fJidTarget.endsWith("@broadcast")) _fJidTarget = toStandardJid(_fJidTarget);
+  }
+  const tRaw = (!_fGroupJid && !_fJidTarget) ? String(args[0]||"").replace(/[^0-9]/g,"") : "";
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
   const marked = _fwdMarks.get(oKey) || [];
   if (!marked.length && !ctx?.quotedMessage) { await sendReply(sock, msg, `❌ Reply to a message with ${CONFIG.PREFIX}forward <number>, or mark several with .1 .2 .3 first.`); return; }
-  if (!tRaw || tRaw.length < 7) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <targetNumber>`); return; }
+  if (!_fGroupJid && !_fJidTarget && (!tRaw || tRaw.length < 7)) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <number | JID | group link>\nExample: ${CONFIG.PREFIX}forward 12036302xxxxxxxxx@g.us\nExample: ${CONFIG.PREFIX}forward https://chat.whatsapp.com/xxx`); return; }
   
   try { await react(sock, msg, "🌀"); } catch {}
-  const target = tRaw + "@s.whatsapp.net";
+  const target = _fGroupJid || _fJidTarget || (tRaw + "@s.whatsapp.net");
+  const _fLabel = _fGroupJid ? (_fGroupName || "group " + _fGroupJid.split("@")[0]) : (target.endsWith("@g.us") ? "group " + target.split("@")[0] : (_fJidTarget || "+" + tRaw));
   const items = marked.length ? marked : [{ jid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || jid, _markMsg: msg }];
   let ok = 0, failed = [];
   for (const it of items) {
     try {
       const q = it.q;
+      // FAST PATH: native forward/relay pushes WhatsApp servers to copy the media
+      // directly — instant even for big files, no download/re-upload lag.
+      let sent = false;
+      if (q.imageMessage || q.videoMessage || q.audioMessage || q.stickerMessage || q.documentMessage) {
+        try {
+          const fwdMsg = await sock.sendMessage(target, { forward: { key: { remoteJid: it.jid, id: it.id, fromMe: false, participant: it.from }, message: q }, force: true });
+          if (fwdMsg) sent = true;
+        } catch (_fe) {}
+        if (!sent) {
+          try { await sock.relayMessage(target, q, { messageId: (it.id || "fwd") + "_" + Date.now() }); sent = true; } catch (_re) {}
+        }
+      }
+      if (sent) {
+        ok++;
+        if (it._markMsg) { try { await react(sock, it._markMsg, "✅"); } catch {} }
+        continue;
+      }
       let payload = null;
       if (q.imageMessage) { const st = await downloadContentFromMessage(q.imageMessage,"image"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={image:b, caption:q.imageMessage.caption||""}; }
       else if (q.videoMessage) { const st = await downloadContentFromMessage(q.videoMessage,"video"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={video:b, caption:q.videoMessage.caption||"", mimetype:"video/mp4"}; }
@@ -44707,7 +44821,7 @@ cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message t
   }
   _fwdMarks.delete(oKey);
   try { await react(sock, msg, "✅"); } catch {}
-  await sendReply(sock, msg, `📤 Forwarded *${ok}* message(s) to +${tRaw}${failed.length?`\n❌ ${failed.length} failed`:""}`);
+  await sendReply(sock, msg, `📤 Forwarded *${ok}* message(s) to ${_fLabel}${failed.length?`\n❌ ${failed.length} failed`:""}`);
 });
 
 // ── Download stability: keep bot alive during big/parallel downloads ──
@@ -45264,3 +45378,85 @@ cmd(["timedadd", "tadd"], { desc: "Timed add — .tadd <number> <time> (e.g. 1m,
 
   await sendReply(sock, msg, `⏳ Scheduled: User ++${target} will be added at ${parsed.label}.`);
 });
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PRECIOUS CORE — .reencode (consolidated into the main entry, NO fix-pack)
+   Re-encodes replied video/image so WhatsApp keeps full quality:
+   video → H.264 High / yuv420p / +faststart (the Pinterest-style recipe:
+   proper colour space + faststart moov atom so WA does NOT re-crush it),
+   image → mozjpeg q95 sent as document (zero WA recompression).
+   ═══════════════════════════════════════════════════════════════════════════ */
+try {
+  const _reStore = globalThis.__MIAS_RE_STORE__ || (globalThis.__MIAS_RE_STORE__ = new Map());
+  const _reFfmpeg = () => { try { const p = require("ffmpeg-static"); if (p && typeof p === "string") return p; } catch {} return "ffmpeg"; };
+  const _reRun = (args, ms) => new Promise((res, rej) => require("child_process").execFile(_reFfmpeg(), args, { timeout: ms || 900000 }, e => e ? rej(e) : res()));
+  const _reH = { "1": 2160, "2": 1080, "3": 720 };
+  const _reLbl = { "1": "4K", "2": "1080", "3": "720" };
+
+  cmd(["reencode", "rnc"], { desc: "Re-encode replied video/image so WhatsApp keeps full quality — .reencode (reply to media)", category: "TOOLS" }, async (sock, msg) => {
+    const jid = msg.key.remoteJid;
+    const grabFn = globalThis._cmfGrabMedia || globalThis.__mfGrabMedia;
+    if (typeof grabFn !== "function") { await sendReply(sock, msg, "❌ Media grabber unavailable."); return; }
+    const g = await grabFn(sock, msg);
+    if (!g || !g.kind || !g.buf || !g.buf.length) { await sendReply(sock, msg, `*REENCODE*\n\nReply to a VIDEO or IMAGE with ${CONFIG.PREFIX}reencode`); return; }
+    if (g.kind !== "video" && g.kind !== "image") { await sendReply(sock, msg, "❌ Only a video or an image can be re-encoded."); return; }
+    _reStore.set(jid, { kind: g.kind, buf: g.buf, ts: Date.now() });
+    await react(sock, msg, "🎞️").catch(() => {});
+    await sendReply(sock, msg,
+      "*REENCODE — PICK OUTPUT QUALITY*\n\n" +
+      "1. 4K\n" +
+      "2. 1080\n" +
+      "3. 720\n\n" +
+      "REPLY WITH 1, 2 OR 3 — EXPIRES IN 10 MINUTES.");
+  });
+
+  const _rePrevBNR = (typeof __miasHandleBareNumberReply === "function") ? __miasHandleBareNumberReply : globalThis.__miasHandleBareNumberReply;
+  globalThis.__miasHandleBareNumberReply = async function (sock, msg, body) {
+    try {
+      const jid = msg.key.remoteJid;
+      const choice = String(body || "").trim().replace(/^[`*_~.\s]+|[`*_~.\s]+$/g, "");
+      const pend = _reStore.get(jid);
+      if (pend && (Date.now() - pend.ts) < 10 * 60 * 1000 && /^[1-3]$/.test(choice)) {
+        _reStore.delete(jid);
+        await react(sock, msg, "🌀").catch(() => {});
+        const H = _reH[choice], LBL = _reLbl[choice], inMB = (pend.buf.length / 1048576).toFixed(1);
+        if (pend.kind === "video") {
+          const os2 = require("os"), path2 = require("path"), fs2 = require("fs");
+          const tin = path2.join(os2.tmpdir(), "re_in_" + Date.now() + ".bin");
+          const tout = path2.join(os2.tmpdir(), "re_out_" + Date.now() + ".mp4");
+          try {
+            fs2.writeFileSync(tin, pend.buf);
+            const vf = "scale='if(gt(ih," + H + "),-2,iw)':'if(gt(ih," + H + ")," + H + ",ih)':force_divisible_by=2,setsar=1";
+            await _reRun(["-y", "-i", tin, "-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", tout]);
+            const out = fs2.readFileSync(tout);
+            if (out.length < 10000) throw new Error("empty encoder output");
+            await sock.sendMessage(jid, { video: out, mimetype: "video/mp4", caption: "*REENCODED — " + LBL + "*\n" + inMB + "MB -> " + (out.length / 1048576).toFixed(1) + "MB\nWHATSAPP-SAFE H.264/YUV420P/FASTSTART — NO QUALITY CRUSH." }, { quoted: msg });
+            await react(sock, msg, "✅").catch(() => {});
+          } catch (e) {
+            await react(sock, msg, "❌").catch(() => {});
+            await sendReply(sock, msg, "❌ RE-ENCODE FAILED: " + String(e && e.message || e).slice(0, 150).toUpperCase());
+          } finally { try { fs2.unlinkSync(tin); } catch {} try { fs2.unlinkSync(tout); } catch {} }
+          return true;
+        }
+        try {
+          const sharp = require("sharp");
+          const maxEdge = choice === "1" ? 3840 : choice === "2" ? 1920 : 1280;
+          const metaI = await sharp(pend.buf).metadata();
+          let pipe = sharp(pend.buf);
+          if ((metaI.width || 0) > maxEdge || (metaI.height || 0) > maxEdge) pipe = pipe.resize({ width: maxEdge, height: maxEdge, fit: "inside", withoutEnlargement: true });
+          const out = await pipe.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
+          // WhatsApp-friendly: send as a normal WhatsApp image (preview in chat) so it is not crushed like a raw document upload.
+          await sock.sendMessage(jid, { image: out, mimetype: "image/jpeg", caption: "*REENCODED — " + LBL + "*\n" + inMB + "MB -> " + (out.length / 1048576).toFixed(1) + "MB\nWHATSAPP-FRIENDLY IMAGE — NO QUALITY CRUSH." }, { quoted: msg });
+          await react(sock, msg, "✅").catch(() => {});
+        } catch (e) {
+          await sendReply(sock, msg, "❌ IMAGE RE-ENCODE FAILED: " + String(e && e.message || e).slice(0, 150).toUpperCase());
+        }
+        return true;
+      }
+    } catch {}
+    if (typeof _rePrevBNR === "function") return _rePrevBNR(sock, msg, body);
+    return false;
+  };
+  console.log("[reencode] core command + quality picker armed");
+} catch (_reErr) { console.error("[reencode] init:", _reErr && _reErr.message || _reErr); }

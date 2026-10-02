@@ -46,3 +46,6 @@ cmds = [
 
 [start]
 cmd = "npm start"
+
+[phases.setup]
+aptPkgs = ["ffmpeg", "fonts-noto", "fonts-noto-cjk", "fonts-noto-color-emoji", "fonts-noto-extra", "fonts-dejavu"]

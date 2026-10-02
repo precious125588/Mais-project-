@@ -70,7 +70,7 @@ module.exports = function installV36(ctx) {
     const out = path.join(os.tmpdir(), 'v37_' + Date.now() + '.ogg');
     try {
       fs.writeFileSync(inp, buf);
-      await runFF(['-y', '-i', inp, '-c:a', 'libopus', '-b:a', '64k', '-vbr', 'on', '-compression_level', '10', '-vn', out]);
+      await runFF(['-y', '-i', inp, '-vn', '-c:a', 'libopus', '-b:a', '64k', '-ar', '48000', '-ac', '1', '-vbr', 'on', '-compression_level', '10', out]);
       const ob = fs.readFileSync(out);
       if (ob.length > 100) return ob;
     } catch (e) { console.error('[v37 opus transcode] ' + e.message); }
@@ -100,7 +100,7 @@ module.exports = function installV36(ctx) {
           { audio: mp3, mimetype: 'audio/ogg; codecs=opus', ptt: true, contextInfo: { isGroupStatus: true } },
           { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() });
         await react(sock, msg, '✅').catch(() => {});
-        await sendReply(sock, msg, `🎵 *Audio uploaded to ${meta.subject || 'this group'}*\n✅ Sent to *${members.length}* group members.`);
+        await sendReply(sock, msg, `*AUDIO UPLOADED TO ${String(meta.subject || 'THIS GROUP').toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS.`);
         return;
       }
       if (q.imageMessage || q.videoMessage) {
@@ -118,8 +118,8 @@ module.exports = function installV36(ctx) {
         await sock.sendMessage('status@broadcast', payload,
           { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() });
         await react(sock, msg, '✅').catch(() => {});
-        const lbl = kind === 'image' ? '🖼️ *Image' : '🎬 *Video';
-        await sendReply(sock, msg, `${lbl} uploaded to ${meta.subject || 'this group'}*\n✅ Sent to *${members.length}* group members. (HD enhanced)`);
+        const lbl = kind === 'image' ? '*IMAGE' : '*VIDEO';
+        await sendReply(sock, msg, `${lbl} UPLOADED TO ${String(meta.subject || 'THIS GROUP').toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS. (HD ENHANCED)`);
         return;
       }
     } catch (e) { console.error('[v36 gst] ' + e.message); }
@@ -158,65 +158,46 @@ module.exports = function installV36(ctx) {
     } catch { await react(sock, msg, '❌').catch(() => {}); }
   };
 
-  // ── 5. STATUS/CONTACT REPLY — real blue verified badge + real vCard ──────
-  //     mediaType:1 + showAdAttribution:true is the blue-tick trigger.
+  // ── 5. STATUS/CONTACT REPLY — Meta AI verified-style header, OWNER identity ──
+  //     DP + name come from the BOT OWNER (never the person chatting), the
+  //     "message via ads" attribution tag is gone (showAdAttribution: false),
+  //     and the card quotes through the normal status-reply round logic.
   globalThis.__V36_STATUS_REPLY_CTX = async function (sock, msg) {
-    const owS = (typeof getSettings === "function" ? getSettings(getOwnerJid()) : null) || {};
+    const owJ = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || "";
+    const owS = (typeof getSettings === "function" ? getSettings(owJ) : null) || {};
     if (!owS.statusReply && !owS.contactReply) return null;
 
-    const senderJid = msg.key?.participant || msg.participant || msg.key?.remoteJid || "";
-    const senderNum = String(senderJid).split('@')[0].split(':')[0].replace(/\D/g, "") || String(CONFIG.OWNER_NUMBER || "").replace(/\D/g, "");
-    let displayName = msg.pushName || "";
-    if (!displayName) {
-      try {
-        displayName = await sock.getName(senderJid).catch(() => "");
-      } catch {}
-    }
-    if (!displayName) displayName = CONFIG.BOT_NAME || "User";
-
+    const owNum = String(owJ || CONFIG.OWNER_NUMBER || "").split("@")[0].split(":")[0].replace(/\D/g, "");
+    let ownerName = CONFIG.BOT_NAME || "MAIS";
+    try { const n = await sock.getName(owJ).catch(() => ""); if (n) ownerName = n; } catch {}
     let dpUrl = null;
-    try {
-      dpUrl = await sock.profilePictureUrl(senderJid, 'image').catch(() => null);
-    } catch {}
+    try { dpUrl = await sock.profilePictureUrl(owJ, "image").catch(() => null); } catch {}
 
     const ctx = {};
-
-    // Blue verified badge / Meta AI status attribute
     if (owS.statusReply) {
       ctx.externalAdReply = {
-        title: displayName,
-        body: "Meta AI · Status",
+        title: "Meta AI",
+        body: "✓ Status",
         mediaType: 1,
-        thumbnailUrl: dpUrl || "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png",
-        sourceUrl: "https://whatsapp.com/channel/0029Vaexample",
-        showAdAttribution: true, // triggers verified tick
-        renderLargerThumbnail: false
+        thumbnailUrl: dpUrl || undefined,
+        sourceUrl: "https://www.meta.ai",
+        showAdAttribution: false,   // kills the "message via ads" tag entirely
+        renderLargerThumbnail: false,
       };
     }
-
-    // Embedded contact card (dynamic, never hardcoded)
-    let contactQuoted = null;
-    if (owS.contactReply) {
-      contactQuoted = {
-        key: {
-          remoteJid: "status@broadcast",
-          fromMe: false,
-          id: "STATUS_VERIFIED_" + Date.now(),
-          participant: "13135550002@s.whatsapp.net"
-        },
-        message: {
-          contactMessage: {
-            displayName: displayName,
-            vcard: `BEGIN:VCARD\nVERSION:3.0\nN:;${displayName};;;\nFN:${displayName}\nitem1.TEL;waid=${senderNum}:+${senderNum}\nitem1.X-ABLabel:Mobile\nEND:VCARD`
-          }
-        }
+    if (owS.contactReply && !ctx.externalAdReply) {
+      ctx.externalAdReply = {
+        title: ownerName,
+        body: "✓ Verified",
+        mediaType: 1,
+        thumbnailUrl: dpUrl || undefined,
+        sourceUrl: "https://wa.me/" + owNum,
+        showAdAttribution: false,
+        renderLargerThumbnail: false,
       };
     }
-
-    // IMPORTANT: To keep .ping and commands quoting the actual command message,
-    // fakeQuoted is ONLY used if statusReply/contactReply explicitly requires overriding quotes.
-    // By default, fakeQuoted is null so original msg quote is preserved!
-    return { ctx, fakeQuoted: null, contactQuoted };
+    // fakeQuoted stays null — the user's real command/status quote is preserved.
+    return { ctx, fakeQuoted: null, contactQuoted: null };
   };
 
   // ── 6. CREATEGC — bot DP + MIAX description + full-details reply ─────────

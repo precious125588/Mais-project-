@@ -73,7 +73,10 @@ function _unfancy(str) {
 }
 
 function _sanitize(str) {
-  str = _unfancy(str);
+  // v36b: KEEP styled Unicode as-is — 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺, ◉ ⦿ ⦾ ◍ ◌ ❂ ✺ ✹ ⊙ ◐ ◑ and
+  // emoji all render natively via the Noto/DejaVu font stack. Transliterating
+  // them to plain ASCII destroyed styled usernames, so _unfancy is no longer
+  // applied here (it remains exported for any legacy caller).
   return String(str || '')
     .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
