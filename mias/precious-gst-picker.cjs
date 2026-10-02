@@ -191,26 +191,8 @@ module.exports = {
             payload.caption = customCaption;
           }
 
-          // 1. Post media directly to the target group
-          let directSent = false;
-          try {
-            let sendObj = null;
-            if (payload.kind === 'text') sendObj = { text: payload.text || customCaption || '' };
-            else if (payload.kind === 'image') sendObj = { image: payload.buf, caption: payload.caption || '' };
-            else if (payload.kind === 'video') sendObj = { video: payload.buf, caption: payload.caption || '', mimetype: 'video/mp4' };
-            else if (payload.kind === 'audio') sendObj = { audio: payload.buf, mimetype: 'audio/ogg; codecs=opus', ptt: true };
-            else if (payload.kind === 'sticker') sendObj = { sticker: payload.buf };
-            else if (payload.kind === 'document') sendObj = { document: payload.buf, mimetype: 'application/octet-stream', fileName: 'file', caption: payload.caption || '' };
-
-            if (sendObj) {
-              await sock.sendMessage(targetGid, sendObj);
-              directSent = true;
-            }
-          } catch (eSend) {
-            console.error('[precious-gst] direct group send error:', eSend?.message || eSend);
-          }
-
-          // 2. Also relay group status
+          // Post as group status relay only (no direct group chat drop)
+           // 2. Also relay group status
           let relayRes = { ok: false };
           try {
             relayRes = await uploadAndRelay(sock, targetGid, payload);

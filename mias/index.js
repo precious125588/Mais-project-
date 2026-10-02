@@ -8388,20 +8388,29 @@ cmd(["allmenu", "fullmenu"], {
     const botJid = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
     const botNumber = botJid.split("@")[0] || "Bot";
 
-    // Build complete allmenu text with all categories and commands
+    // Build complete allmenu text with all categories and commands from commands registry
     const grouped = {};
-    for (const c of COMMANDS) {
-      const cat = (c.category || "other").toUpperCase();
-      if (!grouped[cat]) grouped[cat] = [];
-      grouped[cat].push(c);
+    const seen = new Set();
+    const cmdList = [];
+    const cmdMap = (typeof commands !== 'undefined' && commands) || globalThis.__MIAS_COMMANDS__ || new Map();
+    if (cmdMap && cmdMap.entries) {
+      for (const [name, cmdObj] of cmdMap.entries()) {
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        const cat = (cmdObj?.category || "OTHER").toUpperCase();
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push({ name, desc: cmdObj?.desc || "" });
+        cmdList.push(name);
+      }
     }
+    const totalCount = cmdList.length || cmdMap.size || 0;
 
     let allText = `┏━━━〔 🌟 *${botName.toUpperCase()} ALL-MENU* 🌟 〕━━━┓\n`;
     allText += `┃ 👑 *Owner:* ${botOwner}\n`;
     allText += `┃ 🤖 *Bot:* @${botNumber}\n`;
     allText += `┃ 👤 *User:* ${senderName}\n`;
     allText += `┃ ⚡ *Mode:* ${isPublic ? "PUBLIC" : "PRIVATE"}\n`;
-    allText += `┃ 📦 *Total Commands:* ${COMMANDS.length}\n`;
+    allText += `┃ 📦 *Total Commands:* ${totalCount}\n`;
     allText += `┃ 📅 *Date:* ${new Date().toLocaleDateString()}\n`;
     allText += `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n`;
     allText += `> 💬 *_"${userQuote}"_*\n\n`;
@@ -8409,10 +8418,9 @@ cmd(["allmenu", "fullmenu"], {
     const sortedCats = Object.keys(grouped).sort();
     for (const cat of sortedCats) {
       allText += `╭───『 *${cat}* (${grouped[cat].length}) 』───\n`;
-      for (const cmdObj of grouped[cat]) {
-        const prim = cmdObj.patterns[0];
-        const desc = cmdObj.desc ? ` - _${cmdObj.desc}_` : "";
-        allText += `│ • *${CONFIG.PREFIX}${prim}*${desc}\n`;
+      for (const cmdItem of grouped[cat]) {
+        const desc = cmdItem.desc ? ` - _${cmdItem.desc}_` : "";
+        allText += `│ • *${CONFIG.PREFIX}${cmdItem.name}*${desc}\n`;
       }
       allText += `╰──────────────────────────────\n\n`;
     }
@@ -8426,7 +8434,7 @@ cmd(["allmenu", "fullmenu"], {
         await sock.sendMessage(jid, {
           document: botPic,
           mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          fileName: `👑 ${botName} • @${botNumber} [${COMMANDS.length} CMDS]`,
+          fileName: `👑 ${botName} • @${botNumber} [${totalCount} CMDS]`,
           fileLength: 999999999999,
           pageCount: 2026,
           caption: allText,
@@ -44227,6 +44235,12 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
   let node = ctx?.quotedMessage || msg.message;
   if (typeof __unwrapWaMsg === "function") node = __unwrapWaMsg(node) || node;
 
+  // Deep unwrapping of common wrapper envelopes
+  if (node?.documentWithCaptionMessage?.message) node = node.documentWithCaptionMessage.message;
+  if (node?.viewOnceMessage?.message) node = node.viewOnceMessage.message;
+  if (node?.viewOnceMessageV2?.message) node = node.viewOnceMessageV2.message;
+  if (node?.ephemeralMessage?.message) node = node.ephemeralMessage.message;
+
   const vid = node?.videoMessage;
   const doc = node?.documentMessage;
   const stk = node?.stickerMessage;
@@ -44239,21 +44253,41 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
     return;
   }
 
-  const streamType = vid ? "video" : (doc ? "document" : (stk ? "sticker" : (img ? "image" : "audio")));
-  
+  // Determine media download stream types with fallback
+  let streamTypes = [];
+  if (vid) streamTypes = ["video", "document"];
+  else if (doc) {
+    const mime = String(doc.mimetype || "").toLowerCase();
+    const fn = String(doc.fileName || "").toLowerCase();
+    if (mime.includes("video") || fn.endsWith(".mp4") || fn.endsWith(".mkv") || fn.endsWith(".mov") || fn.endsWith(".avi") || fn.endsWith(".webm")) {
+      streamTypes = ["document", "video"];
+    } else {
+      streamTypes = ["document", "video", "audio"];
+    }
+  } else if (stk) streamTypes = ["sticker", "image"];
+  else if (img) streamTypes = ["image", "document"];
+  else if (aud) streamTypes = ["audio", "document"];
+  else streamTypes = ["document", "video"];
+
   let buf = null;
-  try {
-    const stream = await downloadContentFromMessage(mediaObj, streamType);
-    let chunks = [];
-    let stallTimer;
-    const stallReset = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { stream.destroy?.(new Error("stalled")); } catch {} }, 45000); };
-    stallReset();
+  for (const st of streamTypes) {
     try {
-      for await (const c of stream) { stallReset(); chunks.push(c); }
-    } finally { clearTimeout(stallTimer); }
-    buf = Buffer.concat(chunks);
-  } catch (err) {
-    console.error("[tomp4] download error:", err?.message || err);
+      const stream = await downloadContentFromMessage(mediaObj, st);
+      let chunks = [];
+      let stallTimer;
+      const stallReset = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { stream.destroy?.(new Error("stalled")); } catch {} }, 45000); };
+      stallReset();
+      try {
+        for await (const c of stream) { stallReset(); chunks.push(c); }
+      } finally { clearTimeout(stallTimer); }
+      const res = Buffer.concat(chunks);
+      if (res && res.length > 0) {
+        buf = res;
+        break;
+      }
+    } catch (eDl) {
+      // try next stream type
+    }
   }
 
   if (!buf || !buf.length) {
@@ -44266,6 +44300,15 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
   const path = require("path");
   const fs = require("fs");
   const _id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+
+  // Find ffmpeg binary (ffmpeg-static or system ffmpeg)
+  let ffBin = "ffmpeg";
+  try {
+    const ffStatic = require("ffmpeg-static");
+    if (ffStatic && typeof ffStatic === "string" && fs.existsSync(ffStatic)) {
+      ffBin = ffStatic;
+    }
+  } catch {}
 
   let inExt = "bin";
   if (vid) inExt = "mp4";
@@ -44289,10 +44332,76 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
     fs.writeFileSync(inPath, buf);
 
     const execFF = (args) => new Promise((resolve, reject) => {
-      cp.execFile("ffmpeg", args, { timeout: 300000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+      cp.execFile(ffBin, args, { timeout: 300000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) { err.stderr = stderr; reject(err); }
         else resolve(stdout);
       });
+    });
+
+    let converted = false;
+    try {
+      if (stk) {
+        try {
+          await execFF(["-y", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
+          converted = true;
+        } catch {
+          await execFF(["-y", "-loop", "1", "-t", "3", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
+          converted = true;
+        }
+      } else if (img) {
+        await execFF(["-y", "-loop", "1", "-t", "5", "-i", inPath, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
+        converted = true;
+      } else if (aud) {
+        await execFF(["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", inPath, "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p", "-shortest", "-movflags", "+faststart", outPath]);
+        converted = true;
+      } else {
+        // Document video or normal video: try high quality re-encode with audio copy/transcode
+        try {
+          await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
+          converted = true;
+        } catch (eWithAudio) {
+          try {
+            await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-an", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
+            converted = true;
+          } catch (eNoAudio) {
+            // Stream copy fallback
+            try {
+              await execFF(["-y", "-i", inPath, "-c", "copy", "-movflags", "+faststart", outPath]);
+              converted = true;
+            } catch (eCopy) {}
+          }
+        }
+      }
+    } catch (eAllFF) {
+      console.error("[tomp4] ffmpeg execution error:", eAllFF?.message || eAllFF);
+    }
+
+    let outBuf = null;
+    if (converted && fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+      outBuf = fs.readFileSync(outPath);
+    } else if (inExt === "mp4" || doc?.mimetype?.includes("video")) {
+      // If ffmpeg failed but input is already an mp4/video document, send the raw buffer as video
+      outBuf = buf;
+    }
+
+    if (!outBuf || !outBuf.length) {
+      throw new Error("No output video generated");
+    }
+
+    await sock.sendMessage(msg.key.remoteJid, {
+      video: outBuf,
+      mimetype: "video/mp4"
+    }, { quoted: msg });
+
+    try { await react(sock, msg, "✅"); } catch {}
+  } catch (e) {
+    console.error("[tomp4] final error:", e?.message || e);
+    try { await react(sock, msg, "❌"); } catch {}
+  } finally {
+    try { fs.unlinkSync(inPath); } catch {}
+    try { fs.unlinkSync(outPath); } catch {}
+  }
+});
     });
 
     if (stk) {
