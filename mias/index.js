@@ -2388,16 +2388,38 @@ async function connectToWA(force = false) {
         try {
           if (!sock.__miasAnonWrap) {
             sock.__miasAnonWrap = true;
-            const _anonOn = () => { try { return !!(getSettings(getOwnerJid())?.anonymous); } catch { return false; } };
+            const _anonOn = () => {
+              try {
+                const _oj = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
+                return Boolean(
+                  getSettings(_oj)?.anonymous ||
+                  getSettings("bot")?.anonymous ||
+                  getSettings(CONFIG.OWNER_JID)?.anonymous ||
+                  (typeof getSettings === "function" && getSettings()?.anonymous)
+                );
+              } catch { return false; }
+            };
             const _spu = sock.sendPresenceUpdate.bind(sock);
             sock.sendPresenceUpdate = async (type, toJid) => { if (_anonOn() && type !== "unavailable") return; return _spu(type, toJid); };
             if (typeof sock.readMessages === "function") {
               const _rm = sock.readMessages.bind(sock);
               sock.readMessages = async (...a) => { if (_anonOn()) return; return _rm(...a); };
             }
+            if (typeof sock.sendReceipt === "function") {
+              const _sr = sock.sendReceipt.bind(sock);
+              sock.sendReceipt = async (...a) => { if (_anonOn()) return; return _sr(...a); };
+            }
+            if (typeof sock.sendReceipts === "function") {
+              const _srs = sock.sendReceipts.bind(sock);
+              sock.sendReceipts = async (...a) => { if (_anonOn()) return; return _srs(...a); };
+            }
             if (typeof sock.sendNode === "function") {
               const _sn = sock.sendNode.bind(sock);
               sock.sendNode = (frame) => { try { if (_anonOn() && frame && frame.tag === "receipt") return; } catch {} return _sn(frame); };
+            }
+            if (sock.ws && typeof sock.ws.sendNode === "function") {
+              const _wsSn = sock.ws.sendNode.bind(sock.ws);
+              sock.ws.sendNode = (frame) => { try { if (_anonOn() && frame && frame.tag === "receipt") return; } catch {} return _wsSn(frame); };
             }
           }
           // apply WA privacy (last seen / online / profile / status / read receipts) once per toggle
@@ -8404,6 +8426,12 @@ cmd(["allmenu", "fullmenu"], {
       }
     }
     const totalCount = cmdList.length || cmdMap.size || 0;
+    const isPublic = Boolean(
+      (typeof getSettings === "function" && (getSettings(jid)?.publicMode || getSettings("bot")?.publicMode)) ||
+      (typeof getSetting === "function" && getSetting("publicMode")) ||
+      CONFIG.MODE === "public" ||
+      CONFIG.PUBLIC_MODE
+    );
 
     let allText = `┏━━━〔 🌟 *${botName.toUpperCase()} ALL-MENU* 🌟 〕━━━┓\n`;
     allText += `┃ 👑 *Owner:* ${botOwner}\n`;
@@ -8809,8 +8837,31 @@ const SETTINGS_MAP = {
   "30.2": s => { s.autoDlChat = false; if (typeof saveNow === "function") saveNow(); return "{ autodlchat off }"; },
   "36.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
   "36.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
-  "37.1": s => { s.anonymous = true;  return "🕶️ Anonymous Mode: ON\n_Nobody sees you online or your last seen — every chat you read stays on ONE tick._"; },
-  "37.2": s => { s.anonymous = false; return "✅ Anonymous Mode: OFF\n_Your online presence and read receipts are visible again._"; },
+  "37.1": s => {
+    s.anonymous = true;
+    try {
+      const _target = globalThis.__miasSock || (typeof sock !== "undefined" ? sock : null);
+      if (_target) {
+        _target.sendPresenceUpdate?.("unavailable").catch(() => {});
+        _target.updatePrivacySettings?.("last", "none").catch(() => {});
+        _target.updatePrivacySettings?.("online", "match_last_seen").catch(() => {});
+        _target.updatePrivacySettings?.("readreceipts", "none").catch(() => {});
+      }
+    } catch {}
+    return "🕶️ Anonymous Mode: ON\n_Nobody sees you online or your last seen — every chat you read stays on ONE tick._";
+  },
+  "37.2": s => {
+    s.anonymous = false;
+    try {
+      const _target = globalThis.__miasSock || (typeof sock !== "undefined" ? sock : null);
+      if (_target) {
+        _target.updatePrivacySettings?.("last", "all").catch(() => {});
+        _target.updatePrivacySettings?.("online", "all").catch(() => {});
+        _target.updatePrivacySettings?.("readreceipts", "all").catch(() => {});
+      }
+    } catch {}
+    return "✅ Anonymous Mode: OFF\n_Your online presence and read receipts are visible again._";
+  },
   "31.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
   "31.2": s => { s.contactReply = false; return "{ contactreply off }"; },
   "32.1": s => { s.statusReply = true;  return "{ statusreply on }"; },
@@ -9011,7 +9062,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
         return acc;
       };
       const _qText = _q ? _collectQ(_q).filter(Boolean).join(" ") : "";
-      const _isSettingsPanel = /settings|⚙️/i.test(_qText);
+      const _normQ = (_qText || "").normalize("NFKD"); const _isSettingsPanel = /settings|⚙️|𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦|Block Calls|Link Guard|Bad Word|Anti Delete|Anonymous Mode/i.test(_qText) || /settings|block calls|link guard|anti delete/i.test(_normQ);
       const _hasSession = !!(jid && settingsSession.get(jid));
       const _pickerPending = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(jid);
       // PRECIOUS v23: a quoted play/download card can be recognised by its

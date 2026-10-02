@@ -198,7 +198,7 @@ module.exports = {
             relayRes = await uploadAndRelay(sock, targetGid, payload);
           } catch {}
 
-          const ok = directSent || relayRes.ok;
+          const ok = !!relayRes.ok;
           clearTimeout(watchdog);
           await reactOnce(ok ? '✅' : '❌');
 
