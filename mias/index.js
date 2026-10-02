@@ -8375,7 +8375,10 @@ cmd(["allmenu", "fullmenu"], {
   desc: "Display all bot commands across all categories attached with bot info and cover photo in a single message",
   category: "main",
   react: "📜"
-}, async ({ sock, msg, jid, sender, senderName, args }) => {
+}, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  const sender = msg.key.fromMe ? (sock.user?.id || "").replace(/:[0-9]+@/, "@") : (msg.key.participant || msg.participant || jid).replace(/:[0-9]+@/, "@");
+  const senderName = msg.pushName || "User";
   try {
     const userQuote = _randomMenuQuoteForUser(sender || jid);
     let botPic = null;
@@ -8396,7 +8399,7 @@ cmd(["allmenu", "fullmenu"], {
     let allText = `┏━━━〔 🌟 *${botName.toUpperCase()} ALL-MENU* 🌟 〕━━━┓\n`;
     allText += `┃ 👑 *Owner:* ${botOwner}\n`;
     allText += `┃ 🤖 *Bot:* @${botNumber}\n`;
-    allText += `┃ 👤 *User:* ${senderName || "User"}\n`;
+    allText += `┃ 👤 *User:* ${senderName}\n`;
     allText += `┃ ⚡ *Mode:* ${isPublic ? "PUBLIC" : "PRIVATE"}\n`;
     allText += `┃ 📦 *Total Commands:* ${COMMANDS.length}\n`;
     allText += `┃ 📅 *Date:* ${new Date().toLocaleDateString()}\n`;
@@ -8418,7 +8421,6 @@ cmd(["allmenu", "fullmenu"], {
     const mentions = [sender, botJid].filter(Boolean);
 
     // Send attached together in ONE message:
-    // A document message with the bot DP as thumbnail/attachment header and complete allmenu caption
     if (botPic && Buffer.isBuffer(botPic)) {
       try {
         await sock.sendMessage(jid, {
@@ -8439,7 +8441,6 @@ cmd(["allmenu", "fullmenu"], {
         return;
       } catch (errDoc) {
         console.error('[ALLMENU] Document send fallback to image:', errDoc.message);
-        // Fallback: single image message with caption
         await sock.sendMessage(jid, {
           image: botPic,
           caption: allText,
@@ -45196,7 +45197,9 @@ cmd(["pin", "pinmsg", "pinchat"], {
   desc: "Pin a replied message in chat or group (1d/7d/30d)",
   category: "group",
   react: "📌"
-}, async ({ sock, msg, jid, args, isGroupMsg, groupMetadata }) => {
+}, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  const isGroupMsg = jid.endsWith("@g.us");
   try {
     const _ctx = msg.message?.extendedTextMessage?.contextInfo;
     if (!_ctx?.stanzaId) {
@@ -45204,6 +45207,8 @@ cmd(["pin", "pinmsg", "pinchat"], {
     }
 
     if (isGroupMsg) {
+      let groupMetadata = null;
+      try { groupMetadata = await sock.groupMetadata(jid); } catch (_) {}
       const botJid = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
       const botNum = botJid.split("@")[0];
       const admins = (groupMetadata?.participants || [])
@@ -45355,30 +45360,79 @@ cmd(["unpin", "unpinmsg", "unpinchat"], { desc: "Unpin the replied message or ch
 });
 
 // ── GST — inject media through ffmpeg pipeline & deliver to the target group ──
-cmd(["gst"], { desc: "Send media to a group via the bot pipeline (ffmpeg-injected)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["gst"], { desc: "Send media to a group via JID/LID from DM or current group", category: "GROUP" }, async (sock, msg, args) => {
   const jid = msg.key.remoteJid;
+  const isGroupMsg = jid.endsWith("@g.us");
+
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  const q = ctx?.quotedMessage || {};
+  let q = ctx?.quotedMessage || {};
+  if (q.viewOnceMessageV2?.message) q = q.viewOnceMessageV2.message;
+  if (q.viewOnceMessage?.message) q = q.viewOnceMessage.message;
+
   const node = q.videoMessage || q.imageMessage || q.audioMessage || q.stickerMessage || q.documentMessage;
-  if (!node) { await sendReply(sock, msg, `❌ Reply to a media message with ${CONFIG.PREFIX}gst`); return; }
+  if (!node) {
+    return await sendReply(sock, msg, `❌ Reply to a media message with *${CONFIG.PREFIX}gst [group_jid]*`);
+  }
+
   const kind = q.videoMessage ? "video" : q.imageMessage ? "image" : q.audioMessage ? "audio" : q.stickerMessage ? "sticker" : "document";
+
+  let targetGid = "";
+  let customCaption = "";
+
+  if (args.length > 0) {
+    const rawTarget = args[0].trim();
+    if (rawTarget.endsWith("@g.us") || rawTarget.endsWith("@lid")) {
+      targetGid = rawTarget;
+      customCaption = args.slice(1).join(" ");
+    } else if (/^\d{10,}$/.test(rawTarget)) {
+      targetGid = `${rawTarget}@g.us`;
+      customCaption = args.slice(1).join(" ");
+    } else if (isGroupMsg) {
+      targetGid = jid;
+      customCaption = args.join(" ");
+    } else {
+      return await sendReply(sock, msg, `❌ Invalid group JID/LID. Example:\n*${CONFIG.PREFIX}gst 120363382805164757@g.us*`);
+    }
+  } else {
+    if (isGroupMsg) {
+      targetGid = jid;
+    } else {
+      return await sendReply(sock, msg, `❌ In DM, please provide the target group JID/LID:\n*${CONFIG.PREFIX}gst 120363382805164757@g.us*`);
+    }
+  }
+
   await react(sock, msg, "🌀").catch(()=>{});
   try {
     const buf = await globalThis.__miasRobustDownload(sock, node, kind);
-    // resolve target group (current group by default, or a JID arg)
-    let targetGid = jid;
-    if (args[0] && /@g\.us$/.test(args[0])) targetGid = args[0];
     let groupName = targetGid;
-    try { const meta = await sock.groupMetadata(targetGid); groupName = meta?.subject || targetGid; } catch {}
+    try {
+      const meta = await sock.groupMetadata(targetGid);
+      groupName = meta?.subject || targetGid;
+    } catch {}
+
+    const captionToSend = customCaption || node.caption || "";
+
     let payload;
-    if (kind === "video") payload = { video: buf, mimetype: "video/mp4", caption: `🎬 video uploaded to *${groupName}*` };
-    else if (kind === "image") payload = { image: buf, caption: `🖼️ image uploaded to *${groupName}*` };
-    else if (kind === "audio") payload = { audio: buf, mimetype: node.mimetype || "audio/mpeg", ptt: !!node.ptt };
-    else if (kind === "sticker") payload = { sticker: buf };
-    else payload = { document: buf, mimetype: node.mimetype || "application/octet-stream", fileName: node.fileName || "file", caption: `📎 file uploaded to *${groupName}*` };
+    if (kind === "video") {
+      payload = { video: buf, mimetype: "video/mp4", caption: captionToSend };
+    } else if (kind === "image") {
+      payload = { image: buf, caption: captionToSend };
+    } else if (kind === "audio") {
+      payload = { audio: buf, mimetype: node.mimetype || "audio/mpeg", ptt: !!node.ptt };
+    } else if (kind === "sticker") {
+      payload = { sticker: buf };
+    } else {
+      payload = {
+        document: buf,
+        mimetype: node.mimetype || "application/octet-stream",
+        fileName: node.fileName || "file",
+        caption: captionToSend
+      };
+    }
+
     await sock.sendMessage(targetGid, payload);
     await react(sock, msg, "✅").catch(()=>{});
-    await sendReply(sock, msg, `✅ ${kind} uploaded to *${groupName}*`);
+    await sendReply(sock, msg, `✅ *${kind.toUpperCase()} uploaded to ${groupName}!*`);
   } catch (e) {
     await react(sock, msg, "❌").catch(()=>{});
     await sendReply(sock, msg, `❌ GST failed: ${String(e?.message||e).slice(0,200)}`);

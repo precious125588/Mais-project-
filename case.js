@@ -3470,28 +3470,51 @@ break;
 
 case 'tomp4': {
     try { await devtrust.sendMessage(m.chat, { react: { text: "🌀", key: m.key } }); } catch {}
-    
-    let qMsg = m.quoted ? (m.quoted.msg || m.quoted) : (m.msg || m);
-    let mime = qMsg?.mimetype || "";
-    let isDoc = !!(m.quoted ? m.quoted.documentMessage : m.documentMessage) || /document/.test(mime);
-    let isVid = !!(m.quoted ? m.quoted.videoMessage : m.videoMessage) || /video/.test(mime);
-    let isStk = !!(m.quoted ? m.quoted.stickerMessage : m.stickerMessage) || /webp/.test(mime);
-    let isImg = !!(m.quoted ? m.quoted.imageMessage : m.imageMessage) || /image/.test(mime);
+
+    const q = m.quoted ? m.quoted : m;
+    let qMsg = q.msg || q;
+    let mime = qMsg?.mimetype || q.mimetype || "";
+    let isDoc = !!(q.documentMessage || qMsg.documentMessage || /document/.test(mime));
+    let isVid = !!(q.videoMessage || qMsg.videoMessage || /video/.test(mime));
+    let isStk = !!(q.stickerMessage || qMsg.stickerMessage || /webp/.test(mime));
+    let isImg = !!(q.imageMessage || qMsg.imageMessage || /image/.test(mime));
 
     if (!m.quoted && !isVid && !isDoc && !isStk && !isImg) {
         try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
-        return;
+        break;
     }
 
     try {
-        let media;
-        if (m.quoted && m.quoted.download) {
-            media = await m.quoted.download();
-        } else if (m.download) {
-            media = await m.download();
-        } else {
+        let media = null;
+        if (typeof q.download === 'function') {
+            try { media = await q.download(); } catch (_) {}
+        }
+        if (!media && typeof m.download === 'function') {
+            try { media = await m.download(); } catch (_) {}
+        }
+
+        // Direct stream download fallback
+        if (!media || !media.length) {
+            const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
+            const targetObj = qMsg.videoMessage || qMsg.documentMessage || qMsg.stickerMessage || qMsg.imageMessage || qMsg;
+            const streamTypes = isDoc ? ["document", "video"] : (isVid ? ["video", "document"] : (isStk ? ["sticker"] : ["image"]));
+            for (const st of streamTypes) {
+                try {
+                    const stream = await downloadContentFromMessage(targetObj, st);
+                    let chunks = [];
+                    for await (const c of stream) chunks.push(c);
+                    const res = Buffer.concat(chunks);
+                    if (res && res.length > 50) {
+                        media = res;
+                        break;
+                    }
+                } catch (_) {}
+            }
+        }
+
+        if (!media || !media.length) {
             try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
-            return;
+            break;
         }
 
         const fs = require("fs");
@@ -3510,7 +3533,6 @@ case 'tomp4': {
             if (mat) ext = mat[1];
             else if (/webm/.test(mime)) ext = "webm";
             else if (/matroska|mkv/.test(mime)) ext = "mkv";
-            else if (/quicktime/.test(mime)) ext = "mov";
             else ext = "mp4";
         }
 
@@ -3536,9 +3558,13 @@ case 'tomp4': {
             await execFF(["-y", "-loop", "1", "-t", "5", "-i", inputPath, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
         } else {
             try {
-                await execFF(["-y", "-i", inputPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
+                await execFF(["-y", "-i", inputPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-map", "0:v:0", "-map", "0:a?", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
             } catch {
-                await execFF(["-y", "-i", inputPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-an", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
+                try {
+                    await execFF(["-y", "-i", inputPath, "-c", "copy", "-movflags", "+faststart", outputPath]);
+                } catch {
+                    await execFF(["-y", "-i", inputPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-an", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
+                }
             }
         }
 
