@@ -44099,11 +44099,113 @@ cmd(["tomp3", "toaudio"], { desc: "Video/audio → MP3", category: "MEDIA" }, as
     await sock.sendMessage(msg.key.remoteJid, { audio: mp3, mimetype: "audio/mpeg" }, { quoted: msg });
   } catch (e) { await sendReply(sock, msg, `❌ tomp3 failed: ${e?.message || e}`); }
 });
-cmd(["tovideo", "tomp4"], { desc: "Sticker/GIF → video", category: "MEDIA" }, async (sock, msg) => {
-  // Delegate to the hardened primary .tovid (stall-timer + fallback encoder)
-  const _e = commands.get("tovid");
-  if (_e) return _e.handler(sock, msg, []);
-  await sendReply(sock, msg, `Reply to a sticker/image/GIF with ${CONFIG.PREFIX}tovid`);
+cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/DOC/sticker to normal MP4", category: "MEDIA" }, async (sock, msg) => {
+  try { await react(sock, msg, "🌀"); } catch {}
+
+  const ctx = msg.message?.extendedTextMessage?.contextInfo;
+  let node = ctx?.quotedMessage || msg.message;
+  if (typeof __unwrapWaMsg === "function") node = __unwrapWaMsg(node) || node;
+
+  const vid = node?.videoMessage;
+  const doc = node?.documentMessage;
+  const stk = node?.stickerMessage;
+  const img = node?.imageMessage;
+  const aud = node?.audioMessage;
+
+  const mediaObj = vid || doc || stk || img || aud;
+  if (!mediaObj) {
+    try { await react(sock, msg, "❌"); } catch {}
+    return;
+  }
+
+  const streamType = vid ? "video" : (doc ? "document" : (stk ? "sticker" : (img ? "image" : "audio")));
+  
+  let buf = null;
+  try {
+    const stream = await downloadContentFromMessage(mediaObj, streamType);
+    let chunks = [];
+    let stallTimer;
+    const stallReset = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { stream.destroy?.(new Error("stalled")); } catch {} }, 45000); };
+    stallReset();
+    try {
+      for await (const c of stream) { stallReset(); chunks.push(c); }
+    } finally { clearTimeout(stallTimer); }
+    buf = Buffer.concat(chunks);
+  } catch (err) {
+    console.error("[tomp4] download error:", err?.message || err);
+  }
+
+  if (!buf || !buf.length) {
+    try { await react(sock, msg, "❌"); } catch {}
+    return;
+  }
+
+  const cp = require("child_process");
+  const os = require("os");
+  const path = require("path");
+  const fs = require("fs");
+  const _id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+
+  let inExt = "bin";
+  if (vid) inExt = "mp4";
+  else if (stk) inExt = "webp";
+  else if (img) inExt = "jpg";
+  else if (aud) inExt = "ogg";
+  else if (doc) {
+    const fn = String(doc.fileName || "").toLowerCase();
+    const m = fn.match(/\.([a-z0-9]+)$/);
+    if (m) inExt = m[1];
+    else if (doc.mimetype?.includes("webm")) inExt = "webm";
+    else if (doc.mimetype?.includes("matroska") || doc.mimetype?.includes("mkv")) inExt = "mkv";
+    else if (doc.mimetype?.includes("quicktime")) inExt = "mov";
+    else inExt = "mp4";
+  }
+
+  const inPath = path.join(os.tmpdir(), `tomp4_in_${_id}.${inExt}`);
+  const outPath = path.join(os.tmpdir(), `tomp4_out_${_id}.mp4`);
+
+  try {
+    fs.writeFileSync(inPath, buf);
+
+    const execFF = (args) => new Promise((resolve, reject) => {
+      cp.execFile("ffmpeg", args, { timeout: 300000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) { err.stderr = stderr; reject(err); }
+        else resolve(stdout);
+      });
+    });
+
+    if (stk) {
+      try {
+        await execFF(["-y", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
+      } catch {
+        await execFF(["-y", "-loop", "1", "-t", "3", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
+      }
+    } else if (img) {
+      await execFF(["-y", "-loop", "1", "-t", "5", "-i", inPath, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
+    } else if (aud) {
+      await execFF(["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", inPath, "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p", "-shortest", "-movflags", "+faststart", outPath]);
+    } else {
+      try {
+        await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
+      } catch {
+        await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-an", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
+      }
+    }
+
+    const outBuf = fs.readFileSync(outPath);
+    await sock.sendMessage(msg.key.remoteJid, {
+      video: outBuf,
+      mimetype: "video/mp4"
+    }, { quoted: msg });
+
+    try { await react(sock, msg, "✅"); } catch {}
+  } catch (e) {
+    console.error("[tomp4] conversion error:", e?.message || e);
+    try { await react(sock, msg, "❌"); } catch {}
+  } finally {
+    try { fs.unlinkSync(inPath); } catch {}
+    try { fs.unlinkSync(outPath); } catch {}
+  }
 });
 cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }, async (sock, msg) => {
   const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
@@ -44784,7 +44886,13 @@ cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message t
   
   try { await react(sock, msg, "🌀"); } catch {}
   const target = _fGroupJid || _fJidTarget || (tRaw + "@s.whatsapp.net");
-  const _fLabel = _fGroupJid ? (_fGroupName || "group " + _fGroupJid.split("@")[0]) : (target.endsWith("@g.us") ? "group " + target.split("@")[0] : (_fJidTarget || "+" + tRaw));
+  if (target.endsWith("@g.us") && !_fGroupName) {
+    try {
+      const _m = await sock.groupMetadata(target);
+      if (_m?.subject) _fGroupName = _m.subject;
+    } catch {}
+  }
+  const _fLabel = _fGroupName ? `(${_fGroupName})` : (target.endsWith("@g.us") ? "group (" + target.split("@")[0] + ")" : (_fJidTarget || "+" + tRaw));
   const items = marked.length ? marked : [{ jid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || jid, _markMsg: msg }];
   let ok = 0, failed = [];
   for (const it of items) {

@@ -3469,84 +3469,93 @@ case 'apkdl': {
 break;
 
 case 'tomp4': {
-    if (!m.quoted) return reply("🖼️ Reply to a *sticker or GIF* with " + prefix + "tomp4");
+    try { await devtrust.sendMessage(m.chat, { react: { text: "🌀", key: m.key } }); } catch {}
     
-    let mime = (m.quoted.msg || m.quoted).mimetype || '';
-    
-    if (!/webp|gif/.test(mime)) return reply("⚠️ Reply must be a *sticker* (.webp) or *GIF* image");
-    
+    let qMsg = m.quoted ? (m.quoted.msg || m.quoted) : (m.msg || m);
+    let mime = qMsg?.mimetype || "";
+    let isDoc = !!(m.quoted ? m.quoted.documentMessage : m.documentMessage) || /document/.test(mime);
+    let isVid = !!(m.quoted ? m.quoted.videoMessage : m.videoMessage) || /video/.test(mime);
+    let isStk = !!(m.quoted ? m.quoted.stickerMessage : m.stickerMessage) || /webp/.test(mime);
+    let isImg = !!(m.quoted ? m.quoted.imageMessage : m.imageMessage) || /image/.test(mime);
+
+    if (!m.quoted && !isVid && !isDoc && !isStk && !isImg) {
+        try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
+        return;
+    }
+
     try {
         let media;
-        if (m.quoted.download) {
+        if (m.quoted && m.quoted.download) {
             media = await m.quoted.download();
+        } else if (m.download) {
+            media = await m.download();
         } else {
-            return reply("❌ Failed to download media");
+            try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
+            return;
         }
-        
-        const isAnimatedWebp = mime === 'image/webp' && media && media.toString('hex').substring(0, 4) === '5249';
-        
-        if (isAnimatedWebp) {
-            const fs = require('fs');
-            const { exec } = require('child_process');
-            const util = require('util');
-            const execPromise = util.promisify(exec);
-            const path = require('path');
-            const os = require('os');
-            
-            const inputPath = path.join(os.tmpdir(), `input_${Date.now()}.webp`);
-            const outputPath = path.join(os.tmpdir(), `output_${Date.now()}.mp4`);
-            
-            fs.writeFileSync(inputPath, media);
-            
-            await execPromise(`ffmpeg -i "${inputPath}" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -y "${outputPath}"`);
-            
-            const videoBuffer = fs.readFileSync(outputPath);
-            
-            await devtrust.sendMessage(m.chat, {
-                video: videoBuffer,
-                mimetype: 'video/mp4',
-                caption: "🎬 Converted to MP4"
-            }, { quoted: m });
-            
-            fs.unlinkSync(inputPath);
-            fs.unlinkSync(outputPath);
-            
-        } else if (mime === 'image/gif') {
-            await devtrust.sendMessage(m.chat, {
-                video: media,
-                mimetype: 'video/mp4',
-                caption: "🎬 GIF converted to MP4"
-            }, { quoted: m });
+
+        const fs = require("fs");
+        const cp = require("child_process");
+        const path = require("path");
+        const os = require("os");
+        const _id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+
+        let ext = "bin";
+        if (isVid) ext = "mp4";
+        else if (isStk) ext = "webp";
+        else if (isImg) ext = "jpg";
+        else if (isDoc) {
+            const fn = String(qMsg?.fileName || "").toLowerCase();
+            const mat = fn.match(/\.([a-z0-9]+)$/);
+            if (mat) ext = mat[1];
+            else if (/webm/.test(mime)) ext = "webm";
+            else if (/matroska|mkv/.test(mime)) ext = "mkv";
+            else if (/quicktime/.test(mime)) ext = "mov";
+            else ext = "mp4";
+        }
+
+        const inputPath = path.join(os.tmpdir(), "input_" + _id + "." + ext);
+        const outputPath = path.join(os.tmpdir(), "output_" + _id + ".mp4");
+
+        fs.writeFileSync(inputPath, media);
+
+        const execFF = (args) => new Promise((resolve, reject) => {
+            cp.execFile("ffmpeg", args, { timeout: 300000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+                if (err) { err.stderr = stderr; reject(err); }
+                else resolve(stdout);
+            });
+        });
+
+        if (isStk) {
+            try {
+                await execFF(["-y", "-i", inputPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outputPath]);
+            } catch {
+                await execFF(["-y", "-loop", "1", "-t", "3", "-i", inputPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outputPath]);
+            }
+        } else if (isImg && !/gif/.test(mime)) {
+            await execFF(["-y", "-loop", "1", "-t", "5", "-i", inputPath, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
         } else {
-            const fs = require('fs');
-            const { exec } = require('child_process');
-            const util = require('util');
-            const execPromise = util.promisify(exec);
-            const path = require('path');
-            const os = require('os');
-            
-            const inputPath = path.join(os.tmpdir(), `static_${Date.now()}.webp`);
-            const outputPath = path.join(os.tmpdir(), `static_${Date.now()}.mp4`);
-            
-            fs.writeFileSync(inputPath, media);
-            
-            await execPromise(`ffmpeg -loop 1 -i "${inputPath}" -c:v libx264 -t 3 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -y "${outputPath}"`);
-            
-            const videoBuffer = fs.readFileSync(outputPath);
-            
-            await devtrust.sendMessage(m.chat, {
-                video: videoBuffer,
-                mimetype: 'video/mp4',
-                caption: "🎬 Static sticker converted to MP4 (3s duration)"
-            }, { quoted: m });
-            
-            fs.unlinkSync(inputPath);
-            fs.unlinkSync(outputPath);
+            try {
+                await execFF(["-y", "-i", inputPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
+            } catch {
+                await execFF(["-y", "-i", inputPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-an", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
+            }
         }
-        
+
+        const videoBuffer = fs.readFileSync(outputPath);
+
+        await devtrust.sendMessage(m.chat, {
+            video: videoBuffer,
+            mimetype: "video/mp4"
+        }, { quoted: m });
+
+        try { fs.unlinkSync(inputPath); } catch {}
+        try { fs.unlinkSync(outputPath); } catch {}
+
+        try { await devtrust.sendMessage(m.chat, { react: { text: "✅", key: m.key } }); } catch {}
     } catch (e) {
-        console.log(e);
-        reply("❌ Failed to convert to MP4.\nMake sure ffmpeg is installed on your server.\n\n*Install ffmpeg:*\n- Ubuntu/Debian: `sudo apt install ffmpeg`\n- Termux: `pkg install ffmpeg`");
+        console.error("tomp4 error:", e);
+        try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
     }
 }
 break;
