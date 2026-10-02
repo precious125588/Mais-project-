@@ -191,21 +191,53 @@ module.exports = function installV36(ctx) {
     const owNum = String(owJ || CONFIG.OWNER_NUMBER || "").split("@")[0].split(":")[0].replace(/\D/g, "");
     let ownerName = CONFIG.BOT_NAME || "MAIS";
     try { const n = await sock.getName(owJ).catch(() => ""); if (n) ownerName = n; } catch {}
+
     let dpUrl = null;
     try { dpUrl = await sock.profilePictureUrl(owJ, "image").catch(() => null); } catch {}
 
+    // Fetch official Meta AI profile image from WhatsApp or use verified Meta AI CDN asset
+    let metaAiDp = globalThis.__metaAiDpCache || null;
+    if (!metaAiDp && sock && typeof sock.profilePictureUrl === "function") {
+      try {
+        metaAiDp = await sock.profilePictureUrl("13135550002@s.whatsapp.net", "image").catch(() => null);
+        if (!metaAiDp) metaAiDp = await sock.profilePictureUrl("0@s.whatsapp.net", "image").catch(() => null);
+        if (metaAiDp) globalThis.__metaAiDpCache = metaAiDp;
+      } catch {}
+    }
+    if (!metaAiDp) {
+      metaAiDp = "https://files.catbox.moe/5axb5a.jpg";
+    }
+
     const ctx = {};
+    let fakeQuoted = null;
+
     if (owS.statusReply) {
       ctx.externalAdReply = {
-        title: "Meta AI",
+        title: "Meta AI ☑️",
         body: "✓ Status",
         mediaType: 1,
-        thumbnailUrl: dpUrl || undefined,
+        thumbnailUrl: metaAiDp,
         sourceUrl: "https://www.meta.ai",
-        showAdAttribution: false,   // kills the "message via ads" tag entirely
+        showAdAttribution: false,
         renderLargerThumbnail: false,
       };
+
+      // Verified Meta AI status quote envelope
+      fakeQuoted = {
+        key: {
+          remoteJid: "status@broadcast",
+          fromMe: false,
+          participant: "13135550002@s.whatsapp.net",
+          id: "META_AI_" + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        },
+        message: {
+          conversation: "Meta AI",
+        },
+        verifiedProfile: true,
+        pushName: "Meta AI",
+      };
     }
+
     if (owS.contactReply && !ctx.externalAdReply) {
       ctx.externalAdReply = {
         title: ownerName,
@@ -217,8 +249,8 @@ module.exports = function installV36(ctx) {
         renderLargerThumbnail: false,
       };
     }
-    // fakeQuoted stays null — the user's real command/status quote is preserved.
-    return { ctx, fakeQuoted: null, contactQuoted: null };
+
+    return { ctx, fakeQuoted, contactQuoted: null };
   };
 
   // ── 6. CREATEGC — bot DP + MIAX description + full-details reply ─────────
