@@ -7944,9 +7944,7 @@ const _HOPE_QUOTES = [
   "Progress, no matter how small, is still progress.",
   "The world needs your specific kind of light.",
 ];
-function _randomHope() {
-  return _HOPE_QUOTES[Math.floor(Math.random() * _HOPE_QUOTES.length)];
-}
+function _randomHope(sender) { return _randomMenuQuoteForUser(sender || "global"); }
 // ─── v2.1 BIG rotating menu-quote pool (no repeat until all shown) ──────────
 const _MENU_QUOTES_EXTRA = [
   "Bad energy is louder than words. If you feel it, believe it.",
@@ -8158,18 +8156,48 @@ const _MENU_QUOTES_EXTRA = [
 
 ];
 if (!globalThis.__menuQuoteBag) globalThis.__menuQuoteBag = { pool: [], used: [] };
-function _randomMenuQuote() {
-  const B = globalThis.__menuQuoteBag;
-  const all = (typeof _HOPE_QUOTES !== "undefined" ? _HOPE_QUOTES : [])
-    .concat(typeof _MENU_QUOTES_EXTRA !== "undefined" ? _MENU_QUOTES_EXTRA : []);
-  if (!B.pool.length) { B.pool = all.slice(); B.used = []; }
-  // shuffle-lite: pick random, move to used; when empty, refill (guarantees no repeat per cycle)
-  const i = Math.floor(Math.random() * B.pool.length);
-  const q = B.pool.splice(i, 1)[0];
-  B.used.push(q);
+
+// ─── MASSIVE QUOTES LOADER & PER-USER NON-REPEATING BAG ───
+let _MASSIVE_QUOTES = [];
+try {
+  const massivePath = path.join(__dirname, 'quotes_massive.json');
+  if (fs.existsSync(massivePath)) {
+    _MASSIVE_QUOTES = JSON.parse(fs.readFileSync(massivePath, 'utf8'));
+  }
+} catch (e) {
+  console.error('[QUOTES] Error loading quotes_massive.json:', e.message);
+}
+
+const _userQuoteBags = new Map();
+function _randomMenuQuoteForUser(userId) {
+  const u = String(userId || 'global').replace(/[^0-9]/g, '') || 'global';
+  let bag = _userQuoteBags.get(u);
+  const allPool = [
+    ...(typeof _HOPE_QUOTES !== 'undefined' ? _HOPE_QUOTES : []),
+    ...(typeof _MENU_QUOTES_EXTRA !== 'undefined' ? _MENU_QUOTES_EXTRA : []),
+    ...(typeof _SAD_QUOTES !== 'undefined' ? _SAD_QUOTES : []),
+    ...(typeof _TRUTH_QUOTES !== 'undefined' ? _TRUTH_QUOTES : []),
+    ...(_MASSIVE_QUOTES || [])
+  ];
+  if (!allPool.length) allPool.push('The world needs your specific kind of light.');
+
+  if (!bag || !bag.pool || bag.pool.length === 0) {
+    const shuffled = allPool.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    bag = { pool: shuffled, used: [] };
+    _userQuoteBags.set(u, bag);
+  }
+
+  const q = bag.pool.pop();
+  bag.used.push(q);
   return q;
 }
-globalThis._randomMenuQuote = _randomMenuQuote;
+globalThis._randomMenuQuoteForUser = _randomMenuQuoteForUser;
+
+function _randomMenuQuote() { return _randomMenuQuoteForUser("global"); }
 
 // ─── Sad quotes ──────────────────────────────────────────────────────────
 const _SAD_QUOTES = [
@@ -8298,7 +8326,8 @@ function _randomTruth() {
   return _TRUTH_QUOTES[Math.floor(Math.random() * _TRUTH_QUOTES.length)];
 }
 
-function buildMenu(jid, senderName) {
+function buildMenu(jid, senderName, sender) {
+  const userQuote = _randomMenuQuoteForUser(sender || jid);
   const s = getSettings(jid);
   const up = process.uptime();
   const mem = process.memoryUsage();
@@ -8341,6 +8370,77 @@ function buildMenu(jid, senderName) {
   return t;
 }
 
+
+cmd(["allmenu", "fullmenu"], {
+  desc: "Display all bot commands across all categories with bot info attachments and cover photo",
+  category: "main",
+  react: "📜"
+}, async ({ sock, msg, jid, sender, senderName, args }) => {
+  try {
+    const userQuote = _randomMenuQuoteForUser(sender || jid);
+    const botPic = await getBotPic();
+    const botName = CONFIG.BOT_NAME || "MAIS MDX";
+    const botOwner = CONFIG.OWNER_NAME || "Precious";
+
+    // 1. Send bot info attachment at top (vCard / document)
+    try {
+      const vcard = 'BEGIN:VCARD\n'
+        + 'VERSION:3.0\n'
+        + `FN:${botName}\n`
+        + `ORG:${botName} Official Bot;\n`
+        + `TEL;type=CELL;type=VOICE;waid=${(sock.user?.id || '').split(':')[0] || ''}:+${(sock.user?.id || '').split(':')[0] || ''}\n`
+        + 'END:VCARD';
+      await sock.sendMessage(jid, {
+        contacts: {
+          displayName: botName,
+          contacts: [{ vcard }]
+        }
+      }, { quoted: msg });
+    } catch (e) {
+      console.error('[ALLMENU] vCard attachment failed:', e.message);
+    }
+
+    // 2. Build complete allmenu text with all categories and commands
+    const grouped = {};
+    for (const c of COMMANDS) {
+      const cat = (c.category || "other").toUpperCase();
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(c);
+    }
+
+    let allText = `┏━━━〔 🌟 *${botName.toUpperCase()} ALL-MENU* 🌟 〕━━━┓\n`;
+    allText += `┃ 👑 *Owner:* ${botOwner}\n`;
+    allText += `┃ 👤 *User:* ${senderName || "User"}\n`;
+    allText += `┃ ⚡ *Mode:* ${isPublic ? "PUBLIC" : "PRIVATE"}\n`;
+    allText += `┃ 📦 *Total Commands:* ${COMMANDS.length}\n`;
+    allText += `┃ 📅 *Date:* ${new Date().toLocaleDateString()}\n`;
+    allText += `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n`;
+    allText += `> 💬 *_"${userQuote}"_*\n\n`;
+
+    const sortedCats = Object.keys(grouped).sort();
+    for (const cat of sortedCats) {
+      allText += `╭───『 *${cat}* (${grouped[cat].length}) 』───\n`;
+      for (const cmdObj of grouped[cat]) {
+        const prim = cmdObj.patterns[0];
+        const desc = cmdObj.desc ? ` - _${cmdObj.desc}_` : "";
+        allText += `│ • *${CONFIG.PREFIX}${prim}*${desc}\n`;
+      }
+      allText += `╰──────────────────────────────\n\n`;
+    }
+    allText += `> © ${botName} • All rights reserved.`;
+
+    // 3. Send image with allText caption
+    if (botPic && Buffer.isBuffer(botPic)) {
+      await sock.sendMessage(jid, { image: botPic, caption: allText }, { quoted: msg });
+    } else {
+      await sendReply(sock, msg, allText);
+    }
+  } catch (err) {
+    console.error('[ALLMENU ERROR]', err);
+    await sendReply(sock, msg, `❌ Failed to generate allmenu: ${err.message}`);
+  }
+});
+
 cmd(["menu", "help", "commands", ".menu", "start"], { desc: "Show full menu", category: "INFO" }, async (sock, msg, args) => {
   const jid = msg.key.remoteJid;
   const sender = getSender(msg);
@@ -8371,7 +8471,7 @@ cmd(["menu", "help", "commands", ".menu", "start"], { desc: "Show full menu", ca
   }
 
   await react(sock, msg, "📋");
-  const menuText = buildMenu(jid, senderName);
+  const menuText = buildMenu(jid, senderName, sender);
   // Use bot pic as the primary cover for interactive list menu
   // getBotPic() picks from botpic1/2/3.jpg (your actual bot profile pics)
   let coverBuf = await getBotPic().catch(() => null);
@@ -45072,79 +45172,104 @@ cmd(["cleanlast", "clearlast"], { desc: "Delete the last N messages (user AND bo
 });
 
 // ── PIN — actually pins the quoted message (7 days default) ──
-cmd(["pin", "pinmsg", "pinchat"], { desc: "Pin the replied message (default 7d) or chat", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
-  const jid = msg.key.remoteJid;
-  const ctx = msg.message?.extendedTextMessage?.contextInfo
-           || msg.message?.imageMessage?.contextInfo
-           || msg.message?.videoMessage?.contextInfo
-           || msg.message?.documentMessage?.contextInfo;
-  if (!ctx?.stanzaId) {
-    // If no message is quoted, attempt to pin the chat
-    try {
-      if (typeof sock.chatModify === "function") {
-        await sock.chatModify({ pin: Math.floor(Date.now() / 1000) }, jid);
-        await react(sock, msg, "📌").catch(()=>{});
-        await sendReply(sock, msg, "📌 *Chat pinned!*");
-        return;
-      }
-    } catch (e) {}
-    await sendReply(sock, msg, `❌ Reply to the message you want pinned with ${CONFIG.PREFIX}pin [24h|7d|30d]`);
-    return;
-  }
-
-  // Parse duration: WhatsApp only natively accepts 86400 (24h), 604800 (7d), 2592000 (30d)
-  const arg = String(args?.[0] || "").toLowerCase().trim();
-  let secs = 604800, label = "7 days";
-  if (arg === "24h" || arg === "1d" || arg === "1") { secs = 86400; label = "24 hours"; }
-  else if (arg === "30d" || arg === "30") { secs = 2592000; label = "30 days"; }
-
-  const myNum = sock.user?.id ? (sock.user.id.split(":")[0] || sock.user.id.split("@")[0]) : "";
-  const fromMe = Boolean(ctx.fromMe || (ctx.participant && myNum && ctx.participant.includes(myNum)));
-  const pinKey = {
-    remoteJid: jid,
-    id: ctx.stanzaId,
-    fromMe,
-    participant: jid.endsWith("@g.us") ? ctx.participant : undefined
-  };
-
-  let done = false, lastErr = "";
-  // 1. WhatsApp official Web relayMessage (required for active UI pin on WhatsApp clients)
+cmd(["pin", "pinmsg", "pinchat"], {
+  desc: "Pin a replied message in chat or group (1d/7d/30d)",
+  category: "group",
+  react: "📌"
+}, async ({ sock, msg, jid, args, isGroupMsg, groupMetadata }) => {
   try {
-    if (typeof sock.relayMessage === "function") {
-      await sock.relayMessage(jid, {
-        pinInChatMessage: {
-          key: pinKey,
-          type: 1,
-          senderTimestampMs: Date.now()
-        },
-        messageContextInfo: {
-          messageAddOnDurationInSecs: secs
+    const _ctx = msg.message?.extendedTextMessage?.contextInfo;
+    if (!_ctx?.stanzaId) {
+      return await sendReply(sock, msg, "❌ Reply to the message you want to pin with *.pin [24h|7d|30d]*");
+    }
+
+    if (isGroupMsg) {
+      const botJid = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
+      const botNum = botJid.split("@")[0];
+      const admins = (groupMetadata?.participants || [])
+        .filter(p => p.admin === "admin" || p.admin === "superadmin")
+        .map(p => (p.id || "").replace(/:[0-9]+@/, "@"));
+      const isBotAdmin = admins.some(a => a.includes(botNum));
+      if (!isBotAdmin) {
+        return await sendReply(sock, msg, "❌ Bot must be a group admin to pin messages in this group!");
+      }
+    }
+
+    let secs = 604800; // 7 days default
+    const arg = (args[0] || "").toLowerCase();
+    if (arg === "24h" || arg === "1d") secs = 86400;
+    else if (arg === "30d" || arg === "1m") secs = 2592000;
+    else if (arg === "7d") secs = 604800;
+
+    const rawParticipant = _ctx.participant || (isGroupMsg ? msg.participant : undefined);
+    const normalizedParticipant = rawParticipant ? rawParticipant.replace(/:[0-9]+@/, "@") : undefined;
+    const myNum = sock.user?.id ? sock.user.id.split(":")[0].replace(/[^0-9]/g, "") : "";
+    const fromMe = Boolean(_ctx.fromMe || (normalizedParticipant && myNum && normalizedParticipant.includes(myNum)));
+
+    const pinKey = {
+      remoteJid: jid,
+      id: _ctx.stanzaId,
+      fromMe: fromMe,
+      participant: jid.endsWith("@g.us") ? normalizedParticipant : undefined
+    };
+
+    let pinned = false;
+    // 1. Try Baileys sendMessage pin specification
+    try {
+      await sock.sendMessage(jid, {
+        pin: pinKey,
+        type: 1,
+        time: secs
+      });
+      pinned = true;
+    } catch (e1) {
+      // 2. Try relayMessage with pinInChatMessage proto
+      try {
+        const { proto, generateWAMessageFromContent } = require("@whiskeysockets/baileys");
+        const pinMsg = generateWAMessageFromContent(jid, {
+          pinInChatMessage: {
+            key: pinKey,
+            type: 1,
+            senderTimestampMs: Date.now()
+          },
+          messageContextInfo: {
+            messageAddOnDurationInSecs: secs
+          }
+        }, {});
+        await sock.relayMessage(jid, pinMsg.message, { messageId: pinMsg.key.id });
+        pinned = true;
+      } catch (e2) {
+        // 3. Fallback direct relay
+        try {
+          await sock.relayMessage(jid, {
+            pinInChatMessage: {
+              key: pinKey,
+              type: 1,
+              senderTimestampMs: Date.now()
+            },
+            messageContextInfo: {
+              messageAddOnDurationInSecs: secs
+            }
+          }, {});
+          pinned = true;
+        } catch (e3) {
+          console.error("[PIN ERROR]", e1?.message, e2?.message, e3?.message);
         }
-      }, {});
-      done = true;
+      }
     }
-  } catch (e) { lastErr = e?.message || String(e); }
 
-  // 2. Fallbacks if relayMessage didn't succeed
-  if (!done) {
-    for (const _p of [
-      { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), messageContextInfo: { messageAddOnDurationInSecs: secs } } },
-      { pin: pinKey, type: 1, time: secs }
-    ]) {
-      try { await sock.sendMessage(jid, _p); done = true; break; } catch (e) { lastErr = e?.message || String(e); }
+    if (pinned) {
+      const durLabel = secs === 86400 ? "24 hours" : secs === 2592000 ? "30 days" : "7 days";
+      await sendReply(sock, msg, `📌 *Message pinned successfully for ${durLabel}!*`);
+    } else {
+      await sendReply(sock, msg, "❌ Failed to pin message. Make sure the message is not too old and bot is group admin.");
     }
-  }
-
-  if (done) {
-    await react(sock, msg, "📌").catch(()=>{});
-    await sendReply(sock, msg, `📌 *Message pinned for ${label}!*`);
-  } else {
-    await react(sock, msg, "❌").catch(()=>{});
-    await sendReply(sock, msg, `❌ Pin failed: ${lastErr || "unknown"} (bot needs admin rights in groups)`);
+  } catch (err) {
+    console.error("[PIN HANDLER ERROR]", err);
+    await sendReply(sock, msg, `❌ Pin error: ${err.message}`);
   }
 });
 
-// ── UNPIN — unpin the quoted message (guaranteed registered) ──
 cmd(["unpin", "unpinmsg", "unpinchat"], { desc: "Unpin the replied message or chat", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
   const jid = msg.key.remoteJid;
   const ctx = msg.message?.extendedTextMessage?.contextInfo
