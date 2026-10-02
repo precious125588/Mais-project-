@@ -44402,41 +44402,6 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
     try { fs.unlinkSync(outPath); } catch {}
   }
 });
-    });
-
-    if (stk) {
-      try {
-        await execFF(["-y", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
-      } catch {
-        await execFF(["-y", "-loop", "1", "-t", "3", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
-      }
-    } else if (img) {
-      await execFF(["-y", "-loop", "1", "-t", "5", "-i", inPath, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
-    } else if (aud) {
-      await execFF(["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", inPath, "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p", "-shortest", "-movflags", "+faststart", outPath]);
-    } else {
-      try {
-        await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
-      } catch {
-        await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-an", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
-      }
-    }
-
-    const outBuf = fs.readFileSync(outPath);
-    await sock.sendMessage(msg.key.remoteJid, {
-      video: outBuf,
-      mimetype: "video/mp4"
-    }, { quoted: msg });
-
-    try { await react(sock, msg, "✅"); } catch {}
-  } catch (e) {
-    console.error("[tomp4] conversion error:", e?.message || e);
-    try { await react(sock, msg, "❌"); } catch {}
-  } finally {
-    try { fs.unlinkSync(inPath); } catch {}
-    try { fs.unlinkSync(outPath); } catch {}
-  }
-});
 cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }, async (sock, msg) => {
   const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
   if (!buf || !["video", "audio"].includes(kind)) { await sendReply(sock, msg, `🎤 Reply to an *audio/video* with ${CONFIG.PREFIX}tovn`); return; }
