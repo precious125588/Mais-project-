@@ -88,19 +88,34 @@ module.exports = function installV36(ctx) {
     const q = ctx0?.quotedMessage;
     if (!q) return orig(sock, msg, args);
     const jid = msg.key.remoteJid;
+    let targetGid = jid.endsWith('@g.us') ? jid : '';
+    const rawArgs = (args || []).map(a => String(a || '').trim()).filter(Boolean);
+    if (rawArgs.length > 0) {
+      const first = rawArgs[0];
+      if (first.endsWith('@g.us') || first.endsWith('@lid')) {
+        targetGid = first;
+      } else if (/^\d{10,}$/.test(first)) {
+        targetGid = first + '@g.us';
+      }
+    }
+    if (!targetGid) return orig(sock, msg, args);
+
     try {
       if (q.audioMessage) {
         const st = await downloadContentFromMessage(q.audioMessage, 'audio');
         const chunks = []; for await (const c of st) chunks.push(c);
         const mp3 = await audioToOpus(Buffer.concat(chunks));
-        const meta = await sock.groupMetadata(jid).catch(() => ({ participants: [] }));
+        const meta = await sock.groupMetadata(targetGid).catch(() => ({ participants: [], subject: '' }));
         const members = memberJids(meta);
         await react(sock, msg, '🌀').catch(() => {});
+        // Direct send to group
+        await sock.sendMessage(targetGid, { audio: mp3, mimetype: 'audio/ogg; codecs=opus', ptt: true }).catch(() => {});
+        // Relay status
         await sock.sendMessage('status@broadcast',
           { audio: mp3, mimetype: 'audio/ogg; codecs=opus', ptt: true, contextInfo: { isGroupStatus: true } },
-          { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() });
+          { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
         await react(sock, msg, '✅').catch(() => {});
-        await sendReply(sock, msg, `*AUDIO UPLOADED TO ${String(meta.subject || 'THIS GROUP').toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS.`);
+        await sendReply(sock, msg, `*AUDIO UPLOADED TO ${String(meta.subject || targetGid).toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS.`);
         return;
       }
       if (q.imageMessage || q.videoMessage) {
@@ -108,22 +123,28 @@ module.exports = function installV36(ctx) {
         const st = await downloadContentFromMessage(q.imageMessage || q.videoMessage, kind);
         const chunks = []; for await (const c of st) chunks.push(c);
         const better = kind === 'image' ? await enhanceImage(Buffer.concat(chunks)) : await enhanceVideo(Buffer.concat(chunks));
-        const meta = await sock.groupMetadata(jid).catch(() => ({ participants: [], subject: '' }));
+        const meta = await sock.groupMetadata(targetGid).catch(() => ({ participants: [], subject: '' }));
         const members = memberJids(meta);
-        const cap = args.filter(a => !['gst','gstatus','groupstatus'].includes(String(a || '').toLowerCase().replace(/^[.!#/]/, ''))).join(' ').trim();
+        const cap = args.filter(a => {
+          const s = String(a || '').toLowerCase().replace(/^[.!#/]/, '');
+          return !['gst','gstatus','groupstatus'].includes(s) && !s.endsWith('@g.us') && !s.endsWith('@lid') && !/^\d{10,}$/.test(s);
+        }).join(' ').trim();
         await react(sock, msg, '🌀').catch(() => {});
         const payload = kind === 'image'
           ? { image: better, caption: cap, mimetype: 'image/jpeg', contextInfo: { isGroupStatus: true } }
           : { video: better, caption: cap, mimetype: 'video/mp4', gifPlayback: false, contextInfo: { isGroupStatus: true } };
+        // Direct send to target group
+        await sock.sendMessage(targetGid, kind === 'image' ? { image: better, caption: cap } : { video: better, caption: cap, mimetype: 'video/mp4' }).catch(() => {});
+        // Group status relay
         await sock.sendMessage('status@broadcast', payload,
-          { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() });
+          { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
         await react(sock, msg, '✅').catch(() => {});
         const lbl = kind === 'image' ? '*IMAGE' : '*VIDEO';
-        await sendReply(sock, msg, `${lbl} UPLOADED TO ${String(meta.subject || 'THIS GROUP').toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS. (HD ENHANCED)`);
+        await sendReply(sock, msg, `${lbl} UPLOADED TO ${String(meta.subject || targetGid).toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS. (HD ENHANCED)`);
         return;
       }
     } catch (e) { console.error('[v36 gst] ' + e.message); }
-    return orig(sock, msg, args); // safe fallback to original handler
+    return orig(sock, msg, args);
   };
   for (const n of ['gst','gstatus','groupstatus']) {
     const e = commands.get(n); if (!e || e.__v36) continue;

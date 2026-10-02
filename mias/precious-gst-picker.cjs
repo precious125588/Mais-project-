@@ -149,10 +149,31 @@ module.exports = {
 
       const gstHandler = async (sock, msg, args) => {
         const chat = msg.key.remoteJid;
+        const isGroup = isGroupJid(chat);
 
-        // ── DM logic REMOVED — gst is for group status posts only ─────────
-        if (!isGroupJid(chat)) {
-          return sendReply(sock, msg, `👥 *Group Status* works inside groups only.\n\nOpen the group you want to post to and run *${PREFIX}gst* there.`);
+        // Target group resolution: supports JID, LID, bare group digits, from DM or group
+        let targetGid = '';
+        let customCaption = '';
+        const rawArgs = (args || []).map(a => String(a || '').trim()).filter(Boolean);
+
+        if (rawArgs.length > 0) {
+          const first = rawArgs[0];
+          if (first.endsWith('@g.us') || first.endsWith('@lid')) {
+            targetGid = first;
+            customCaption = rawArgs.slice(1).join(' ');
+          } else if (/^\d{10,}$/.test(first)) {
+            targetGid = first + '@g.us';
+            customCaption = rawArgs.slice(1).join(' ');
+          } else if (isGroup) {
+            targetGid = chat;
+            customCaption = rawArgs.join(' ');
+          }
+        } else if (isGroup) {
+          targetGid = chat;
+        }
+
+        if (!targetGid) {
+          return sendReply(sock, msg, '❌ In DM, please provide the target group JID/LID:\n*' + PREFIX + 'gst 120363382805164757@g.us* (reply to media)');
         }
 
         let settled = false;
@@ -166,20 +187,53 @@ module.exports = {
             await reactOnce('❌');
             return sendReply(sock, msg, payload.error);
           }
-          // V25-OK: gst honest result
-          const res = await uploadAndRelay(sock, chat, payload);
+          if (customCaption) {
+            payload.caption = customCaption;
+          }
+
+          // 1. Post media directly to the target group
+          let directSent = false;
+          try {
+            let sendObj = null;
+            if (payload.kind === 'text') sendObj = { text: payload.text || customCaption || '' };
+            else if (payload.kind === 'image') sendObj = { image: payload.buf, caption: payload.caption || '' };
+            else if (payload.kind === 'video') sendObj = { video: payload.buf, caption: payload.caption || '', mimetype: 'video/mp4' };
+            else if (payload.kind === 'audio') sendObj = { audio: payload.buf, mimetype: 'audio/ogg; codecs=opus', ptt: true };
+            else if (payload.kind === 'sticker') sendObj = { sticker: payload.buf };
+            else if (payload.kind === 'document') sendObj = { document: payload.buf, mimetype: 'application/octet-stream', fileName: 'file', caption: payload.caption || '' };
+
+            if (sendObj) {
+              await sock.sendMessage(targetGid, sendObj);
+              directSent = true;
+            }
+          } catch (eSend) {
+            console.error('[precious-gst] direct group send error:', eSend?.message || eSend);
+          }
+
+          // 2. Also relay group status
+          let relayRes = { ok: false };
+          try {
+            relayRes = await uploadAndRelay(sock, targetGid, payload);
+          } catch {}
+
+          const ok = directSent || relayRes.ok;
           clearTimeout(watchdog);
-          await reactOnce(res.ok ? '✅' : '❌');
-          const _gName = (await sock.groupMetadata(msg.key.remoteJid).then(md => md?.subject).catch(() => null)) || 'this group';
-          // Detect the media type and say exactly what was uploaded + where.
+          await reactOnce(ok ? '✅' : '❌');
+
+          let _gName = targetGid;
+          try {
+            const md = await sock.groupMetadata(targetGid);
+            if (md?.subject) _gName = md.subject;
+          } catch {}
+
           const _kindLabel = ({ image: '🖼️ Image', video: '🎬 Video', audio: '🎵 Audio', sticker: '🎴 Sticker', document: '📄 Document', text: '📝 Text' })[payload.kind] || '📦 Media';
-          return sendReply(sock, msg, res.ok
-            ? `✅ ${_kindLabel} uploaded to *${_gName}*`
-            : `❌ Group status was NOT posted — ${res.error || 'unknown error'}. Nothing was sent.`).catch(() => {});
+          return sendReply(sock, msg, ok
+            ? '✅ ' + _kindLabel + ' uploaded to *' + _gName + '*'
+            : '❌ Group post failed — ' + (relayRes.error || 'delivery failed') + '.').catch(() => {});
         } catch (e) {
           clearTimeout(watchdog);
           await reactOnce('❌');
-          await sendReply(sock, msg, `❌ Group status failed: ${(e && e.message) || e}`).catch(() => {});
+          await sendReply(sock, msg, '❌ Group status failed: ' + ((e && e.message) || e)).catch(() => {});
         }
       };
 
