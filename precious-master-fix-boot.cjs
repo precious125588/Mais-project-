@@ -326,6 +326,21 @@ function installAll(ctx) {
     }
   } catch (e) { pbad('precious-tt-quote-fix failed: ' + (e && e.message)); }
 
+  /* [v37 STEP] Unified fix pack for the seven reported regressions
+     (anonymous ticks, settings silent-quoted reply, gst target resolution,
+      anime GC bad-request, emoji forward, real pin, status-reply Meta-AI
+     badge). Loaded LAST so its overrides always win over v36. */
+  try {
+    const v37 = multiRequire('./mias/precious-fixes-v37.cjs');
+    if (v37.mod && typeof v37.mod === 'function') {
+      try { v37.mod(globalThis.__PRECIOUS__ || ctx); result.v37 = true; plog('precious-fixes-v37: INSTALLED (anon|gst|anime|emoji|pin|status)'); }
+      catch (e37) { result.v37 = false; pbad('precious-fixes-v37 error: ' + (e37 && e37.message)); }
+    } else {
+      result.v37 = false;
+      pbad('precious-fixes-v37 missing module export');
+    }
+  } catch (e) { result.v37 = false; pbad('precious-fixes-v37 require failed: ' + (e && e.message)); }
+
   const slots = Object.keys(result).length;
   const good  = Object.values(result).filter(Boolean).length;
   const dt    = Date.now() - t0;

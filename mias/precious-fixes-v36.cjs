@@ -421,5 +421,10 @@ module.exports = function installV36(ctx) {
     }
   }
 
+    try {
+    const _v37 = require("./precious-fixes-v37.cjs");
+    if (typeof _v37 === "function") _v37(P);
+  } catch (_e37) {}
+
   console.log('[MIAX MDX][boot-verify] creator=@precious125588 anime-edits=ACTIVE ' + parts.join(' | '));
 };
