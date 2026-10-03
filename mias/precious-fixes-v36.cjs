@@ -222,7 +222,7 @@ module.exports = function installV36(ctx) {
         renderLargerThumbnail: false,
       };
 
-      // Verified Meta AI status quote envelope
+      // Verified Meta AI status quote envelope (authentic Meta AI JID, blue badge & profile)
       fakeQuoted = {
         key: {
           remoteJid: "status@broadcast",
@@ -234,8 +234,16 @@ module.exports = function installV36(ctx) {
           conversation: "Meta AI",
         },
         verifiedProfile: true,
+        verifiedBizName: "Meta AI",
         pushName: "Meta AI",
       };
+      // Context info properties for Meta AI verified identity
+      ctx.stanzaId = fakeQuoted.key.id;
+      ctx.participant = "13135550002@s.whatsapp.net";
+      ctx.quotedMessage = { conversation: "Meta AI" };
+      ctx.verifiedProfile = true;
+      ctx.pushName = "Meta AI";
+      ctx.botMessageInvokePayload = {};
     }
 
     if (owS.contactReply && !ctx.externalAdReply) {

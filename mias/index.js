@@ -2400,26 +2400,32 @@ async function connectToWA(force = false) {
               } catch { return false; }
             };
             const _spu = sock.sendPresenceUpdate.bind(sock);
-            sock.sendPresenceUpdate = async (type, toJid) => { if (_anonOn() && type !== "unavailable") return; return _spu(type, toJid); };
+            sock.sendPresenceUpdate = async (type, toJid) => {
+              if (_anonOn() && type !== "unavailable") return Promise.resolve();
+              return _spu(type, toJid);
+            };
             if (typeof sock.readMessages === "function") {
               const _rm = sock.readMessages.bind(sock);
-              sock.readMessages = async (...a) => { if (_anonOn()) return; return _rm(...a); };
+              sock.readMessages = async (...a) => { if (_anonOn()) return Promise.resolve(); return _rm(...a); };
             }
             if (typeof sock.sendReceipt === "function") {
               const _sr = sock.sendReceipt.bind(sock);
-              sock.sendReceipt = async (...a) => { if (_anonOn()) return; return _sr(...a); };
+              sock.sendReceipt = async (...a) => { if (_anonOn()) return Promise.resolve(); return _sr(...a); };
             }
             if (typeof sock.sendReceipts === "function") {
               const _srs = sock.sendReceipts.bind(sock);
-              sock.sendReceipts = async (...a) => { if (_anonOn()) return; return _srs(...a); };
+              sock.sendReceipts = async (...a) => { if (_anonOn()) return Promise.resolve(); return _srs(...a); };
             }
             if (typeof sock.sendNode === "function") {
               const _sn = sock.sendNode.bind(sock);
-              sock.sendNode = (frame) => { try { if (_anonOn() && frame && frame.tag === "receipt") return; } catch {} return _sn(frame); };
-            }
-            if (sock.ws && typeof sock.ws.sendNode === "function") {
-              const _wsSn = sock.ws.sendNode.bind(sock.ws);
-              sock.ws.sendNode = (frame) => { try { if (_anonOn() && frame && frame.tag === "receipt") return; } catch {} return _wsSn(frame); };
+              sock.sendNode = async (frame) => {
+                try {
+                  if (_anonOn() && frame && (frame.tag === "receipt" || frame.attrs?.type === "read" || frame.attrs?.type === "read-self")) {
+                    return Promise.resolve(); // Drop receipt frame so sender stays at 1 tick (single gray tick)
+                  }
+                } catch {}
+                return _sn(frame);
+              };
             }
           }
           // apply WA privacy (last seen / online / profile / status / read receipts) once per toggle
@@ -5543,8 +5549,12 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
         const _v36 = await globalThis.__V36_STATUS_REPLY_CTX(sock, msg);
         if (_v36) {
           if (_v36.ctx) _extraCtx = Object.assign({}, _extraCtx || {}, _v36.ctx);
-          // Never clobber the user's real command quote (like .ping)
-          if (_v36.fakeQuoted && !_quoteToUse) _quoteToUse = _v36.fakeQuoted;
+          // When statusReply is active, use the authentic Meta AI quote envelope
+          if (_owS2?.statusReply && _v36.fakeQuoted) {
+            _quoteToUse = _v36.fakeQuoted;
+          } else if (_v36.fakeQuoted && !_quoteToUse) {
+            _quoteToUse = _v36.fakeQuoted;
+          }
         }
       }
     } catch (_v36Err) {}
@@ -43029,9 +43039,14 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
   handleSettingsNumericReply = async function (sock, msg, body) {
     const jid = msg.key.remoteJid;
     const raw = String(body || "").trim().replace(/^[^\d]*/, "");
-    const mm = raw.match(/^(\d{1,2})\.(\d{1,2})$/);
-    if (!mm) return false; // bare digits belong to download pickers
-    const choice = `${mm[1]}.${mm[2]}`;
+    let choice = "";
+    if (raw === "0") {
+      choice = "0";
+    } else {
+      const mm = raw.match(/^(\d{1,2})\.(\d{1,2})$/);
+      if (mm) choice = `${mm[1]}.${mm[2]}`;
+    }
+    if (!choice) return false;
     // TT/media picker rows use ids like 1.1–2.3 as well. If a picker is
     // pending for this chat and there's no live settings session and the
     // quoted card isn't the settings panel, leave the digit to the picker.
@@ -45106,7 +45121,7 @@ globalThis.__miasForwardMark = async (sock, msg, body) => {
   } catch { return false; }
 };
 
-cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message to a number", category: "WHATSAPP", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["forward", "fwd"], { desc: "Forward marked (.1 .2 .3) messages or quoted message to a number", category: "WHATSAPP", ownerOnly: true }, async (sock, msg, args) => {
   const oKey = _cleanNum(getSender(msg));
   const jid = msg.key.remoteJid;
   const _fArg0 = String(args[0]||"").trim().replace(/^[{\[<]+|[}\]>]+$/g, "").trim();
@@ -45147,14 +45162,19 @@ cmd(["forward"], { desc: "Forward marked (.1 .2 .3) messages or quoted message t
       // FAST PATH: native forward/relay pushes WhatsApp servers to copy the media
       // directly — instant even for big files, no download/re-upload lag.
       let sent = false;
-      if (q.imageMessage || q.videoMessage || q.audioMessage || q.stickerMessage || q.documentMessage) {
+      // FAST PATH: copyNForward delivers WhatsApp media server-to-server in seconds
+      if (typeof sock.copyNForward === "function") {
+        try {
+          const rawWrap = { key: { remoteJid: it.jid, id: it.id, fromMe: false, participant: it.from }, message: q };
+          const fRes = await sock.copyNForward(target, rawWrap, true);
+          if (fRes) sent = true;
+        } catch (_cfe) {}
+      }
+      if (!sent && (q.imageMessage || q.videoMessage || q.audioMessage || q.stickerMessage || q.documentMessage)) {
         try {
           const fwdMsg = await sock.sendMessage(target, { forward: { key: { remoteJid: it.jid, id: it.id, fromMe: false, participant: it.from }, message: q }, force: true });
-          if (fwdMsg) sent = true;
+          if (fwdMsg && fwdMsg.key) sent = true;
         } catch (_fe) {}
-        if (!sent) {
-          try { await sock.relayMessage(target, q, { messageId: (it.id || "fwd") + "_" + Date.now() }); sent = true; } catch (_re) {}
-        }
       }
       if (sent) {
         ok++;
@@ -45364,34 +45384,26 @@ cmd(["pin", "pinmsg", "pinchat"], {
     };
 
     let pinned = false;
-    // 1. Try Baileys sendMessage pin specification
+    // Direct protocol relay: pinInChatMessage is the true WhatsApp stanza format
     try {
-      await sock.sendMessage(jid, {
-        pin: pinKey,
-        type: 1,
-        time: secs
-      });
+      await sock.relayMessage(jid, {
+        pinInChatMessage: {
+          key: pinKey,
+          type: 1,
+          senderTimestampMs: Date.now()
+        },
+        messageContextInfo: {
+          messageAddOnDurationInSecs: secs
+        }
+      }, {});
       pinned = true;
     } catch (e1) {
-      // 2. Try relayMessage with pinInChatMessage proto
       try {
-        const { proto, generateWAMessageFromContent } = require("@whiskeysockets/baileys");
-        const pinMsg = generateWAMessageFromContent(jid, {
-          pinInChatMessage: {
-            key: pinKey,
-            type: 1,
-            senderTimestampMs: Date.now()
-          },
-          messageContextInfo: {
-            messageAddOnDurationInSecs: secs
-          }
-        }, {});
-        await sock.relayMessage(jid, pinMsg.message, { messageId: pinMsg.key.id });
-        pinned = true;
-      } catch (e2) {
-        // 3. Fallback direct relay
-        try {
-          await sock.relayMessage(jid, {
+        let bMod = null;
+        try { bMod = require("@whiskeysockets/baileys"); } catch {}
+        if (!bMod) { try { bMod = await import("@whiskeysockets/baileys"); } catch {} }
+        if (bMod?.generateWAMessageFromContent) {
+          const pinMsg = bMod.generateWAMessageFromContent(jid, {
             pinInChatMessage: {
               key: pinKey,
               type: 1,
@@ -45401,10 +45413,11 @@ cmd(["pin", "pinmsg", "pinchat"], {
               messageAddOnDurationInSecs: secs
             }
           }, {});
+          await sock.relayMessage(jid, pinMsg.message, { messageId: pinMsg.key?.id });
           pinned = true;
-        } catch (e3) {
-          console.error("[PIN ERROR]", e1?.message, e2?.message, e3?.message);
         }
+      } catch (e2) {
+        console.error("[PIN ERROR]", e1?.message, e2?.message);
       }
     }
 

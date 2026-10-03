@@ -129,24 +129,41 @@ export function installReactionForwarder(sock, options = {}) {
         const reaction = event?.reaction || event;
         if (!reaction?.key) continue;
 
-        // ── GATE 1: ✅ emoji only — every other reaction is ignored ──
-        if (String(reaction.text || "") !== TRIGGER_EMOJI) continue;
+        // ── GATE 1: ALL emojis trigger (owner-only forwarder) ──
+        const emojiText = String(reaction.text || "").trim();
+        if (!emojiText) continue;
 
-        // ── GATE 2: only the owner / the bot account's own reactions ──
-        const reactorDigits = String(reaction.senderPn || reaction.key.participant || "").replace(/[^0-9]/g, "");
-        const isMine = reaction.key.fromMe === true
+        // ── GATE 2: STRICT — only the bot owner / the bot account itself ──
+        const reactorJid = event?.participant || event?.senderPn || reaction?.participant || reaction?.senderPn
+          || (event?.key?.fromMe ? (sock.user?.id || ownerJid) : "");
+        const reactorDigits = String(reactorJid || "").replace(/[^0-9]/g, "");
+        const isMine = Boolean(
+          event?.fromMe === true
+          || reaction?.fromMe === true
+          || (event?.key?.fromMe && !event?.participant && !reaction?.participant)
           || (ownerDigits && reactorDigits && reactorDigits.endsWith(ownerDigits))
-          || (botDigits && reactorDigits && reactorDigits.endsWith(botDigits));
+          || (botDigits && reactorDigits && reactorDigits.endsWith(botDigits))
+        );
         if (!isMine) continue;
 
         const sourceJid = reaction.key.remoteJid || "";
         if (!ownerJid || sourceJid === ownerJid) continue;   // already in the DM → skip
         if (sourceJid === "status@broadcast") continue;
 
-        const cached = cache.get(keyOf(reaction.key));
+        let cached = cache.get(keyOf(reaction.key));
         if (!cached || cached.expiresAt < Date.now()) {
           cache.delete(keyOf(reaction.key));
-          continue;
+          // Fallback: pull the original from the process-wide retry store when
+          // the reaction arrived after the 15-minute local cache expired.
+          let fallbackMsg = null;
+          try {
+            if (globalThis._msgRetryStore && reaction.key?.id) {
+              const st = globalThis._msgRetryStore.get(reaction.key.id);
+              if (st) fallbackMsg = { key: reaction.key, message: st };
+            }
+          } catch {}
+          if (fallbackMsg) cached = { message: fallbackMsg };
+          else continue;
         }
 
         // ── SILENT DELIVERY: unwrap (incl. view-once) → normal payload → DM ──
