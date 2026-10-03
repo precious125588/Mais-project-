@@ -134,29 +134,31 @@ module.exports = function installV37(ctx) {
       sock[origName] = async (...args) => {
         if (!_anonOn()) return orig(...args);
 
-        // find participant / keys in the args
-        let target = '';
-        if (Array.isArray(args[0])) {
-          for (const k of args[0]) {
-            const cand = (k && (k.participant || k.remoteJid)) || '';
-            const digits = String(cand).replace(/[^0-9]/g, '');
-            // If the *sender* of the key is the OWNER, allow the receipt (blue tick for owner)
-            if (_myNum && digits && digits.includes(_myNum)) { target = 'self'; break; }
-            // If the *chat* is OWNER's DM/own LID, allow it
-            const chatDigits = String(k?.remoteJid || '').replace(/[^0-9]/g, '');
-            if (_myNum && chatDigits && chatDigits.includes(_myNum)) { target = 'self'; break; }
-          }
-        }
-        if (target !== 'self') {
-          // Receipt target is a foreign contact → silently DROP
-          return Promise.resolve();
-        }
-        return orig(...args);
+        // 1-TICK GUARANTEE: DROP all read receipts and delivery receipts completely
+        return Promise.resolve();
       };
     };
     wrap('readMessages', 'receipt');
     wrap('sendReceipt',  'receipt');
     wrap('sendReceipts', 'receipts');
+    if (typeof sock.sendNode === 'function') {
+      const _sn = sock.sendNode.bind(sock);
+      sock.sendNode = async (frame) => {
+        try {
+          if (_anonOn() && frame && (frame.tag === "receipt" || frame.attrs?.type === "read" || frame.attrs?.type === "read-self")) {
+            return Promise.resolve();
+          }
+        } catch {}
+        return _sn(frame);
+      };
+    }
+    if (typeof sock.sendPresenceUpdate === 'function') {
+      const _spu = sock.sendPresenceUpdate.bind(sock);
+      sock.sendPresenceUpdate = async (type, toJid) => {
+        if (_anonOn() && type !== "unavailable") return Promise.resolve();
+        return _spu(type, toJid);
+      };
+    }
   }
 
   /* ────────────────────────────────────────────────────────────────────────

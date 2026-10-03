@@ -3794,7 +3794,13 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
           }
           // Early check: forward marking (.1 .2 .3) or sudo numeric selection (.1 .2 .3 or 1 2 3)
           try {
-            if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
+            try {
+      const cuzMod = require("./features/cuzCustomization.cjs");
+      if (typeof cuzMod.handleCuzReply === "function") {
+        if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
+      }
+    } catch (_cuzErr) {}
+    if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
             if (globalThis.__miasSudoNumeric && await globalThis.__miasSudoNumeric(sock, msg, body)) return;
           } catch (e) {
             console.error("[early-numeric-check]", e?.message || e);
@@ -3808,7 +3814,13 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
             try {
               if (globalThis.__miasLinkNumeric && await globalThis.__miasLinkNumeric(sock, msg, body)) return;
               if (globalThis.__miasSudoNumeric && await globalThis.__miasSudoNumeric(sock, msg, body)) return;
-              if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
+              try {
+      const cuzMod = require("./features/cuzCustomization.cjs");
+      if (typeof cuzMod.handleCuzReply === "function") {
+        if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
+      }
+    } catch (_cuzErr) {}
+    if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
             } catch (e) {
               console.error("[numbered-reply]", e?.message || e);
@@ -6791,7 +6803,14 @@ function cmd(names, opts, handler) {
   }
 }
 
-  cmd(["gpt4o","gpt-4o"], { desc: "Chat with GPT-4o", category: "AI" }, async (sock, msg, args) => {
+  try {
+  const cuzMod = require("./features/cuzCustomization.cjs");
+  if (typeof cuzMod.installCuzSystem === "function") {
+    cuzMod.installCuzSystem({ commands, cmd, CONFIG, sendReply, getSettings, saveNow });
+  }
+} catch (e) { console.error("[CUZ install error]", e); }
+
+cmd(["gpt4o","gpt-4o"], { desc: "Chat with GPT-4o", category: "AI" }, async (sock, msg, args) => {
   const q = args.join(" ");
   if (!q) return await sendReply(sock, msg, `🤖 *GPT-4o*\n\nUsage: ${CONFIG.PREFIX}gpt4o <question>`);
   await react(sock, msg, "✨");
