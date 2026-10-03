@@ -488,57 +488,77 @@ module.exports = function installV37(ctx) {
    *  FIX 6 — PIN (real WhatsApp pinChat / relayMessage pin)
    * ──────────────────────────────────────────────────────────────────────── */
   async function _pinInChat(sock, jid, ctx, secs) {
+    const isGroup = jid.endsWith('@g.us');
+    const rawParticipant = ctx.participant || (isGroup ? ctx.remoteJid : undefined);
+    const normalizedParticipant = rawParticipant ? rawParticipant.replace(/:\d+(?=@)/, '') : undefined;
+    const myNum = sock?.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, '') : '';
+    const fromMe = Boolean(ctx.fromMe || (normalizedParticipant && myNum && normalizedParticipant.includes(myNum)));
+
     const pinKey = {
       remoteJid: jid,
       id: ctx.stanzaId,
-      fromMe: Boolean(ctx.fromMe) || undefined,
-      participant: jid.endsWith('@g.us') ? (ctx.participant || undefined) : undefined,
+      fromMe: fromMe,
+      ...(isGroup && normalizedParticipant ? { participant: normalizedParticipant } : {})
     };
-    // Strip accidental device-id suffixes ("1234:5@s.whatsapp.net") that
-    // confuse the relay validator. The fork only accepts the bare form.
-    if (pinKey.participant) pinKey.participant = pinKey.participant.replace(/:\d+(?=@)/, '');
-    if (pinKey.fromMe === undefined) delete pinKey.fromMe;
 
-    // Strategy A: relayMessage with pinInChatMessage (most forked versions)
+    // Strategy 1: Official Baileys sendMessage pin format (sock.sendMessage(jid, { pin: key, type: 1, time: secs }))
     try {
-      const wm = (() => {
-        try { return require('@whiskeysockets/baileys'); } catch { return null; }
-      })();
-      const proto = wm?.proto?.Message?.PinInChatMessage || wm?.proto?.Message?.ProtocolMessage;
-      let message;
+      if (typeof sock.sendMessage === 'function') {
+        const res = await sock.sendMessage(jid, {
+          pin: pinKey,
+          type: 1,
+          time: secs
+        });
+        if (res?.key?.id) return { ok: true, strategy: 'sendMessage-direct' };
+      }
+    } catch (e1) { console.error('[v37-pin-send-1]', e1?.message || e1); }
+
+    // Strategy 2: Baileys nested pin format (sock.sendMessage(jid, { pin: { key: pinKey, type: 1, time: secs } }))
+    try {
+      if (typeof sock.sendMessage === 'function') {
+        const res = await sock.sendMessage(jid, {
+          pin: {
+            key: pinKey,
+            type: 1,
+            time: secs
+          }
+        });
+        if (res?.key?.id) return { ok: true, strategy: 'sendMessage-nested' };
+      }
+    } catch (e2) { console.error('[v37-pin-send-2]', e2?.message || e2); }
+
+    // Strategy 3: generateWAMessageFromContent + relayMessage
+    try {
+      let wm = null;
+      try { wm = require('@whiskeysockets/baileys'); } catch {
+        try { wm = await import('@whiskeysockets/baileys'); } catch {}
+      }
       if (typeof wm?.generateWAMessageFromContent === 'function') {
-        message = wm.generateWAMessageFromContent(jid, {
+        const pinMsg = wm.generateWAMessageFromContent(jid, {
           pinInChatMessage: {
             key: pinKey, type: 1, senderTimestampMs: Date.now(),
           },
           messageContextInfo: {
             messageAddOnDurationInSecs: secs,
-            deviceListMetadata: undefined,
-            deviceListMetadataVersion: undefined,
           },
         }, {});
-      } else {
-        message = {
+        await sock.relayMessage(jid, pinMsg.message, { messageId: pinMsg.key?.id });
+        return { ok: true, strategy: 'relay-wam' };
+      }
+    } catch (e3) { console.error('[v37-pin-gen]', e3?.message || e3); }
+
+    // Strategy 4: direct relayMessage fallback
+    try {
+      if (typeof sock.relayMessage === 'function') {
+        await sock.relayMessage(jid, {
           pinInChatMessage: {
             key: pinKey, type: 1, senderTimestampMs: Date.now(),
           },
           messageContextInfo: { messageAddOnDurationInSecs: secs },
-        };
+        }, {});
+        return { ok: true, strategy: 'relay-direct' };
       }
-      await sock.relayMessage(jid, message?.message || message, message?.key?.id ? { messageId: message.key.id } : {});
-      return { ok: true, strategy: 'relay' };
-    } catch (eA) { console.error('[pin-A]', eA?.message || eA); }
-
-    // Strategy B: chatModify({ pin: true }) — pins whole chat as fallback.
-    try {
-      if (typeof sock.chatModify === 'function') {
-        await sock.chatModify(
-          { pin: true, messageAddOnDurationInSecs: secs, messageKey: pinKey },
-          jid,
-        );
-        return { ok: true, strategy: 'chatModify' };
-      }
-    } catch (eB) { console.error('[pin-B]', eB?.message || eB); }
+    } catch (e4) { console.error('[v37-pin-relay]', e4?.message || e4); }
 
     return { ok: false };
   }

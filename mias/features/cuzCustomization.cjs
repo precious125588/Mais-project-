@@ -3,6 +3,7 @@
 
 "use strict";
 
+
 const customizationOptions = [
   { id: "prefix", label: "Prefix", type: "text", default: "." },
   { id: "botName", label: "Bot Name", type: "text", default: "MIA'S MDX" },
@@ -172,6 +173,94 @@ function buildCustomizeMenuText() {
   return lines.join("\n");
 }
 
+
+async function getBotPicForCuz(sock, jid, getSettingsFn) {
+  // 1. Check custom botProfile from cuz settings
+  try {
+    if (typeof getSettingsFn === "function") {
+      const set = getSettingsFn(jid) || getSettingsFn("global_cuz");
+      const customPic = set?.__cuz?.botProfile;
+      if (customPic && typeof customPic === "string" && customPic.startsWith("http")) {
+        let resp = null;
+        try {
+          const a = require("axios");
+          resp = await a.get(customPic, { responseType: "arraybuffer", timeout: 10000 });
+        } catch (_) {
+          if (typeof fetch === "function") {
+            const fRes = await fetch(customPic).catch(() => null);
+            if (fRes?.ok) {
+              const arr = await fRes.arrayBuffer();
+              resp = { data: Buffer.from(arr) };
+            }
+          }
+        }
+        if (resp?.data && Buffer.isBuffer(resp.data) && resp.data.length > 500) {
+          return resp.data;
+        }
+        return { url: customPic };
+      }
+    }
+  } catch (_) {}
+
+  // 2. Try live bot WhatsApp profile picture
+  try {
+    const me = sock?.user?.id;
+    if (me && typeof sock.profilePictureUrl === "function") {
+      const pUrl = await sock.profilePictureUrl(me, "image").catch(() => null)
+                || await sock.profilePictureUrl(me, "preview").catch(() => null);
+      if (pUrl) {
+        let resp = null;
+        try {
+          const a = require("axios");
+          resp = await a.get(pUrl, { responseType: "arraybuffer", timeout: 10000 });
+        } catch (_) {
+          if (typeof fetch === "function") {
+            const fRes = await fetch(pUrl).catch(() => null);
+            if (fRes?.ok) {
+              const arr = await fRes.arrayBuffer();
+              resp = { data: Buffer.from(arr) };
+            }
+          }
+        }
+        if (resp?.data && Buffer.isBuffer(resp.data) && resp.data.length > 500) {
+          return resp.data;
+        }
+        return { url: pUrl };
+      }
+    }
+  } catch (_) {}
+
+  // 3. Fallback to global getBotPic if present
+  try {
+    if (typeof globalThis.getBotPic === "function") {
+      const b = await globalThis.getBotPic();
+      if (b) return b;
+    }
+  } catch (_) {}
+
+  // 4. Default catbox avatar
+  try {
+    const defaultUrl = "https://files.catbox.moe/05rqy6.png";
+    let resp = null;
+    try {
+      const a = require("axios");
+      resp = await a.get(defaultUrl, { responseType: "arraybuffer", timeout: 10000 });
+    } catch (_) {
+      if (typeof fetch === "function") {
+        const fRes = await fetch(defaultUrl).catch(() => null);
+        if (fRes?.ok) {
+          const arr = await fRes.arrayBuffer();
+          resp = { data: Buffer.from(arr) };
+        }
+      }
+    }
+    if (resp?.data && Buffer.isBuffer(resp.data)) return resp.data;
+    return { url: defaultUrl };
+  } catch (_) {
+    return { url: "https://files.catbox.moe/05rqy6.png" };
+  }
+}
+
 function installCuzSystem(P) {
   const { commands, cmd, CONFIG, sendReply, getSettings, saveNow } = P;
 
@@ -183,7 +272,26 @@ function installCuzSystem(P) {
     const rawVal = args.join(" ").trim();
 
     const menuText = buildCustomizeMenuText();
-    const sentMsg = await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
+    let sentMsg = null;
+    let botPic = null;
+    try {
+      botPic = await getBotPicForCuz(sock, jid, getSettings);
+    } catch (_) {}
+
+    if (botPic) {
+      try {
+        sentMsg = await sock.sendMessage(jid, {
+          image: botPic,
+          caption: menuText
+        }, { quoted: msg });
+      } catch (eImg) {
+        console.error("[CUZ IMAGE SEND ERROR]", eImg?.message || eImg);
+      }
+    }
+
+    if (!sentMsg) {
+      sentMsg = await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
+    }
     const menuMsgId = sentMsg?.key?.id;
 
     if (menuMsgId) {
@@ -218,7 +326,11 @@ async function handleCuzReply(sock, msg, body, P) {
   const sess = pendingSessions.get(sessionKey);
   if (!sess) return false;
 
-  const quotedId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
+  const ctx = msg.message?.extendedTextMessage?.contextInfo
+            || msg.message?.imageMessage?.contextInfo
+            || msg.message?.videoMessage?.contextInfo
+            || msg.message?.documentMessage?.contextInfo;
+  const quotedId = ctx?.stanzaId;
   const rawText = String(body || "").trim();
 
   // If waiting for a value after empty .cuz

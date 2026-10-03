@@ -45365,7 +45365,12 @@ cmd(["pin", "pinmsg", "pinchat"], {
   const jid = msg.key.remoteJid;
   const isGroupMsg = jid.endsWith("@g.us");
   try {
-    const _ctx = msg.message?.extendedTextMessage?.contextInfo;
+    const _ctx = msg.message?.extendedTextMessage?.contextInfo
+              || msg.message?.imageMessage?.contextInfo
+              || msg.message?.videoMessage?.contextInfo
+              || msg.message?.documentMessage?.contextInfo
+              || msg.message?.audioMessage?.contextInfo
+              || msg.message?.stickerMessage?.contextInfo;
     if (!_ctx?.stanzaId) {
       return await sendReply(sock, msg, "❌ Reply to the message you want to pin with *.pin [24h|7d|30d]*");
     }
@@ -45375,11 +45380,12 @@ cmd(["pin", "pinmsg", "pinchat"], {
       try { groupMetadata = await sock.groupMetadata(jid); } catch (_) {}
       const botJid = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
       const botNum = botJid.split("@")[0];
+      const botLid = (sock.user?.lid || "").replace(/:[0-9]+@/, "@");
       const admins = (groupMetadata?.participants || [])
         .filter(p => p.admin === "admin" || p.admin === "superadmin")
         .map(p => (p.id || "").replace(/:[0-9]+@/, "@"));
-      const isBotAdmin = admins.some(a => a.includes(botNum));
-      if (!isBotAdmin) {
+      const isBotAdmin = admins.some(a => a.includes(botNum) || (botLid && a.includes(botLid.split("@")[0])));
+      if (groupMetadata && !isBotAdmin) {
         return await sendReply(sock, msg, "❌ Bot must be a group admin to pin messages in this group!");
       }
     }
@@ -45399,29 +45405,47 @@ cmd(["pin", "pinmsg", "pinchat"], {
       remoteJid: jid,
       id: _ctx.stanzaId,
       fromMe: fromMe,
-      participant: jid.endsWith("@g.us") ? normalizedParticipant : undefined
+      ...(isGroupMsg && normalizedParticipant ? { participant: normalizedParticipant } : {})
     };
 
     let pinned = false;
-    // Direct protocol relay: pinInChatMessage is the true WhatsApp stanza format
+    let lastErr = "";
+
+    // 1. Primary method: Modern Baileys sendMessage pin format
     try {
-      await sock.relayMessage(jid, {
-        pinInChatMessage: {
-          key: pinKey,
+      if (typeof sock.sendMessage === "function") {
+        const res = await sock.sendMessage(jid, {
+          pin: pinKey,
           type: 1,
-          senderTimestampMs: Date.now()
-        },
-        messageContextInfo: {
-          messageAddOnDurationInSecs: secs
+          time: secs
+        });
+        if (res?.key?.id) pinned = true;
+      }
+    } catch (e1) { lastErr = e1?.message || String(e1); console.error("[PIN ERR 1]", e1?.message || e1); }
+
+    // 2. Secondary method: Baileys nested pin format
+    if (!pinned) {
+      try {
+        if (typeof sock.sendMessage === "function") {
+          const res = await sock.sendMessage(jid, {
+            pin: {
+              key: pinKey,
+              type: 1,
+              time: secs
+            }
+          });
+          if (res?.key?.id) pinned = true;
         }
-      }, {});
-      pinned = true;
-    } catch (e1) {
+      } catch (e2) { lastErr = e2?.message || String(e2); console.error("[PIN ERR 2]", e2?.message || e2); }
+    }
+
+    // 3. Tertiary method: generateWAMessageFromContent + relayMessage
+    if (!pinned) {
       try {
         let bMod = null;
         try { bMod = require("@whiskeysockets/baileys"); } catch {}
         if (!bMod) { try { bMod = await import("@whiskeysockets/baileys"); } catch {} }
-        if (bMod?.generateWAMessageFromContent) {
+        if (typeof bMod?.generateWAMessageFromContent === "function") {
           const pinMsg = bMod.generateWAMessageFromContent(jid, {
             pinInChatMessage: {
               key: pinKey,
@@ -45432,19 +45456,36 @@ cmd(["pin", "pinmsg", "pinchat"], {
               messageAddOnDurationInSecs: secs
             }
           }, {});
-          await sock.relayMessage(jid, pinMsg.message, { messageId: pinMsg.key?.id });
+          const relayRes = await sock.relayMessage(jid, pinMsg.message, { messageId: pinMsg.key?.id });
+          if (relayRes) pinned = true;
+        }
+      } catch (e3) { lastErr = e3?.message || String(e3); console.error("[PIN ERR 3]", e3?.message || e3); }
+    }
+
+    // 4. Quaternary fallback: direct relayMessage
+    if (!pinned) {
+      try {
+        if (typeof sock.relayMessage === "function") {
+          await sock.relayMessage(jid, {
+            pinInChatMessage: {
+              key: pinKey,
+              type: 1,
+              senderTimestampMs: Date.now()
+            },
+            messageContextInfo: {
+              messageAddOnDurationInSecs: secs
+            }
+          }, {});
           pinned = true;
         }
-      } catch (e2) {
-        console.error("[PIN ERROR]", e1?.message, e2?.message);
-      }
+      } catch (e4) { lastErr = e4?.message || String(e4); console.error("[PIN ERR 4]", e4?.message || e4); }
     }
 
     if (pinned) {
       const durLabel = secs === 86400 ? "24 hours" : secs === 2592000 ? "30 days" : "7 days";
       await sendReply(sock, msg, `📌 *Message pinned successfully for ${durLabel}!*`);
     } else {
-      await sendReply(sock, msg, "❌ Failed to pin message. Make sure the message is not too old and bot is group admin.");
+      await sendReply(sock, msg, `❌ Failed to pin message: ${lastErr || "make sure bot is group admin"}`);
     }
   } catch (err) {
     console.error("[PIN HANDLER ERROR]", err);
