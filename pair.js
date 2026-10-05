@@ -564,6 +564,9 @@ async function validateSession(nexusDevNumber) {
     try {
         const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
         if (!creds.me || !creds.me.id) {
+            if (isPairingInProgress(nexusDevNumber)) {
+                return false; // Do not delete session while pairing is in progress
+            }
             console.log(chalk.yellow(`⚠️ Invalid session for ${nexusDevNumber}, cleaning up...`));
             require('./sessionPaths').quarantineDir(sessionPath, 'pair flow requested removal');
             return false;
@@ -744,7 +747,7 @@ function ensureDirectoryExists(dirPath) {
 // (this is why the site "counted for 60 seconds"). We now cache the result
 // for 6 hours, cap the lookup at 6 seconds, and fall back to a known-good
 // version instead of failing the whole pairing.
-const FALLBACK_WA_VERSION = [2, 3000, 1015901307];
+const FALLBACK_WA_VERSION = [2, 3000, 1043857760];
 let _waVersionCache = { version: null, at: 0 };
 const WA_VERSION_TTL = 6 * 60 * 60 * 1000;
 
@@ -755,7 +758,7 @@ async function getWAVersion() {
     try {
         const result = await Promise.race([
             fetchLatestBaileysVersion(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('version lookup timeout')), 3500))
+            new Promise((_, rej) => setTimeout(() => rej(new Error('version lookup timeout')), 8000))
         ]);
         if (result?.version) {
             _waVersionCache = { version: result.version, at: Date.now() };
@@ -1605,7 +1608,7 @@ async function startpairing(nexusDevNumber, options = {}) {
 
         if (connection === "close") {
             let reason = new Boom(lastDisconnect?.error)?.output.statusCode;
-            const pairingStillPending = !state.creds.registered && !tracker?.pairingCode;
+            const pairingStillPending = !state.creds.registered;
 
             // ── HANDOFF IS STICKY ────────────────────────────────────────
             // The flag used to be cleared on the first close. But closing a
