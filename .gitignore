@@ -1,0 +1,10 @@
+node_modules/
+nexstore/pairing/
+nexstore/sessions/
+*.log
+.env.local
+media-patch/dist/
+tmp/
+uploads/
+auth_info/
+sessions/
