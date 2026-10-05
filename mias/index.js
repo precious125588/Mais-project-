@@ -3035,7 +3035,8 @@ Save my contact:` }).catch(() => {});
             // reach __miasHandleBareNumberReply unchanged).
             const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
             const _pQtxt = (typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||"";
-            const _pIsSettingsPanel = /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(_pQtxt);
+            const _pNorm = String(_pQtxt || "").normalize("NFKD");
+   const _pIsSettingsPanel = /SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot|\b\d{1,2}\.[1-4]\b/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT|\b\d{1,2}\.[1-4]\b/i.test(_pNorm);
             if (!_pIsSettingsPanel && _pickerChoice && (_pickerActive || (_v32HasQuote && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test(_pQtxt)))) {
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
             }
@@ -9064,7 +9065,9 @@ async function handleSettingsNumericReply(sock, msg, body) {
         return acc;
       };
       const _qText = _q ? _collectQ(_q).filter(Boolean).join(" ") : "";
-      const _normQ = (_qText || "").normalize("NFKD"); const _isSettingsPanel = /settings|⚙️|𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦|Block Calls|Link Guard|Bad Word|Anti Delete|Anonymous Mode/i.test(_qText) || /settings|block calls|link guard|anti delete/i.test(_normQ);
+      const _normQ = (_qText || "").normalize("NFKD");
+      const _isSettingsPanel = /settings|⚙️|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Auto Voice|Auto Sticker|Auto Reply|Recording|Typing|Always Online|Chatbot|Adult Mode|Anti Mention|Anti Bug|Force Private|Status Reply|AI Tag|Anti Broadcast|\b\d{1,2}\.[1-4]\b/i.test(_qText)
+        || /settings|config|block calls|link guard|bad word|anti delete|auto react|auto block|read msgs|view status|welcome|auto voice|auto sticker|auto reply|always online|chatbot|adult mode|anti mention|anti bug|force private|status reply|ai tag|anti broadcast|\b\d{1,2}\.[1-4]\b/i.test(_normQ);
       const _hasSession = !!(jid && settingsSession.get(jid));
       const _pickerPending = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(jid);
       // PRECIOUS v23: a quoted play/download card can be recognised by its

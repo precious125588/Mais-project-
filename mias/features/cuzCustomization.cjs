@@ -323,7 +323,26 @@ async function handleCuzReply(sock, msg, body, P) {
   const userId = String(sender).replace(/:[0-9]+@/, "@");
   const sessionKey = `${jid}:${userId}`;
 
-  const sess = pendingSessions.get(sessionKey);
+  let sess = pendingSessions.get(sessionKey);
+  const _rawCtx = msg.message?.extendedTextMessage?.contextInfo
+    || msg.message?.imageMessage?.contextInfo
+    || msg.message?.videoMessage?.contextInfo
+    || msg.message?.documentMessage?.contextInfo;
+  const _qMsg = _rawCtx?.quotedMessage;
+  const _qText = String(_qMsg?.conversation || _qMsg?.extendedTextMessage?.text || _qMsg?.imageMessage?.caption || _qMsg?.videoMessage?.caption || "");
+  const _isCuzText = /CUSTOMIZE|CUSTOMIZATION|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner/i.test(_qText);
+
+  if (!sess && _isCuzText) {
+    sess = {
+      chatId: jid,
+      userId: userId,
+      menuMessageId: _rawCtx?.stanzaId,
+      pendingValue: null,
+      awaitingValueOption: null,
+      createdAt: Date.now()
+    };
+    pendingSessions.set(sessionKey, sess);
+  }
   if (!sess) return false;
 
   const ctx = msg.message?.extendedTextMessage?.contextInfo
@@ -351,7 +370,7 @@ async function handleCuzReply(sock, msg, body, P) {
 
   // Expecting menu option number reply
   const isCuzQuoted = (quotedId && (quotedId === sess.menuMessageId || quotedId === sess.menuMessageId?.id))
-    || (ctx && /CUZ|CUSTOMIZATION|BRANDING|PRESENTATION/i.test(String(ctx.quotedMessage?.conversation || ctx.quotedMessage?.extendedTextMessage?.text || ctx.quotedMessage?.imageMessage?.caption || "")))
+    || (ctx && /\/CUZ|CUSTOMIZ|BRANDING|PRESENTATION/i.test(String(ctx.quotedMessage?.conversation || ctx.quotedMessage?.extendedTextMessage?.text || ctx.quotedMessage?.imageMessage?.caption || "")))
     || (Date.now() - sess.createdAt < 10 * 60 * 1000);
 
   if (isCuzQuoted) {
