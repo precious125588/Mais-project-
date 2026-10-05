@@ -44381,19 +44381,29 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
   let node = ctx?.quotedMessage || msg.message;
   if (typeof __unwrapWaMsg === "function") node = __unwrapWaMsg(node) || node;
 
-  // Deep unwrapping of common wrapper envelopes
-  if (node?.documentWithCaptionMessage?.message) node = node.documentWithCaptionMessage.message;
-  if (node?.viewOnceMessage?.message) node = node.viewOnceMessage.message;
-  if (node?.viewOnceMessageV2?.message) node = node.viewOnceMessageV2.message;
-  if (node?.ephemeralMessage?.message) node = node.ephemeralMessage.message;
+  // Deep unwrapping of common wrapper envelopes (view once, ephemeral, edits, etc.)
+  let _curNode = node;
+  for (let _i = 0; _i < 6 && _curNode; _i++) {
+    const _next = _curNode.ephemeralMessage?.message
+      || _curNode.viewOnceMessage?.message
+      || _curNode.viewOnceMessageV2?.message
+      || _curNode.viewOnceMessageV2Extension?.message
+      || _curNode.documentWithCaptionMessage?.message
+      || _curNode.editedMessage?.message?.protocolMessage?.editedMessage
+      || _curNode.editedMessage?.message;
+    if (!_next) break;
+    _curNode = _next;
+  }
+  node = _curNode || node;
 
+  const ptv = node?.ptvMessage;
   const vid = node?.videoMessage;
   const doc = node?.documentMessage;
   const stk = node?.stickerMessage;
   const img = node?.imageMessage;
   const aud = node?.audioMessage;
 
-  const mediaObj = vid || doc || stk || img || aud;
+  const mediaObj = ptv || vid || doc || stk || img || aud;
   if (!mediaObj) {
     try { await react(sock, msg, "❌"); } catch {}
     return;
@@ -44401,7 +44411,8 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
 
   // Determine media download stream types with fallback
   let streamTypes = [];
-  if (vid) streamTypes = ["video", "document"];
+  if (ptv) streamTypes = ["ptv", "video", "document"];
+  else if (vid) streamTypes = ["video", "document"];
   else if (doc) {
     const mime = String(doc.mimetype || "").toLowerCase();
     const fn = String(doc.fileName || "").toLowerCase();
@@ -44457,7 +44468,7 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
   } catch {}
 
   let inExt = "bin";
-  if (vid) inExt = "mp4";
+  if (ptv || vid) inExt = "mp4";
   else if (stk) inExt = "webp";
   else if (img) inExt = "jpg";
   else if (aud) inExt = "ogg";
