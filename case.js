@@ -2868,7 +2868,7 @@ case 'setsudo': case 'sudo': case 'addsudo': {
 break;
 
 // Delete Sudo
-case '__dup_removed_delsudo__': {  // moved to mias/index.js
+case 'delsudo': {  // moved to mias/index.js
   if (!isCreator) 
   return reply('❌ Only the bot owner or sudo users can use this command.');
 
@@ -3471,17 +3471,46 @@ break;
 case 'tomp4': {
     try { await devtrust.sendMessage(m.chat, { react: { text: "🌀", key: m.key } }); } catch {}
 
-    const q = m.quoted ? m.quoted : m;
-    let qMsg = q.msg || q;
-    let mime = qMsg?.mimetype || q.mimetype || "";
-    let isDoc = !!(q.documentMessage || qMsg.documentMessage || /document/.test(mime));
-    let isVid = !!(q.videoMessage || qMsg.videoMessage || /video/.test(mime));
-    let isStk = !!(q.stickerMessage || qMsg.stickerMessage || /webp/.test(mime));
-    let isImg = !!(q.imageMessage || qMsg.imageMessage || /image/.test(mime));
+    const _unwrapMsg = (obj) => {
+        let cur = obj;
+        for (let i = 0; i < 5 && cur; i++) {
+            const next = cur.ephemeralMessage?.message || cur.viewOnceMessage?.message || cur.viewOnceMessageV2?.message || cur.documentWithCaptionMessage?.message || cur.editedMessage?.message;
+            if (!next) break;
+            cur = next;
+        }
+        return cur;
+    };
 
-    if (!m.quoted && !isVid && !isDoc && !isStk && !isImg) {
+    const q = m.quoted ? m.quoted : m;
+    let rawM = _unwrapMsg(q.message || q.msg || q);
+    let qMsg = rawM || q.msg || q;
+
+    let mime = qMsg?.mimetype || q.mimetype || "";
+    let isPtv = !!(qMsg?.ptvMessage || q.ptvMessage || /ptv/.test(mime));
+    let isVid = !!(qMsg?.videoMessage || q.videoMessage || /video/.test(mime) || isPtv);
+    let isStk = !!(qMsg?.stickerMessage || q.stickerMessage || /webp/.test(mime));
+    let isImg = !!(qMsg?.imageMessage || q.imageMessage || /image/.test(mime));
+    let isAud = !!(qMsg?.audioMessage || q.audioMessage || /audio|ogg|mp3|m4a|opus/.test(mime));
+    let isDoc = !!(qMsg?.documentMessage || q.documentMessage || /document/.test(mime));
+
+    if (!isVid && !isPtv && !isStk && !isImg && !isAud && !isDoc) {
+        // Check nested messages
+        for (const k of ['ptvMessage', 'videoMessage', 'stickerMessage', 'imageMessage', 'audioMessage', 'documentMessage']) {
+            if (qMsg && qMsg[k]) {
+                if (k === 'ptvMessage') { isPtv = true; isVid = true; }
+                else if (k === 'videoMessage') isVid = true;
+                else if (k === 'stickerMessage') isStk = true;
+                else if (k === 'imageMessage') isImg = true;
+                else if (k === 'audioMessage') isAud = true;
+                else if (k === 'documentMessage') isDoc = true;
+                break;
+            }
+        }
+    }
+
+    if (!m.quoted && !isVid && !isPtv && !isStk && !isImg && !isAud && !isDoc) {
         try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
-        break;
+        return reply("🎥 *Reply to any video, video note, sticker, image, audio or document to convert to MP4.*");
     }
 
     try {
@@ -3496,15 +3525,15 @@ case 'tomp4': {
         // Direct stream download fallback
         if (!media || !media.length) {
             const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
-            const targetObj = qMsg.videoMessage || qMsg.documentMessage || qMsg.stickerMessage || qMsg.imageMessage || qMsg;
-            const streamTypes = isDoc ? ["document", "video"] : (isVid ? ["video", "document"] : (isStk ? ["sticker"] : ["image"]));
+            const targetObj = qMsg.ptvMessage || qMsg.videoMessage || qMsg.stickerMessage || qMsg.documentMessage || qMsg.imageMessage || qMsg.audioMessage || qMsg;
+            const streamTypes = isPtv ? ["ptv", "video"] : (isDoc ? ["document", "video"] : (isVid ? ["video", "document"] : (isStk ? ["sticker"] : (isAud ? ["audio"] : ["image"]))));
             for (const st of streamTypes) {
                 try {
                     const stream = await downloadContentFromMessage(targetObj, st);
                     let chunks = [];
                     for await (const c of stream) chunks.push(c);
                     const res = Buffer.concat(chunks);
-                    if (res && res.length > 50) {
+                    if (res && res.length > 30) {
                         media = res;
                         break;
                     }
@@ -3514,7 +3543,7 @@ case 'tomp4': {
 
         if (!media || !media.length) {
             try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
-            break;
+            return reply("❌ Could not download the media. Send it again and retry.");
         }
 
         const fs = require("fs");
@@ -3524,9 +3553,10 @@ case 'tomp4': {
         const _id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
 
         let ext = "bin";
-        if (isVid) ext = "mp4";
+        if (isPtv || isVid) ext = "mp4";
         else if (isStk) ext = "webp";
         else if (isImg) ext = "jpg";
+        else if (isAud) ext = "ogg";
         else if (isDoc) {
             const fn = String(qMsg?.fileName || "").toLowerCase();
             const mat = fn.match(/\.([a-z0-9]+)$/);
@@ -3550,13 +3580,16 @@ case 'tomp4': {
 
         if (isStk) {
             try {
-                await execFF(["-y", "-i", inputPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outputPath]);
+                await execFF(["-y", "-i", inputPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=25", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outputPath]);
             } catch {
                 await execFF(["-y", "-loop", "1", "-t", "3", "-i", inputPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outputPath]);
             }
+        } else if (isAud) {
+            await execFF(["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", inputPath, "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", outputPath]);
         } else if (isImg && !/gif/.test(mime)) {
             await execFF(["-y", "-loop", "1", "-t", "5", "-i", inputPath, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
         } else {
+            // Video / Video Note / Document video
             try {
                 await execFF(["-y", "-i", inputPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-map", "0:v:0", "-map", "0:a?", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outputPath]);
             } catch {
@@ -3582,6 +3615,7 @@ case 'tomp4': {
     } catch (e) {
         console.error("tomp4 error:", e);
         try { await devtrust.sendMessage(m.chat, { react: { text: "❌", key: m.key } }); } catch {}
+        reply("❌ Conversion failed: " + (e?.message || e));
     }
 }
 break;

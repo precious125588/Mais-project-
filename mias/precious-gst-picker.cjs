@@ -1,19 +1,50 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   precious-gst-picker.cjs · GST — GROUP-ONLY (DM logic removed)
+   precious-gst-picker.cjs · GST — GROUP STATUS POSTER
    ──────────────────────────────────────────────────────────────────────────
-   WHAT CHANGED (v25):
-     • .gst / .gstatus / .groupstatus / .gcstatus are KEPT — the command is
-       NOT deleted anymore. It posts media/text to the group status ring.
-     • The DM logic is REMOVED: no more native group picker in DM, no more
-       .gstpick / .gstcancel commands, no DM session state.
-     • In a DM the bot now just tells you to run it inside the group.
-     • The group posting engine (native groupStatusMessageV2 envelope with a
-       plain status@broadcast fallback) is untouched.
-
-   API USED: Baileys built-ins only — no external API.
+   FEATURES:
+     • Converts ANY media type (video note/ptv, sticker, audio, document,
+       image, video) to the real supported WhatsApp group status format.
+     • Supports "gclink" to automatically fetch and attach the group invite
+       link to the status post.
+     • Relay via groupStatusMessageV2 with statusJidList so it reliably appears.
    ══════════════════════════════════════════════════════════════════════════ */
 
 'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const cp = require('child_process');
+
+function execFF(args) {
+  let ff = 'ffmpeg';
+  try {
+    const p = require('ffmpeg-static');
+    if (p && typeof p === 'string') ff = p;
+  } catch {}
+  return new Promise((resolve, reject) => {
+    cp.execFile(ff, args, { timeout: 300000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) { err.stderr = stderr; reject(err); }
+      else resolve(stdout);
+    });
+  });
+}
+
+function unwrapMsg(m) {
+  let cur = m;
+  for (let i = 0; i < 6 && cur && typeof cur === 'object'; i++) {
+    const nxt = cur.ephemeralMessage?.message
+      || cur.viewOnceMessage?.message
+      || cur.viewOnceMessageV2?.message
+      || cur.viewOnceMessageV2Extension?.message
+      || cur.documentWithCaptionMessage?.message
+      || cur.editedMessage?.message
+      || null;
+    if (!nxt) break;
+    cur = nxt;
+  }
+  return cur;
+}
 
 module.exports = {
   install(ctx) {
@@ -40,16 +71,14 @@ module.exports = {
 
       function innerMedia(m) {
         if (!m || typeof m !== 'object') return null;
-        const u = m.ephemeralMessage?.message
-          || m.viewOnceMessage?.message
-          || m.viewOnceMessageV2?.message
-          || m.documentWithCaptionMessage?.message
-          || m;
-        if (u.imageMessage) return { kind: 'image', raw: u.imageMessage, caption: u.imageMessage.caption || '' };
-        if (u.videoMessage) return { kind: 'video', raw: u.videoMessage, caption: u.videoMessage.caption || '' };
-        if (u.audioMessage) return { kind: 'audio', raw: u.audioMessage, caption: '' };
-        if (u.documentMessage) return { kind: 'document', raw: u.documentMessage, caption: u.documentMessage.caption || '' };
-        if (u.stickerMessage) return { kind: 'sticker', raw: u.stickerMessage, caption: '' };
+        const u = unwrapMsg(m);
+        if (u.imageMessage) return { kind: 'image', raw: u.imageMessage, caption: u.imageMessage.caption || '', mime: u.imageMessage.mimetype || 'image/jpeg' };
+        if (u.videoMessage) return { kind: 'video', raw: u.videoMessage, caption: u.videoMessage.caption || '', mime: u.videoMessage.mimetype || 'video/mp4' };
+        if (u.ptvMessage) return { kind: 'ptv', raw: u.ptvMessage, caption: '', mime: u.ptvMessage.mimetype || 'video/mp4' };
+        if (u.audioMessage) return { kind: 'audio', raw: u.audioMessage, caption: '', mime: u.audioMessage.mimetype || 'audio/ogg' };
+        if (u.stickerMessage) return { kind: 'sticker', raw: u.stickerMessage, caption: '', mime: u.stickerMessage.mimetype || 'image/webp' };
+        if (u.documentMessage) return { kind: 'document', raw: u.documentMessage, caption: u.documentMessage.caption || '', mime: u.documentMessage.mimetype || '', fileName: u.documentMessage.fileName || '' };
+        
         const q = m.extendedTextMessage?.contextInfo?.quotedMessage;
         if (q) return innerMedia(q);
         return null;
@@ -64,15 +93,67 @@ module.exports = {
         }
       }
 
-      // V25-OK: real group status relay
-      // WHY THE OLD ONE LIED: the fallback did
-      //     sock.sendMessage('status@broadcast', …)
-      // which RESOLVES successfully but does NOT create a group-status ring
-      // entry, so the handler replied "✅ Posted to group status." while nothing
-      // was ever visible. A group status must be RELAYED as a
-      // groupStatusMessageV2 envelope with a statusJidList. We now report ✅
-      // only when such a relay actually resolved, and we try the group JID
-      // first (the form the working in-repo poster uses) then status@broadcast.
+      async function convertMediaForStatus(rawBuf, mediaInfo) {
+        const id = Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        const { kind, mime = '', fileName = '' } = mediaInfo;
+
+        if (kind === 'image' && !/webp|gif/.test(mime)) {
+          return { kind: 'image', buf: rawBuf, caption: mediaInfo.caption };
+        }
+        if (kind === 'video' && /mp4/.test(mime) && !mediaInfo.raw?.gifPlayback) {
+          return { kind: 'video', buf: rawBuf, caption: mediaInfo.caption };
+        }
+
+        const inPath = path.join(os.tmpdir(), `gst_in_${id}.bin`);
+        const outPath = path.join(os.tmpdir(), `gst_out_${id}.mp4`);
+        fs.writeFileSync(inPath, rawBuf);
+
+        try {
+          if (kind === 'sticker') {
+            // Convert webp sticker to MP4 video status
+            try {
+              await execFF(['-y', '-i', inPath, '-movflags', '+faststart', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=25', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', outPath]);
+              const resBuf = fs.readFileSync(outPath);
+              return { kind: 'video', buf: resBuf, caption: mediaInfo.caption };
+            } catch {
+              // Static image fallback
+              const outImg = path.join(os.tmpdir(), `gst_out_${id}.jpg`);
+              await execFF(['-y', '-i', inPath, outImg]);
+              const resBuf = fs.readFileSync(outImg);
+              try { fs.unlinkSync(outImg); } catch {}
+              return { kind: 'image', buf: resBuf, caption: mediaInfo.caption };
+            }
+          } else if (kind === 'ptv' || kind === 'video' || (kind === 'document' && /video|mp4|mkv|webm|avi|mov/.test(mime + fileName))) {
+            // Convert Video Note (ptv) or document video to real MP4
+            await execFF(['-y', '-i', inPath, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-map', '0:v:0', '-map', '0:a?', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2', '-movflags', '+faststart', '-preset', 'veryfast', outPath]);
+            const resBuf = fs.readFileSync(outPath);
+            return { kind: 'video', buf: resBuf, caption: mediaInfo.caption };
+          } else if (kind === 'audio' || (kind === 'document' && /audio|ogg|mp3|m4a|opus/.test(mime + fileName))) {
+            // Convert to genuine ogg/opus
+            const outOgg = path.join(os.tmpdir(), `gst_out_${id}.ogg`);
+            await execFF(['-y', '-i', inPath, '-vn', '-ac', '1', '-ar', '48000', '-c:a', 'libopus', '-b:a', '64k', outOgg]);
+            const resBuf = fs.readFileSync(outOgg);
+            try { fs.unlinkSync(outOgg); } catch {}
+            return { kind: 'audio', buf: resBuf, caption: mediaInfo.caption };
+          } else if (kind === 'document' && /image|png|jpeg|jpg/.test(mime + fileName)) {
+            // Convert document image to standard jpg
+            const outJpg = path.join(os.tmpdir(), `gst_out_${id}.jpg`);
+            await execFF(['-y', '-i', inPath, outJpg]);
+            const resBuf = fs.readFileSync(outJpg);
+            try { fs.unlinkSync(outJpg); } catch {}
+            return { kind: 'image', buf: resBuf, caption: mediaInfo.caption };
+          }
+        } catch (convErr) {
+          console.error('[gst-media-convert] error:', convErr?.message || convErr);
+        } finally {
+          try { fs.unlinkSync(inPath); } catch {}
+          try { fs.unlinkSync(outPath); } catch {}
+        }
+
+        // Return original if conversion failed or unneeded
+        return { kind: kind === 'ptv' ? 'video' : kind, buf: rawBuf, caption: mediaInfo.caption };
+      }
+
       async function uploadAndRelay(sock, groupId, payload) {
         const memberJids = await groupMembers(sock, groupId);
         const opts = memberJids.length ? { statusJidList: memberJids } : {};
@@ -91,34 +172,15 @@ module.exports = {
         const genOpts = upload ? { upload } : {};
         let inner = null;
         try {
-          if (payload.kind === 'text') inner = await g({ text: payload.text || '' }, genOpts);
-          else if (payload.kind === 'image') inner = await g({ image: payload.buf, caption: payload.caption || '' }, genOpts);
-          else if (payload.kind === 'video') inner = await g({ video: payload.buf, caption: payload.caption || '', mimetype: 'video/mp4' }, genOpts);
-          else if (payload.kind === 'audio') {
-            // v35 FIX — "outdated WhatsApp" error on audio statuses:
-            // the old code sent the RAW audio bytes (mp3/m4a/webm from the
-            // phone) while CLAIMING 'audio/ogg; codecs=opus'. Every client
-            // that could not decode the mislabelled envelope showed the
-            // "seems you're using an outdated WhatsApp" placeholder. We now
-            // TRANSCODE to genuine ogg/opus (ffmpeg) before building the
-            // groupStatusMessageV2 envelope, so the bytes match the mimetype.
-            let _aBuf = payload.buf;
-            try {
-              const { execFile } = require('child_process');
-              let _ff = 'ffmpeg';
-              try { const _p = require('ffmpeg-static'); if (_p && typeof _p === 'string') _ff = _p; } catch {}
-              const _os = require('os'), _path = require('path'), _fs = require('fs');
-              const _in = _path.join(_os.tmpdir(), 'gst_' + Date.now() + '.bin');
-              const _out = _path.join(_os.tmpdir(), 'gst_' + Date.now() + '.ogg');
-              _fs.writeFileSync(_in, payload.buf);
-              await new Promise((res) => execFile(_ff, ['-y', '-i', _in, '-vn', '-ac', '1', '-ar', '48000', '-c:a', 'libopus', '-b:a', '96k', _out], { timeout: 120000 }, () => res()));
-              if (_fs.existsSync(_out) && _fs.statSync(_out).size > 100) _aBuf = _fs.readFileSync(_out);
-              try { _fs.unlinkSync(_in); } catch {}
-              try { _fs.unlinkSync(_out); } catch {}
-            } catch {}
-            inner = await g({ audio: _aBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, genOpts);
+          if (payload.kind === 'text') {
+            inner = await g({ text: payload.text || '' }, genOpts);
+          } else if (payload.kind === 'image') {
+            inner = await g({ image: payload.buf, caption: payload.caption || '' }, genOpts);
+          } else if (payload.kind === 'video') {
+            inner = await g({ video: payload.buf, caption: payload.caption || '', mimetype: 'video/mp4' }, genOpts);
+          } else if (payload.kind === 'audio') {
+            inner = await g({ audio: payload.buf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, genOpts);
           }
-          else if (payload.kind === 'sticker') inner = await g({ sticker: payload.buf }, genOpts);
         } catch (e) {
           return { ok: false, error: 'media upload failed: ' + ((e && e.message) || e) };
         }
@@ -139,34 +201,65 @@ module.exports = {
         const inner = innerMedia(msg.message || {});
         const text = (msg.message?.extendedTextMessage?.text || msg.message?.conversation || '').trim();
         if (!inner) {
-          if (!text) return { error: `📢 *Group Status*\n\nUsage: *${PREFIX}gst <text>* — or reply to an image/video/audio to post it to this group's status ring.` };
+          if (!text) return { error: `📢 *Group Status*\n\nUsage:\n*${PREFIX}gst <text>*\n*${PREFIX}gst gclink <text>* (includes group invite link)\nOr reply to any image/video/audio/sticker/video-note with *${PREFIX}gst* (or *${PREFIX}gst gclink*).` };
           return { kind: 'text', text };
         }
-        const buf = await downloadBuf(inner.raw, inner.kind === 'document' ? 'document' : inner.kind);
+        const dlKind = inner.kind === 'ptv' ? 'video' : (inner.kind === 'document' ? 'document' : inner.kind);
+        const buf = await downloadBuf(inner.raw, dlKind);
         if (!buf || buf.length < 10) return { error: '❌ Could not download the media — it may have expired. Send it again and retry.' };
-        return { kind: inner.kind, buf, caption: inner.caption || text || undefined };
+
+        // Convert any media type to proper status format
+        const converted = await convertMediaForStatus(buf, inner);
+        return {
+          kind: converted.kind,
+          buf: converted.buf,
+          caption: converted.caption || inner.caption || text || undefined
+        };
       }
 
       const gstHandler = async (sock, msg, args) => {
         const chat = msg.key.remoteJid;
         const isGroup = isGroupJid(chat);
 
-        // Target group resolution: supports JID, LID, bare group digits, from DM or group
         let targetGid = '';
         let customCaption = '';
-        const rawArgs = (args || []).map(a => String(a || '').trim()).filter(Boolean);
+        let wantGcLink = false;
 
-        if (rawArgs.length > 0) {
-          const first = rawArgs[0];
-          if (first.endsWith('@g.us') || first.endsWith('@lid')) {
+        const rawArgs = (args || []).map(a => String(a || '').trim()).filter(Boolean);
+        const filteredArgs = [];
+
+        for (const arg of rawArgs) {
+          if (/^--?gclink$|^gclink$/i.test(arg)) {
+            wantGcLink = true;
+          } else {
+            filteredArgs.push(arg);
+          }
+        }
+
+        if (filteredArgs.length > 0) {
+          const first = filteredArgs[0];
+          if (first.includes('chat.whatsapp.com/')) {
+            // Accept a full group invite link and resolve it to the group JID
+            const invCode = first.split('chat.whatsapp.com/')[1].split(/[?#\s]/)[0];
+            try {
+              const info = (typeof sock.groupGetInviteInfo === 'function')
+                ? await sock.groupGetInviteInfo(invCode)
+                : null;
+              targetGid = (info && info.id) || '';
+              if (!targetGid) throw new Error('unresolved');
+            } catch (linkErr) {
+              return sendReply(sock, msg, '❌ Could not resolve that group invite link — make sure the bot is a member of the group, or paste the group JID instead.');
+            }
+            customCaption = filteredArgs.slice(1).join(' ');
+          } else if (first.endsWith('@g.us') || first.endsWith('@lid')) {
             targetGid = first;
-            customCaption = rawArgs.slice(1).join(' ');
+            customCaption = filteredArgs.slice(1).join(' ');
           } else if (/^\d{10,}$/.test(first)) {
             targetGid = first + '@g.us';
-            customCaption = rawArgs.slice(1).join(' ');
+            customCaption = filteredArgs.slice(1).join(' ');
           } else if (isGroup) {
             targetGid = chat;
-            customCaption = rawArgs.join(' ');
+            customCaption = filteredArgs.join(' ');
           }
         } else if (isGroup) {
           targetGid = chat;
@@ -180,6 +273,7 @@ module.exports = {
         const reactOnce = async (emoji) => { if (settled) return; settled = true; try { await safeReact(sock, msg, emoji); } catch {} };
         await reactOnce('🌀'); settled = false;
         const watchdog = setTimeout(() => reactOnce('❌'), 120000);
+
         try {
           const payload = await buildPayload(msg);
           if (payload.error) {
@@ -187,16 +281,37 @@ module.exports = {
             await reactOnce('❌');
             return sendReply(sock, msg, payload.error);
           }
+
           if (customCaption) {
             payload.caption = customCaption;
           }
 
-          // Post as group status relay only (no direct group chat drop)
-           // 2. Also relay group status
+          // Attach group link if requested via gclink
+          if (wantGcLink) {
+            let inviteLink = '';
+            try {
+              const code = await sock.groupInviteCode(targetGid);
+              if (code) inviteLink = `https://chat.whatsapp.com/${code}`;
+            } catch (invErr) {
+              console.warn('[gst] could not fetch group invite link:', invErr?.message);
+            }
+
+            if (inviteLink) {
+              const linkNotice = `🔗 Group Link: ${inviteLink}`;
+              if (payload.kind === 'text') {
+                payload.text = (payload.text ? payload.text + '\n\n' : '') + linkNotice;
+              } else {
+                payload.caption = (payload.caption ? payload.caption + '\n\n' : '') + linkNotice;
+              }
+            }
+          }
+
           let relayRes = { ok: false };
           try {
             relayRes = await uploadAndRelay(sock, targetGid, payload);
-          } catch {}
+          } catch (rErr) {
+            relayRes = { ok: false, error: rErr?.message || String(rErr) };
+          }
 
           const ok = !!relayRes.ok;
           clearTimeout(watchdog);
@@ -208,10 +323,11 @@ module.exports = {
             if (md?.subject) _gName = md.subject;
           } catch {}
 
-          const _kindLabel = ({ image: '🖼️ Image', video: '🎬 Video', audio: '🎵 Audio', sticker: '🎴 Sticker', document: '📄 Document', text: '📝 Text' })[payload.kind] || '📦 Media';
+          const _kindLabel = ({ image: '🖼️ Image', video: '🎬 Video', audio: '🎵 Audio', text: '📝 Text' })[payload.kind] || '📦 Status';
+          const linkNote = wantGcLink ? ' (with group link)' : '';
           return sendReply(sock, msg, ok
-            ? '✅ ' + _kindLabel + ' uploaded to *' + _gName + '*'
-            : '❌ Group post failed — ' + (relayRes.error || 'delivery failed') + '.').catch(() => {});
+            ? `✅ ${_kindLabel}${linkNote} uploaded to *${_gName}*`
+            : `❌ Group post failed — ${relayRes.error || 'delivery failed'}.`).catch(() => {});
         } catch (e) {
           clearTimeout(watchdog);
           await reactOnce('❌');
@@ -220,7 +336,7 @@ module.exports = {
       };
 
       const bind = (names, handler) => {
-        try { cmd(names, { desc: 'Post to group status (group only)', category: 'GROUP' }, handler); } catch {}
+        try { cmd(names, { desc: 'Post to group status with media conversion & gclink support', category: 'GROUP' }, handler); } catch {}
         const list = Array.isArray(names) ? names : [names];
         for (const n of list) {
           try {
@@ -233,31 +349,10 @@ module.exports = {
 
       bind(['gst', 'gstatus', 'groupstatus', 'gcstatus'], gstHandler);
 
-      // Remove the old DM picker sub-commands if a stale build registered them.
       for (const n of ['gstpick', 'gstcancel']) {
         try { if (ctx.commands && ctx.commands.delete(n)) {} } catch {}
       }
 
-      // Keep-alive: if any late patch re-registers .gst after this module runs,
-      // re-assert the GROUP-ONLY handler so the DM picker can never come back.
-      try {
-        const _gstKeepAlive = setInterval(() => {
-          try {
-            if (!ctx.commands || typeof ctx.commands.get !== 'function') return;
-            for (const n of ['gst', 'gstatus', 'groupstatus', 'gcstatus']) {
-              const ex = ctx.commands.get(n);
-              if (ex && ex.handler !== gstHandler) {
-                ex.handler = gstHandler;
-                ctx.commands.set(n, ex);
-              }
-            }
-            for (const n of ['gstpick', 'gstcancel']) {
-              try { ctx.commands.delete(n); } catch {}
-            }
-          } catch {}
-        }, 2500);
-        if (typeof _gstKeepAlive.unref === 'function') { try { _gstKeepAlive.unref(); } catch {} }
-      } catch {}
       report.gstGroupOnly = true;
     } catch (e) {
       console.log('[precious-gst-picker] install error:', (e && e.message) || e);

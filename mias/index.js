@@ -9108,6 +9108,25 @@ async function handleSettingsNumericReply(sock, msg, body) {
   // The previous `if (!session) return false` exited silently when the
   // captured variable was stale even though the Map was already updated.
   if (!session) session = jid ? settingsSession.get(jid) : null;
+  if (!session) {
+    // NEVER-SILENT (settings/sudo/cuz quote rewrite): if the reply QUOTES the
+    // settings panel — or carries a valid-looking settings choice — synthesize
+    // a session instead of dropping the message silently. All picker-pending
+    // and non-panel cases were already filtered out further above.
+    try {
+      const _nvQ = msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage
+        || msg?.message?.imageMessage?.contextInfo?.quotedMessage
+        || msg?.message?.videoMessage?.contextInfo?.quotedMessage
+        || msg?.message?.documentMessage?.contextInfo?.quotedMessage
+        || msg?.message?.stickerMessage?.contextInfo?.quotedMessage || null;
+      const _nvTxt = _nvQ ? JSON.stringify(_nvQ) : "";
+      const _nvIsPanel = /settings|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot|Force Private|Status Forwarder/i.test(_nvTxt);
+      if (_nvIsPanel) {
+        session = { sender: (typeof getSender === "function" ? getSender(msg) : ""), synthetic: true };
+        settingsSession.set(jid, session);
+      }
+    } catch (_) {}
+  }
   if (!session) return false;
   // Re-arm extension so the user has the full window to reply.
   setTimeout(() => settingsSession.delete(jid), 120000);
@@ -44879,7 +44898,16 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       }
     }
 
-    if (!pend) return false;
+    if (!pend) {
+      // NEVER-SILENT (settings/sudo/cuz quote rewrite): the user quoted the
+      // sudo card and replied with a number, but the pending target was lost
+      // (restart / TTL). Never stay silent — tell them exactly what to do.
+      if (isSudoCard && /^[.!#/]?[123]$/.test(raw)) {
+        await sendReply(sock, msg, "⌛ That sudo card expired — run *" + ((typeof CONFIG !== 'undefined' && CONFIG.PREFIX) || ".") + "sudo @user* again, then reply 1, 2 or 3 on the fresh card.");
+        return true;
+      }
+      return false;
+    }
 
     try { await react(sock, msg, "🌀"); } catch {}
     const { target, tNum } = pend;

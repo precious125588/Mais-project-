@@ -315,108 +315,171 @@ function installCuzSystem(P) {
   }
 }
 
+function unwrapAny(m) {
+  let cur = m;
+  for (let i = 0; i < 6 && cur && typeof cur === "object"; i++) {
+    const nxt = cur.ephemeralMessage?.message
+      || cur.viewOnceMessage?.message
+      || cur.viewOnceMessageV2?.message
+      || cur.viewOnceMessageV2Extension?.message
+      || cur.documentWithCaptionMessage?.message
+      || cur.editedMessage?.message
+      || null;
+    if (!nxt) break;
+    cur = nxt;
+  }
+  return cur;
+}
+
+function collectAllText(m) {
+  const texts = [];
+  if (!m || typeof m !== "object") return texts;
+  texts.push(
+    m.conversation,
+    m.extendedTextMessage?.text,
+    m.imageMessage?.caption,
+    m.videoMessage?.caption,
+    m.documentMessage?.caption,
+    m.interactiveMessage?.body?.text,
+    m.interactiveMessage?.footer?.text,
+    m.interactiveMessage?.header?.title,
+    m.buttonsMessage?.contentText,
+    m.buttonsMessage?.footer,
+    m.listMessage?.description,
+    m.listMessage?.title
+  );
+  for (const k of Object.keys(m)) {
+    const v = m[k];
+    if (v && typeof v === "object" && v.message) {
+      texts.push(...collectAllText(v.message));
+    }
+  }
+  return texts.filter(Boolean);
+}
+
 async function handleCuzReply(sock, msg, body, P) {
-  const { getSettings, saveNow, CONFIG } = P;
-  const jid = msg.key.remoteJid;
-  const isGroup = jid.endsWith("@g.us");
-  const sender = isGroup ? (msg.key.participant || msg.participant) : jid;
-  const userId = String(sender).replace(/:[0-9]+@/, "@");
-  const sessionKey = `${jid}:${userId}`;
+  try {
+    const { getSettings, saveNow, CONFIG } = P;
+    const jid = msg.key.remoteJid;
+    const isGroup = String(jid || "").endsWith("@g.us");
+    const sender = isGroup ? (msg.key.participant || msg.participant) : jid;
+    const userId = String(sender || "").replace(/:[0-9]+@/, "@");
+    const sessionKey = `${jid}:${userId}`;
 
-  let sess = pendingSessions.get(sessionKey);
-  const _rawCtx = msg.message?.extendedTextMessage?.contextInfo
-    || msg.message?.imageMessage?.contextInfo
-    || msg.message?.videoMessage?.contextInfo
-    || msg.message?.documentMessage?.contextInfo;
-  const _qMsg = _rawCtx?.quotedMessage;
-  const _qText = String(_qMsg?.conversation || _qMsg?.extendedTextMessage?.text || _qMsg?.imageMessage?.caption || _qMsg?.videoMessage?.caption || "");
-  const _isCuzText = /CUSTOMIZE|CUSTOMIZATION|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner/i.test(_qText);
+    const rawCtx = msg.message?.extendedTextMessage?.contextInfo
+      || msg.message?.imageMessage?.contextInfo
+      || msg.message?.videoMessage?.contextInfo
+      || msg.message?.documentMessage?.contextInfo
+      || msg.message?.interactiveResponseMessage?.contextInfo;
 
-  if (!sess && _isCuzText) {
-    sess = {
-      chatId: jid,
-      userId: userId,
-      menuMessageId: _rawCtx?.stanzaId,
-      pendingValue: null,
-      awaitingValueOption: null,
-      createdAt: Date.now()
-    };
-    pendingSessions.set(sessionKey, sess);
-  }
-  if (!sess) return false;
+    const rawQ = unwrapAny(rawCtx?.quotedMessage);
+    const qTexts = rawQ ? collectAllText(rawQ) : [];
+    const quotedText = qTexts.join(" ");
 
-  const ctx = msg.message?.extendedTextMessage?.contextInfo
-            || msg.message?.imageMessage?.contextInfo
-            || msg.message?.videoMessage?.contextInfo
-            || msg.message?.documentMessage?.contextInfo;
-  const quotedId = ctx?.stanzaId;
-  const rawText = String(body || "").trim();
+    const isCuzQuoted = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i.test(quotedText);
 
-  // If waiting for a value after empty .cuz
-  if (sess.awaitingValueOption) {
-    const opt = sess.awaitingValueOption;
-    const validation = validateCustomizationValue(opt, rawText);
-    if (!validation.valid) {
-      await sock.sendMessage(jid, { text: `Invalid input.\n${validation.error}` }, { quoted: msg });
-      return true;
-    }
-    setCustomization(jid, isGroup, opt.id, validation.value, getSettings, saveNow);
-    if (opt.id === "prefix") CONFIG.PREFIX = validation.value;
-    if (opt.id === "botName") CONFIG.BOT_NAME = validation.value;
-    pendingSessions.delete(sessionKey);
-    await sock.sendMessage(jid, { text: `${opt.label} changed to ${validation.value}` }, { quoted: msg });
-    return true;
-  }
-
-  // Expecting menu option number reply
-  const isCuzQuoted = (quotedId && (quotedId === sess.menuMessageId || quotedId === sess.menuMessageId?.id))
-    || (ctx && /\/CUZ|CUSTOMIZ|BRANDING|PRESENTATION/i.test(String(ctx.quotedMessage?.conversation || ctx.quotedMessage?.extendedTextMessage?.text || ctx.quotedMessage?.imageMessage?.caption || "")))
-    || (Date.now() - sess.createdAt < 10 * 60 * 1000);
-
-  if (isCuzQuoted) {
-    const num = parseInt(rawText, 10);
-    if (isNaN(num) || num < 1 || num > customizationOptions.length) {
-      await sock.sendMessage(jid, { text: "Invalid option. Please reply with a number from 1 to 17." }, { quoted: msg });
-      return true;
+    let sess = pendingSessions.get(sessionKey);
+    if (!sess && isCuzQuoted) {
+      sess = {
+        chatId: jid,
+        userId: userId,
+        menuMessageId: rawCtx?.stanzaId,
+        pendingValue: null,
+        awaitingValueOption: null,
+        createdAt: Date.now()
+      };
+      pendingSessions.set(sessionKey, sess);
     }
 
-    const opt = customizationOptions[num - 1];
-
-    if (opt.id === "reset") {
-      resetCustomization(jid, isGroup, getSettings, saveNow);
-      pendingSessions.delete(sessionKey);
-      await sock.sendMessage(jid, { text: "All customization settings have been reset to default values." }, { quoted: msg });
-      return true;
+    if (!sess && !isCuzQuoted) {
+      return false;
     }
 
-    if (sess.pendingValue) {
-      const validation = validateCustomizationValue(opt, sess.pendingValue);
+    // Refresh TTL on interaction
+    if (sess) sess.createdAt = Date.now();
+
+    const rawInput = String(body || "").trim();
+
+    // 1. If currently awaiting a text value for a previously selected option
+    if (sess && sess.awaitingValueOption) {
+      const opt = sess.awaitingValueOption;
+      const validation = validateCustomizationValue(opt, rawInput);
       if (!validation.valid) {
-        pendingSessions.delete(sessionKey);
-        await sock.sendMessage(jid, { text: `Invalid input.\n${validation.error}` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: `❌ Invalid input for *${opt.label}*:\n${validation.error}\n\nPlease try again:` }, { quoted: msg });
         return true;
       }
       setCustomization(jid, isGroup, opt.id, validation.value, getSettings, saveNow);
-      if (opt.id === "prefix") CONFIG.PREFIX = validation.value;
-      if (opt.id === "botName") CONFIG.BOT_NAME = validation.value;
+      if (opt.id === "prefix" && CONFIG) CONFIG.PREFIX = validation.value;
+      if (opt.id === "botName" && CONFIG) CONFIG.BOT_NAME = validation.value;
       pendingSessions.delete(sessionKey);
-
-      if (opt.id.toLowerCase().includes("text") || opt.id.toLowerCase().includes("header") || (opt.id.toLowerCase().includes("footer") && opt.id !== "footer")) {
-        await sock.sendMessage(jid, { text: `${opt.label} changed successfully.` }, { quoted: msg });
-      } else {
-        await sock.sendMessage(jid, { text: `${opt.label} changed to ${validation.value}` }, { quoted: msg });
-      }
-      return true;
-    } else {
-      // Empty .cuz: ask for value
-      sess.awaitingValueOption = opt;
-      sess.createdAt = Date.now();
-      await sock.sendMessage(jid, { text: `Send the new value for ${opt.label}.` }, { quoted: msg });
+      await sock.sendMessage(jid, { text: `✅ *${opt.label}* changed to: *${validation.value}*` }, { quoted: msg });
       return true;
     }
-  }
 
-  return false;
+    // 2. Expecting option selection number (1 to 17)
+    const norm = rawInput.replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
+    const numMatch = norm.match(/^(\d{1,2})$/);
+
+    if (numMatch) {
+      const num = parseInt(numMatch[1], 10);
+      if (num < 1 || num > customizationOptions.length) {
+        await sock.sendMessage(jid, { text: `❌ Invalid option *${num}*. Please reply with a number from *1 to ${customizationOptions.length}*.` }, { quoted: msg });
+        return true;
+      }
+
+      const opt = customizationOptions[num - 1];
+
+      if (opt.id === "reset") {
+        resetCustomization(jid, isGroup, getSettings, saveNow);
+        pendingSessions.delete(sessionKey);
+        await sock.sendMessage(jid, { text: "✅ All customization settings have been reset to default values." }, { quoted: msg });
+        return true;
+      }
+
+      if (sess && sess.pendingValue) {
+        const validation = validateCustomizationValue(opt, sess.pendingValue);
+        if (!validation.valid) {
+          pendingSessions.delete(sessionKey);
+          await sock.sendMessage(jid, { text: `❌ Invalid input for *${opt.label}*:\n${validation.error}` }, { quoted: msg });
+          return true;
+        }
+        setCustomization(jid, isGroup, opt.id, validation.value, getSettings, saveNow);
+        if (opt.id === "prefix" && CONFIG) CONFIG.PREFIX = validation.value;
+        if (opt.id === "botName" && CONFIG) CONFIG.BOT_NAME = validation.value;
+        pendingSessions.delete(sessionKey);
+        await sock.sendMessage(jid, { text: `✅ *${opt.label}* changed to: *${validation.value}*` }, { quoted: msg });
+        return true;
+      }
+
+      // Enter waiting state for the option's value
+      if (!sess) {
+        sess = { chatId: jid, userId, menuMessageId: rawCtx?.stanzaId, pendingValue: null, awaitingValueOption: opt, createdAt: Date.now() };
+        pendingSessions.set(sessionKey, sess);
+      } else {
+        sess.awaitingValueOption = opt;
+      }
+
+      let promptGuide = "";
+      if (opt.type === "emoji") promptGuide = " (send 1 or 2 emojis)";
+      else if (opt.type === "timeFormat") promptGuide = " (type *12h* or *24h*)";
+      else if (opt.type === "dateFormat") promptGuide = " (e.g. *DD/MM/YYYY* or *MM/DD/YYYY*)";
+      else promptGuide = " (type the new text)";
+
+      await sock.sendMessage(jid, { text: `✏️ Send the new value for *${opt.label}*${promptGuide}:` }, { quoted: msg });
+      return true;
+    }
+
+    // If the user quoted the cuz card with something else, give helpful guidance instead of going silent
+    if (isCuzQuoted) {
+      await sock.sendMessage(jid, { text: `ℹ️ *Customization Menu*\n\nPlease reply with a number from *1 to ${customizationOptions.length}* to select an option to customize.` }, { quoted: msg });
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    console.error("[cuzCustomization] handleCuzReply error:", err?.message || err);
+    return false;
+  }
 }
 
 module.exports = {
