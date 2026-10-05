@@ -9936,7 +9936,8 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
 
     if (successCount > 0) {
       await react(sock, msg, "✅").catch(() => {});
-      return sendReply(sock, msg, `🚀 *Forward Complete!*\n\n📬 Delivered: *${successCount} message${successCount > 1 ? "s" : ""}*\n🎯 Target: *${targetLabel}*${failedCount > 0 ? `\n⚠️ Failed: ${failedCount}` : ""}`);
+      const cleanTarget = String(targetLabel || "").replace(/^group\s+/i, "");
+      return sendReply(sock, msg, `Forwarded to ${cleanTarget}`);
     } else {
       await react(sock, msg, "❌").catch(() => {});
       return sendReply(sock, msg, `❌ *Forward failed.* Could not transfer the message to ${targetLabel}.`);
@@ -33608,16 +33609,39 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
 
   // ── FIX #1: setpp / setbotpic with real image processing ────────────────
   const __miasSetPpHandler = async (sock, msg, args) => {
-    await react(sock, msg, "🖼️");
+    try { await react(sock, msg, "🖼️"); } catch (_) {}
     try {
-      const buf = await __miasReadImageBuf(sock, msg, args);
+      let buf = await __miasReadImageBuf(sock, msg, args);
       if (!buf || buf.length < 200) {
-        await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setpp <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}setpp*`);
-        return;
+        // Fallback: check ctx quoted message directly
+        const ctx = getContextInfo(msg);
+        const quoted = ctx?.quotedMessage?.imageMessage
+          || ctx?.quotedMessage?.viewOnceMessage?.message?.imageMessage
+          || ctx?.quotedMessage?.viewOnceMessageV2?.message?.imageMessage
+          || msg.message?.imageMessage;
+        if (quoted) {
+          const stream = await downloadContentFromMessage(quoted, "image");
+          const ch = [];
+          for await (const c of stream) ch.push(c);
+          buf = Buffer.concat(ch);
+        }
+      }
+      if (!buf || buf.length < 200) {
+        return sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setpp <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}setpp*`);
       }
       const outBuf = await __miasResizeSquare(buf, 640);
       const me = sock.user?.id;
-      await sock.updateProfilePicture(me, outBuf);
+      try {
+        await sock.updateProfilePicture(me, outBuf);
+      } catch (upErr) {
+        await sock.query({
+          tag: "iq",
+          attrs: { to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
+          content: [{ tag: "picture", attrs: { type: "image" }, content: outBuf }],
+        });
+      }
+      try { await react(sock, msg, "✅"); } catch (_) {}
+      return sendReply(sock, msg, `✅ *Bot profile picture updated!*`);
       // Also cache for menu cover
       try {
         const target = _path.join(__dirname, "assets", "botpic1.jpg");
@@ -37192,10 +37216,30 @@ _This code expires in ~2 minutes._`);
     for (const _alias of ['gst', 'gstatus', 'gcstatus', 'groupstatus']) {
       cmd([_alias], { desc: '📸 Post to group status', category: 'GROUP' }, async (sock, msg, args) => {
         const reply = (t) => sendReply(sock, msg, t);
-        if (!isGroup(msg)) return reply('❌ Use in a group.');
-        if (!isGroupAdmin(msg)) return reply('❌ Bot must be admin.');
-
-        const gid     = msg.key.remoteJid;
+        let gid = msg.key.remoteJid;
+        const rawArg = (args || []).join(' ').trim();
+        const gcLinkMatch = rawArg.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
+        if (gcLinkMatch) {
+          const code = gcLinkMatch[1];
+          try {
+            if (typeof sock.groupAcceptInvite === "function") {
+              const joined = await sock.groupAcceptInvite(code);
+              if (joined) gid = joined;
+            }
+          } catch (_) {}
+          if ((!gid || !gid.endsWith("@g.us")) && typeof sock.groupGetInviteInfo === "function") {
+            try {
+              const gi = await sock.groupGetInviteInfo(code);
+              if (gi?.id) gid = gi.id.includes("@") ? gi.id : `${gi.id}@g.us`;
+            } catch (_) {}
+          }
+        } else if (rawArg.includes("@g.us")) {
+          const jidMatch = rawArg.match(/[\w.-]+@g\.us/);
+          if (jidMatch) gid = jidMatch[0];
+        }
+        if (!gid || !gid.endsWith("@g.us")) {
+          return reply(`ℹ️ *Usage:* Use in a group, or pass a group link or group JID:\n* ${CONFIG.PREFIX}gst https://chat.whatsapp.com/XXXXX\n* ${CONFIG.PREFIX}gst 123456789@g.us`);
+        }
         const qMsg    = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
         const img     = msg.message?.imageMessage || qMsg?.imageMessage;
         const vid     = msg.message?.videoMessage || qMsg?.videoMessage;
@@ -40276,10 +40320,32 @@ try {
     };
 
     const __gstV23 = async (sock, msg, args) => {
-      const chat = msg.key.remoteJid;
-      if (!String(chat || "").endsWith("@g.us")) {
-        return sendReply(sock, msg, "👥 Group only.");
+      let chat = msg.key.remoteJid;
+      let targetChat = chat;
+      const rawArg = (args || []).join(' ').trim();
+      const gcLinkMatch = rawArg.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
+      if (gcLinkMatch) {
+        const code = gcLinkMatch[1];
+        try {
+          if (typeof sock.groupAcceptInvite === "function") {
+            const joined = await sock.groupAcceptInvite(code);
+            if (joined) targetChat = joined;
+          }
+        } catch (_) {}
+        if ((!targetChat || !targetChat.endsWith("@g.us")) && typeof sock.groupGetInviteInfo === "function") {
+          try {
+            const gi = await sock.groupGetInviteInfo(code);
+            if (gi?.id) targetChat = gi.id.includes("@") ? gi.id : `${gi.id}@g.us`;
+          } catch (_) {}
+        }
+      } else if (rawArg.includes("@g.us")) {
+        const jidMatch = rawArg.match(/[\w.-]+@g\.us/);
+        if (jidMatch) targetChat = jidMatch[0];
       }
+      if (!String(targetChat || "").endsWith("@g.us")) {
+        return sendReply(sock, msg, "ℹ️ *Usage:* Use in a group, or pass a group link / JID:\n* " + CONFIG.PREFIX + "gst https://chat.whatsapp.com/XXXXX");
+      }
+      chat = targetChat;
 
       // ── React: 🌀 (processing) ────────────────────────────────────────────
       try { await sock.sendMessage(chat, { react: { text: "🌀", key: msg.key } }); } catch {}
@@ -45922,3 +45988,81 @@ try {
   }
 } catch (_) {}
 
+
+
+async function handleReaction(sock, r) {
+  try {
+    const targetKey = r?.key;
+    if (!targetKey?.id) return;
+    const reactText = r?.reaction?.text;
+    if (!reactText || !String(reactText).trim()) return;
+
+    // Check reactor privilege
+    const reactor = String(r?.reaction?.sender || r?.reaction?.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
+    const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
+    const botNum = String(sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+    const isPrivileged = r?.reaction?.key?.fromMe
+      || (typeof isOwner === "function" && isOwner(reactor))
+      || (ownerNum && reactor.includes(ownerNum))
+      || (botNum && reactor.includes(botNum));
+    if (!isPrivileged) return;
+
+    // Look for target message in viewOnce store or message stores
+    let voEntry = globalThis._viewOnceStore?.get(targetKey.id);
+    let voMsg = voEntry?.message;
+    if (!voMsg) {
+      const rawM = (typeof _msgStore !== "undefined" && _msgStore.get ? _msgStore.get(targetKey.id) : null)
+        || (typeof __miasMsgCache !== "undefined" && __miasMsgCache.get ? __miasMsgCache.get(targetKey.id) : null)
+        || (typeof _msgRetryStore !== "undefined" && _msgRetryStore.get ? _msgRetryStore.get(targetKey.id) : null);
+      if (rawM) {
+        // Did the user react to a reply that quotes a viewonce?
+        const qCtx = rawM.message?.extendedTextMessage?.contextInfo;
+        const qMsg = qCtx?.quotedMessage;
+        if (qMsg) {
+          const qVO = qMsg.viewOnceMessage?.message
+            || qMsg.viewOnceMessageV2?.message
+            || qMsg.viewOnceMessageV2Extension?.message
+            || (qMsg.audioMessage?.viewOnce ? qMsg : null);
+          if (qVO) voMsg = qVO;
+        }
+        if (!voMsg) {
+          voMsg = rawM.message?.viewOnceMessage?.message
+            || rawM.message?.viewOnceMessageV2?.message
+            || rawM.message?.viewOnceMessageV2Extension?.message
+            || rawM.viewOnceMessage?.message
+            || rawM.viewOnceMessageV2?.message
+            || (rawM.message?.audioMessage?.viewOnce ? rawM.message : null)
+            || rawM.message;
+        }
+      }
+    }
+    if (!voMsg) return;
+
+    const voMedia = voMsg.imageMessage || voMsg.videoMessage || voMsg.audioMessage;
+    if (!voMedia) return;
+    const voKind = voMsg.imageMessage ? "image" : voMsg.videoMessage ? "video" : "audio";
+
+    const stream = await downloadContentFromMessage(voMedia, voKind);
+    const ch = [];
+    for await (const c of stream) ch.push(c);
+    const voBuf = Buffer.concat(ch);
+    if (!voBuf || voBuf.length === 0) return;
+
+    const ownerJid = ownerNum ? `${ownerNum}@s.whatsapp.net` : String(sock.user?.id || "").replace(/:[0-9]+@/, "@");
+    const senderJid = voEntry?.sender || targetKey.participant || targetKey.remoteJid;
+    const senderTag = String(senderJid || "").split("@")[0];
+    const caption = `👁️ *ViewOnce Captured*\n📱 Chat: ${targetKey.remoteJid}\n👤 Sender: @${senderTag}`;
+
+    const payload = voKind === "image"
+      ? { image: voBuf, caption, mentions: [senderJid] }
+      : voKind === "video"
+        ? { video: voBuf, mimetype: voMedia.mimetype || "video/mp4", caption, mentions: [senderJid] }
+        : { audio: voBuf, mimetype: voMedia.mimetype || "audio/ogg; codecs=opus", ptt: true };
+
+    await sock.sendMessage(ownerJid, payload);
+    try { await sock.sendMessage(targetKey.remoteJid, { react: { text: "✅", key: targetKey } }); } catch (_) {}
+  } catch (err) {
+    console.error("[handleReaction-viewonce]", err?.message || err);
+  }
+}
+globalThis.handleReaction = handleReaction;

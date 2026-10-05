@@ -248,6 +248,11 @@ function registerPicker(jid, sent, options, onPick, label) {
     // a plain quoted text (e.g. quoting a caption and typing .tovid) must NOT
     // trigger the guard (that was eating real commands).
     const _qId = _qctx?.stanzaId || _qctx?.id || "";
+    // If quoting a player/audio card, let player dispatcher take it
+    const _qTxt = String(_qctx?.quotedMessage?.conversation || _qctx?.quotedMessage?.extendedTextMessage?.text || _qctx?.quotedMessage?.imageMessage?.caption || "");
+    if (/PLAYER/i.test(_qTxt) || /reply with a number/i.test(_qTxt) || /1\s*-\s*Audio/i.test(_qTxt)) {
+      return null;
+    }
     const _matchesCard = arr.some(p => p?.sent?.key?.id && p.sent.key.id === _qId);
     if (_matchesCard && arr.length) {
       const _last = arr[arr.length - 1];
