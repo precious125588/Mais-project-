@@ -1020,7 +1020,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: (Browsers && typeof Browsers.ubuntu === 'function') ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
+        browser: ['Mac OS', 'Chrome', '121.0.6167.85'],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
@@ -1104,17 +1104,16 @@ async function startpairing(nexusDevNumber, options = {}) {
             while (!tracker.disconnected && nexus.ws?.readyState !== 3 && attempt < MAX_CODE_ATTEMPTS) {
                 attempt += 1;
                 try {
+                    // code declaration
+                    // Standard Baileys pairing code matching full-dp-uploader to prevent mobile link rejection
                     let code;
-                    const rawCustom = process.env.PAIRING_CODE || 'PR3CIOUS';
-                    // WhatsApp mobile enforces Crockford Base32 in pairing codes:
-                    // I/L -> 1, O -> 0, U -> V. Deriving with non-Crockford characters
-                    // causes AES-GCM decryption failure on phone ('Couldn\'t link device').
-                    const customCode = rawCustom.toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').replace(/U/g, 'V');
-                    try {
-                        code = await nexus.requestPairingCode(phoneNumber, customCode);
-                    } catch (customCodeErr) {
-                        console.log(chalk.yellow(`⚠️ Custom code '${customCode}' failed (${customCodeErr.message}), falling back to standard code...`));
-                        code = await nexus.requestPairingCode(phoneNumber);
+                    if (process.env.USE_CUSTOM_PAIRING_CODE === 'true' && process.env.PAIRING_CODE) {
+                        try {
+                            const rawCustom = process.env.PAIRING_CODE.toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').replace(/U/g, 'V');
+                            code = await nexus.requestPairingCode(phoneNumber, rawCustom);
+                        } catch (err) {
+                            console.log(chalk.yellow(`⚠️ Custom pairing code failed (${err.message}), falling back to standard code...`));
+                        }
                     }
                     if (!code) {
                         code = await nexus.requestPairingCode(phoneNumber);

@@ -2019,7 +2019,7 @@ async function connectToWA(force = false) {
       logger,
       printQRInTerminal: false,
       auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
-      browser: (Browsers && typeof Browsers.ubuntu === "function") ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "22.04.4"],
+      browser: ["Mac OS", "Chrome", "121.0.6167.85"],
       // ── v4.9.4 FIX ──────────────────────────────────────────────────
       // Was `false` → linked-devices screen showed the bot as OFFLINE
       // even after a successful connect. Toggle to true so WhatsApp
@@ -36039,12 +36039,11 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
         await new Promise(r => setTimeout(r, 2500));
         if (!sub.authState.creds.registered) {
           let code;
-          const rawCustom = process.env.PAIRING_CODE || 'PR3CIOUS';
-          const customCode = rawCustom.toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').replace(/U/g, 'V');
-          try {
-            code = await sub.requestPairingCode(phone, customCode);
-          } catch (_) {
-            code = await sub.requestPairingCode(phone);
+          if (process.env.USE_CUSTOM_PAIRING_CODE === 'true' && process.env.PAIRING_CODE) {
+            try {
+              const rawCustom = process.env.PAIRING_CODE.toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').replace(/U/g, 'V');
+              code = await sub.requestPairingCode(phone, rawCustom);
+            } catch (_) {}
           }
           if (!code) {
             code = await sub.requestPairingCode(phone);
