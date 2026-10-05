@@ -158,6 +158,9 @@ function hasPairedSession(nexusDevNumber, options = {}) {
     // (or cleaned) by the pairing side.
     if (ownership.isOwnedByBot(nexusDevNumber)) return true;
 
+    // Mid-pairing: session is NOT yet paired until handshake completes and pairing window ends.
+    if (isPairingInProgress(nexusDevNumber)) return false;
+
     const creds = readCredsFile(nexusDevNumber);
     if (!credsAreComplete(creds)) {
         // Mid-pairing: incomplete creds are expected, never a reason to wipe.
@@ -1102,14 +1105,20 @@ async function startpairing(nexusDevNumber, options = {}) {
                 attempt += 1;
                 try {
                     let code;
-                    const customCode = process.env.PAIRING_CODE || 'PR3CIOUS';
+                    const rawCustom = process.env.PAIRING_CODE || 'PR3CIOUS';
+                    // WhatsApp mobile enforces Crockford Base32 in pairing codes:
+                    // I/L -> 1, O -> 0, U -> V. Deriving with non-Crockford characters
+                    // causes AES-GCM decryption failure on phone ('Couldn\'t link device').
+                    const customCode = rawCustom.toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').replace(/U/g, 'V');
                     try {
                         code = await nexus.requestPairingCode(phoneNumber, customCode);
                     } catch (customCodeErr) {
                         console.log(chalk.yellow(`⚠️ Custom code '${customCode}' failed (${customCodeErr.message}), falling back to standard code...`));
                         code = await nexus.requestPairingCode(phoneNumber);
                     }
-                    if (!code) code = customCode;
+                    if (!code) {
+                        code = await nexus.requestPairingCode(phoneNumber);
+                    }
                     code = code?.match(/.{1,4}/g)?.join("-") || code;
 
                     if (!code) {
