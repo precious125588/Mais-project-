@@ -1823,20 +1823,25 @@ async function startpairing(nexusDevNumber, options = {}) {
                 // child takes ownership and must not start another pair socket.
                 tracker.handoffToMais = true;
                 tracker.handedOffAt = Date.now();
+
+                // ── COMPANION SYNC GRACE PERIOD ───────────────────────────
+                // When connection === "open" fires, WhatsApp phone & server
+                // are still exchanging companion encryption keys and stanzas
+                // (takes 3-8 seconds). If we kill the socket immediately,
+                // the phone drops the connection mid-sync and shows "couldn't link"
+                // even though the web UI already saw "open".
+                // Keep the socket alive and let creds.update finish saving.
+                console.log(chalk.cyan(`⏳ Allowing companion sync to finish for ${nexusDevNumber}...`));
+                try { await _safeSaveCreds(); } catch {}
+                await sleep(8000);
+                try { await _safeSaveCreds(); } catch {}
+
                 ownership.handOffToBot(nexusDevNumber, 'mias-mdx');
-                // FULL retire, not just end(): the pairing socket keeps a
-                // creds.update listener and two intervals bound to the SAME
-                // auth folder the child is about to use. Leaving them alive
-                // let a late creds.update from the dying pairing socket
-                // overwrite the keys the child had already rotated, and
-                // WhatsApp then rejected the child with
-                // <failure reason="401"> ("Connection Failure") minutes later
-                // — which looked exactly like a logout and wiped the session.
                 retireSocket(nexusDevNumber, 'handoff to MIAS MDX');
                 try { nexus.ev?.removeAllListeners?.(); } catch {}
                 try { nexus.end(); } catch {}
                 try { nexus.ws?.close(); } catch {}
-                await sleep(6000);
+                await sleep(2000);
                 await launcher.launch(`${nexusDevNumber}@s.whatsapp.net`, sessionDir, {
                     BOT_ENTRY: 'mias/index.js',
                     BOT_ID: 'mias-mdx',
