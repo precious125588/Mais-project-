@@ -3003,6 +3003,68 @@ Save my contact:` }).catch(() => {});
           let body = (typeof getBody === "function" ? getBody(msg) : "") || "";
           const _btnCmd = _extractButtonCommand(body);
           if (_btnCmd) body = _btnCmd;
+
+          // ── MASTER QUOTED-CARD ROUTER (SETTINGS, CUZ, SUDO) ───────────────
+          // Unwraps quoted cards (including images with captions) so numeric
+          // replies never get swallowed by pickers or private mode.
+          try {
+            const _mCtx = msg.message?.extendedTextMessage?.contextInfo
+              || msg.message?.imageMessage?.contextInfo
+              || msg.message?.videoMessage?.contextInfo
+              || msg.message?.documentMessage?.contextInfo
+              || msg.message?.interactiveResponseMessage?.contextInfo;
+            let _mQ = _mCtx?.quotedMessage;
+            for (let _ui = 0; _ui < 6 && _mQ && typeof _mQ === "object"; _ui++) {
+              const _unxt = _mQ.ephemeralMessage?.message
+                || _mQ.viewOnceMessage?.message
+                || _mQ.viewOnceMessageV2?.message
+                || _mQ.viewOnceMessageV2Extension?.message
+                || _mQ.documentWithCaptionMessage?.message
+                || _mQ.editedMessage?.message || null;
+              if (!_unxt) break;
+              _mQ = _unxt;
+            }
+            const _qAllTexts = [];
+            if (_mQ) {
+              _qAllTexts.push(
+                _mQ.conversation,
+                _mQ.extendedTextMessage?.text,
+                _mQ.imageMessage?.caption,
+                _mQ.videoMessage?.caption,
+                _mQ.documentMessage?.caption,
+                _mQ.interactiveMessage?.body?.text,
+                _mQ.buttonsMessage?.contentText
+              );
+            }
+            const _qJoined = _qAllTexts.filter(Boolean).join(" ");
+            const _cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
+
+            // 1. CUZ Customization Menu Quote
+            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format/i.test(_qJoined)) {
+              try {
+                const cuzMod = require("./features/cuzCustomization.cjs");
+                if (typeof cuzMod.handleCuzReply === "function") {
+                  if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
+                }
+              } catch (_cErr) {}
+            }
+
+            // 2. Sudo Card Quote
+            if (/SUDO|ACCESS CONTROL/i.test(_qJoined) && /^[123]$/.test(_cleanB)) {
+              if (typeof globalThis.__miasSudoNumeric === "function") {
+                if (await globalThis.__miasSudoNumeric(sock, msg, body)) return;
+              }
+            }
+
+            // 3. Settings Panel Quote or Settings Numeric Option (e.g. 9.1, 6.2, 0)
+            if (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online/i.test(_qJoined) || /^(\d{1,2}\.[1-4]|0)$/.test(_cleanB)) {
+              if (typeof handleSettingsNumericReply === "function") {
+                if (await handleSettingsNumericReply(sock, msg, body)) return;
+              }
+            }
+          } catch (_earlyQErr) {
+            console.error("[master-quoted-card-router]", _earlyQErr?.message || _earlyQErr);
+          }
           // ── ZINOX FIX: PICKER REPLIES BEFORE SETTINGS ─────────────────────
           // The settings menu ("1.1 ... 33.2") and the TikTok picker
           // ("1.1 ... 3.2") share the same numeric shape, but they live
@@ -8428,7 +8490,7 @@ function buildMenu(jid, senderName, sender) {
 cmd(["allmenu", "fullmenu"], {
   desc: "Display all bot commands across all categories attached with bot info and cover photo in a single message",
   category: "main",
-  react: "📜"
+  react: "🗄️"
 }, async (sock, msg, args) => {
   const jid = msg.key.remoteJid;
   const sender = msg.key.fromMe ? (sock.user?.id || "").replace(/:[0-9]+@/, "@") : (msg.key.participant || msg.participant || jid).replace(/:[0-9]+@/, "@");
@@ -16004,77 +16066,106 @@ cmd("take", { desc: "Rename sticker — .take <name> | <author>", category: "TOO
     await sock.sendMessage(msg.key.remoteJid, { sticker: tagged });
   } catch (e) { await sendReply(sock, msg, `❌ Take failed: ${e.message}`); }
 });
-cmd(["tourl", "litterbox", "tour"], { desc: "Upload media → URL (litterbox + catbox)", category: "UTILITY" }, async (sock, msg) => {
+cmd(["tourl", "litterbox", "tour"], { desc: "Upload media → URL (catbox / tmpfiles / qu.ax)", category: "UTILITY" }, async (sock, msg) => {
   await react(sock, msg, "🌀").catch(()=>{});
-  const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-  const img = msg.message?.imageMessage || q?.imageMessage;
-  const vid = q?.videoMessage || msg.message?.videoMessage;
-  const aud = q?.audioMessage || msg.message?.audioMessage;
-  const doc = q?.documentMessage || msg.message?.documentMessage;
-  const stk = q?.stickerMessage || msg.message?.stickerMessage;
-  const media = img || vid || aud || doc || stk;
-  if (!media) { await sendReply(sock, msg, `❌ Reply to an image/video/audio/document with ${CONFIG.PREFIX}tourl`); return; }
-  const jid = msg.key.remoteJid;
-  const statusMsg = await sock.sendMessage(jid, { text: `🔗 *MIAS MDX Uploader*\n\n⬡ Downloading media...\n◻ Uploading to server...\n◻ Generating link...` }, { quoted: msg });
-  const sKey = statusMsg.key;
-  try {
-    const type = img ? "image" : vid ? "video" : aud ? "audio" : stk ? "sticker" : "document";
-    const stream = await downloadContentFromMessage(media, type);
-    let buf = Buffer.from([]);
-    for await (const c of stream) buf = Buffer.concat([buf, c]);
-    const ext = img ? "jpg" : vid ? "mp4" : aud ? "ogg" : stk ? "webp" : (doc?.fileName?.split(".").pop() || "bin");
-    const mime = media.mimetype || (img ? "image/jpeg" : vid ? "video/mp4" : aud ? "audio/ogg" : stk ? "image/webp" : "application/octet-stream");
-    await editMessage(sock, jid, sKey, `🔗 *MIAS MDX Uploader*\n\n⬢ Downloading media... ✅\n⬡ Uploading to server...\n◻ Generating link...`);
-    const FormData = (await import("form-data")).default;
-    // Try catbox first, then litterbox fallback
-    let resultUrl = null;
-    const uploadApis = [
-      async () => { // litterbox FIRST (reliable, no rate-limit)
-        const form = new FormData();
-        form.append("reqtype", "fileupload");
-        form.append("time", "72h");
-        form.append("fileToUpload", buf, { filename: `upload.${ext}`, contentType: mime });
-        const { data } = await axios.post("https://litterbox.catbox.moe/resources/internals/api.php", form, { headers: form.getHeaders(), timeout: 90000, maxContentLength: Infinity, maxBodyLength: Infinity });
-        if (data && typeof data === "string" && data.startsWith("https://")) return data.trim();
-        return null;
-      },
-      async () => { // catbox permanent fallback
-        const form = new FormData();
-        form.append("reqtype", "fileupload");
-        form.append("fileToUpload", buf, { filename: `upload.${ext}`, contentType: mime });
-        const { data } = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 90000, maxContentLength: Infinity, maxBodyLength: Infinity });
-        if (data && typeof data === "string" && data.startsWith("https://")) return data.trim();
-        return null;
-      },
-      async () => {
-        const form = new FormData();
-        form.append("file", buf, { filename: `upload.${ext}`, contentType: mime });
-        const { data } = await axios.post("https://tmpfiles.org/api/v1/upload", form, { headers: form.getHeaders(), timeout: 60000 });
-        if (data?.data?.url) return data.data.url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
-        return null;
-      },
-    ];
-    for (const tryUpload of uploadApis) {
-      try { resultUrl = await tryUpload(); if (resultUrl) break; } catch { continue; }
+  const unwrapMsg = (m) => {
+    let cur = m;
+    for (let i = 0; i < 6 && cur && typeof cur === "object"; i++) {
+      const nxt = cur.ephemeralMessage?.message
+        || cur.viewOnceMessage?.message
+        || cur.viewOnceMessageV2?.message
+        || cur.documentWithCaptionMessage?.message || null;
+      if (!nxt) break;
+      cur = nxt;
     }
-    if (resultUrl) {
-      await editMessage(sock, jid, sKey, `${resultUrl}`);
-      await sock.sendMessage(jid, { text: resultUrl }, { quoted: msg }).catch(() => {});
-      await react(sock, msg, "✅").catch(()=>{});
-    } else {
-      await editMessage(sock, jid, sKey, `🔗 *MIAS MDX Uploader*\n\n⬢ Downloading media... ✅\n⬢ Uploading to server... ❌\n\n⚠️ All upload servers busy — try again later`);
-    }
-  } catch (e) {
-    await editMessage(sock, jid, sKey, `🔗 *MIAS MDX Uploader*\n\n❌ Upload failed: ${e.message}`);
+    return cur;
+  };
+  const q = unwrapMsg(msg.message?.extendedTextMessage?.contextInfo?.quotedMessage);
+  const curM = unwrapMsg(msg.message);
+  const node = curM?.imageMessage || q?.imageMessage
+    || curM?.videoMessage || q?.videoMessage
+    || curM?.audioMessage || q?.audioMessage
+    || curM?.documentMessage || q?.documentMessage
+    || curM?.stickerMessage || q?.stickerMessage;
+
+  if (!node) {
+    await react(sock, msg, "❌").catch(()=>{});
+    await sendReply(sock, msg, `❌ *Reply to any image, video, sticker, audio, or document with ${CONFIG.PREFIX}tourl*`);
+    return;
   }
 
-  // ── FALLBACK ENDPOINTS (merged from duplicate cmd registrations) ──
-  // fallback URL: https://litterbox.catbox.moe\n\nFiles
-  // fallback URL: https://haveibeenpwned.com`);
+  const kind = (curM?.imageMessage || q?.imageMessage) ? "image"
+    : (curM?.videoMessage || q?.videoMessage) ? "video"
+    : (curM?.audioMessage || q?.audioMessage) ? "audio"
+    : (curM?.stickerMessage || q?.stickerMessage) ? "sticker" : "document";
+
+  const jid = msg.key.remoteJid;
+  try {
+    let buf = null;
+    try {
+      const st = await downloadContentFromMessage(node, kind === "sticker" ? "sticker" : kind);
+      const ch = [];
+      for await (const c of st) ch.push(c);
+      buf = Buffer.concat(ch);
+    } catch (_) {}
+
+    if ((!buf || buf.length === 0) && typeof globalThis.__miasRobustDownload === "function") {
+      try { buf = await globalThis.__miasRobustDownload(sock, node, kind); } catch (_) {}
+    }
+
+    if (!buf || buf.length === 0) {
+      throw new Error("Could not download media from WhatsApp. Please send or quote the image again.");
+    }
+
+    const FormData = require("form-data");
+    const mime = node.mimetype || (kind === "image" ? "image/jpeg" : kind === "video" ? "video/mp4" : "application/octet-stream");
+    const ext = kind === "image" ? ".jpg" : kind === "video" ? ".mp4" : kind === "audio" ? ".mp3" : kind === "sticker" ? ".webp" : ".bin";
+    const fname = `upload_${Date.now()}${ext}`;
+
+    let uploadedUrl = null;
+
+    // Provider 1: Catbox
+    try {
+      const form = new FormData();
+      form.append("reqtype", "fileupload");
+      form.append("fileToUpload", buf, { filename: fname, contentType: mime });
+      const cRes = await axios.post("https://catbox.moe/user/api.php", form, { headers: form.getHeaders(), timeout: 35000 });
+      if (typeof cRes.data === "string" && cRes.data.startsWith("http")) uploadedUrl = cRes.data.trim();
+    } catch (_) {}
+
+    // Provider 2: tmpfiles.org
+    if (!uploadedUrl) {
+      try {
+        const form = new FormData();
+        form.append("file", buf, { filename: fname, contentType: mime });
+        const tRes = await axios.post("https://tmpfiles.org/api/v1/upload", form, { headers: form.getHeaders(), timeout: 35000 });
+        if (tRes.data?.data?.url) {
+          uploadedUrl = tRes.data.data.url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
+        }
+      } catch (_) {}
+    }
+
+    // Provider 3: qu.ax
+    if (!uploadedUrl) {
+      try {
+        const form = new FormData();
+        form.append("files[]", buf, { filename: fname, contentType: mime });
+        const qRes = await axios.post("https://qu.ax/upload.php", form, { headers: form.getHeaders(), timeout: 35000 });
+        if (qRes.data?.files?.[0]?.url) uploadedUrl = qRes.data.files[0].url;
+      } catch (_) {}
+    }
+
+    if (!uploadedUrl) throw new Error("All upload hosts failed to respond. Please check your internet connection.");
+
+    await react(sock, msg, "✅").catch(()=>{});
+    await sendReply(sock, msg, `🔗 *URL Generated Successfully!*\n\n🌐 *Link:* ${uploadedUrl}\n📦 *Size:* ${(buf.length / 1024).toFixed(1)} KB\n📁 *Type:* ${kind.toUpperCase()}`);
+  } catch (err) {
+    console.error("[tourl error]", err);
+    await react(sock, msg, "❌").catch(()=>{});
+    await sendReply(sock, msg, `❌ *Upload failed:* ${err?.message || err}`);
+  }
 });
-// ═══════════════════════════════════════════════════════════════════════════════
-//  UTILITY COMMANDS (NEW v5.3.0)
-// ═══════════════════════════════════════════════════════════════════════════════
+
 cmd(["timezone", "tz"], { desc: "Show current time in a timezone — .tz Lagos | London | New_York", category: "UTILITY" }, async (sock, msg, args) => {
   if (!args.length) {
     const zones = [
@@ -16232,286 +16323,79 @@ cmd("price", { desc: "Check product price", category: "TOOLS" }, async (sock, ms
 cmd("fetch", { desc: "Fetch a URL — auto-detects text/JSON/binary (image/video/audio/document)", category: "TOOLS" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}fetch <url>`); return; }
   await react(sock, msg, "🌐");
-  let url = args[0];
+  let url = args[0].trim();
   if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-  try {
-    // Use arraybuffer so binary content stays intact (no UTF-8 mangling = no "encrypted-looking" garbage)
-    const resp = await axios.get(url, { timeout: 30000, maxRedirects: 5, responseType: "arraybuffer", validateStatus: () => true, headers: { "User-Agent": "Mozilla/5.0 (compatible; MIAS-MDX/1.0)" } });
-    const ct = String(resp.headers?.["content-type"] || "").toLowerCase();
-    const buf = Buffer.from(resp.data);
-    const fname = (url.split("/").pop() || "file").split("?")[0].slice(0, 80);
 
-    // Binary detection — send native WhatsApp media instead of dumping bytes as text
-    if (ct.startsWith("image/")) {
-      await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: `🌐 *Fetched image*\n${url}\n📦 ${ct} • ${buf.length.toLocaleString()} bytes` }, { quoted: msg });
-      return;
-    }
-    if (ct.startsWith("video/")) {
-      await sock.sendMessage(msg.key.remoteJid, { video: buf, caption: `🌐 *Fetched video*\n${url}\n📦 ${ct} • ${buf.length.toLocaleString()} bytes` }, { quoted: msg });
-      return;
-    }
-    if (ct.startsWith("audio/")) {
-      await sock.sendMessage(msg.key.remoteJid, { audio: buf, mimetype: ct || "audio/mpeg", ptt: false, fileName: fname }, { quoted: msg });
-      return;
-    }
-    if (ct.includes("application/pdf") || ct.includes("zip") || ct.includes("application/octet-stream") || ct.includes("application/x-")) {
-      await sock.sendMessage(msg.key.remoteJid, { document: buf, mimetype: ct || "application/octet-stream", fileName: fname, caption: `🌐 *Fetched file*\n${url}\n📦 ${ct} • ${buf.length.toLocaleString()} bytes` }, { quoted: msg });
-      return;
-    }
+  // Resolve tmpfiles.org direct download links
+  if (/tmpfiles\.org/i.test(url) && !/\/dl\//i.test(url)) {
+    url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
+  }
 
-    // Treat as text — but also detect text-disguised binary (lots of unprintable chars)
-    let text = buf.toString("utf8");
-    const printable = (text.match(/[\x09\x0A\x0D\x20-\x7E]/g) || []).length;
-    const ratio = printable / Math.max(text.length, 1);
-    if (ratio < 0.85 || /\u0000/.test(text)) {
-      // Looks binary — send as document so user gets clean bytes back
-      await sock.sendMessage(msg.key.remoteJid, { document: buf, mimetype: ct || "application/octet-stream", fileName: fname, caption: `🌐 *Fetched (binary)*\n${url}\n📦 ${ct || "unknown"} • ${buf.length.toLocaleString()} bytes` }, { quoted: msg });
-      return;
-    }
-    // Pretty-print JSON if applicable
-    if (ct.includes("json") || /^\s*[{\[]/.test(text)) {
-      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
-    }
-    text = text.slice(0, 3500);
-    await sendReply(sock, msg, `🌐 *Fetch Result*\n\n🔗 ${url}\n🛰️ ${resp.status} ${resp.statusText || ""}\n📦 ${ct || "unknown"} • ${buf.length.toLocaleString()} bytes\n\n\`\`\`\n${text}\n\`\`\``);
-  } catch (e) { await sendReply(sock, msg, `❌ Fetch failed: ${e.message}`); }
-});
-cmd("save", { desc: "Save quoted message/media to owner DM", category: "TOOLS", ownerOnly: true }, async (sock, msg) => {
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  const quoted = ctx?.quotedMessage;
-  if (!quoted) { await sendReply(sock, msg, "❌ Reply to any message to save it to your DM!"); return; }
-  await react(sock, msg, "🌀");
-  const dmJid = getOwnerJid(); // Always save to owner's DM
   try {
-    // Check for media types
-    const mediaTypes = [
-      { key: "imageMessage", type: "image", mime: "image/jpeg" },
-      { key: "videoMessage", type: "video", mime: "video/mp4" },
-      { key: "audioMessage", type: "audio", mime: "audio/ogg" },
-      { key: "stickerMessage", type: "sticker", mime: "image/webp" },
-      { key: "documentMessage", type: "document", mime: "application/octet-stream" },
-    ];
-    let saved = false;
-    for (const mt of mediaTypes) {
-      const mediaMsg = quoted[mt.key];
-      if (mediaMsg) {
-        const stream = await downloadContentFromMessage(mediaMsg, mt.type === "sticker" ? "sticker" : mt.type === "document" ? "document" : mt.type);
-        let buf = Buffer.from([]);
-        for await (const c of stream) buf = Buffer.concat([buf, c]);
-        const sendObj = {};
-        if (mt.type === "image") sendObj.image = buf;
-        else if (mt.type === "video") sendObj.video = buf;
-        else if (mt.type === "audio") { sendObj.audio = buf; sendObj.mimetype = mediaMsg.mimetype || "audio/ogg"; sendObj.ptt = !!mediaMsg.ptt; }
-        else if (mt.type === "sticker") sendObj.sticker = buf;
-        else { sendObj.document = buf; sendObj.fileName = mediaMsg.fileName || "file"; sendObj.mimetype = mediaMsg.mimetype || mt.mime; }
-        const saveFrom2 = ctx?.participant ? ("+"+_cleanNum(ctx.participant)) : (isGroup(msg) ? "Group" : "DM");
-        // A sticker payload with a caption is an invalid WhatsApp message and
-        // arrives as "this media file doesn't exist on your internal storage".
-        // Send the caption as a separate note instead.
-        if (mt.type === "sticker") {
-          await sock.sendMessage(dmJid, sendObj);
-          await sock.sendMessage(dmJid, { text: `📌 *Saved sticker*\nFrom: ${saveFrom2}` });
-        } else {
-          sendObj.caption = `📌 *Saved*\nFrom: ${saveFrom2}`;
-          await sock.sendMessage(dmJid, sendObj);
-        }
-        saved = true;
-        break;
+    let resp = await axios.get(url, {
+      timeout: 45000,
+      maxRedirects: 5,
+      responseType: "arraybuffer",
+      validateStatus: () => true,
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+    });
+
+    let ct = String(resp.headers?.["content-type"] || "").toLowerCase();
+    let buf = Buffer.from(resp.data);
+
+    // If tmpfiles or another file host returned an HTML landing page, extract the real download link
+    if (ct.includes("text/html") && buf.length < 50000) {
+      const htmlText = buf.toString("utf-8");
+      const dlMatch = htmlText.match(/href=["'](https?:\/\/[^"']*(?:tmpfiles\.org\/dl|download)[^"']*)["']/i)
+        || htmlText.match(/<a[^>]+class=["'][^"']*download[^"']*["'][^>]+href=["']([^"']+)["']/i);
+      if (dlMatch && dlMatch[1]) {
+        let realUrl = dlMatch[1];
+        if (realUrl.startsWith("/")) realUrl = "https://tmpfiles.org" + realUrl;
+        resp = await axios.get(realUrl, {
+          timeout: 45000,
+          maxRedirects: 5,
+          responseType: "arraybuffer",
+          validateStatus: () => true,
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+        });
+        ct = String(resp.headers?.["content-type"] || "").toLowerCase();
+        buf = Buffer.from(resp.data);
       }
     }
-    if (!saved) {
-      const text = quoted.conversation || quoted.extendedTextMessage?.text || "No text content";
-      await sock.sendMessage(dmJid, { text: `📌 *Saved Message*\n\n${text}` });
-    }
-    await react(sock, msg, "✅");
-  } catch (e) { await sendReply(sock, msg, `❌ Could not save: ${e.message}\nMake sure to DM the bot first!`); }
-});
-cmd("schedule", { desc: "Schedule a message", category: "TOOLS" }, async (sock, msg, args) => {
-  if (args.length < 2) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}schedule <minutes> <message>\nExample: ${CONFIG.PREFIX}schedule 5 Hello everyone!`); return; }
-  const mins = parseInt(args[0]);
-  if (isNaN(mins) || mins < 1 || mins > 1440) { await sendReply(sock, msg, "❌ Time must be 1-1440 minutes."); return; }
-  const text = args.slice(1).join(" ");
-  await sendReply(sock, msg, `⏰ *Scheduled!*\n\nMessage will be sent in ${mins} minute(s).`);
-  setTimeout(async () => {
-    try { await sock.sendMessage(msg.key.remoteJid, { text: `⏰ *Scheduled Message*\n\n${text}` }); } catch {}
-  }, mins * 60000);
-});
-cmd("schedules", { desc: "View scheduled messages", category: "TOOLS" }, async (sock, msg) => {
-  await sendReply(sock, msg, `⏰ *Scheduled Messages*\n\nSchedules are stored in memory and reset on restart.\nUse ${CONFIG.PREFIX}schedule <mins> <msg> to create one.`);
-});
-cmd("cancelschedule", { desc: "Cancel scheduled message", category: "TOOLS" }, async (sock, msg) => {
-  await sendReply(sock, msg, `⏰ *Cancel Schedule*\n\nSchedules run in memory. Restart the bot to cancel all pending schedules.`);
-});
-cmd("shazam", { desc: "Identify a song from audio/voice note", category: "TOOLS" }, async (sock, msg) => {
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  const q   = ctx?.quotedMessage;
-  const aud = q?.audioMessage || msg.message?.audioMessage;
-  const vid = q?.videoMessage || msg.message?.videoMessage;
-  if (!aud && !vid) { await sendReply(sock, msg, `❌ Reply to an audio, voice note, or video with *${CONFIG.PREFIX}shazam*`); return; }
-  await react(sock, msg, "🎵");
-  const statusMsg = await sock.sendMessage(msg.key.remoteJid, { text: `🎵 *MIAS MDX Shazam*\n\n⬡ Downloading audio...\n◻ Identifying song...` }, { quoted: msg });
-  const szKey = statusMsg.key;
-  try {
-    // Download media buffer
-    let buf = Buffer.from([]);
-    const mediaMsg = aud || vid;
-    const mediaType = aud ? "audio" : "video";
-    const stream = await downloadContentFromMessage(mediaMsg, mediaType);
-    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-    await editMessage(sock, msg.key.remoteJid, szKey,
-      `🎵 *MIAS MDX Shazam*\n\n⬢ Audio downloaded ✅\n⬡ Identifying song...`).catch(() => {});
 
-    // Validate buffer — need at least 5 seconds of audio (≥ ~20 KB)
-    if (!buf || buf.length < 15000) {
-      await sock.sendMessage(msg.key.remoteJid, { delete: szKey }).catch(() => {});
-      await sendReply(sock, msg, `🎵 *Shazam*\n\n❌ Audio too short to identify.\nMake sure it's at least 5 seconds.`);
-      await react(sock, msg, "❌"); return;
+    const jid = msg.key.remoteJid;
+    const urlClean = url.split("?")[0];
+    const ext = path.extname(urlClean).toLowerCase();
+
+    // Check media delivery
+    if (ct.startsWith("image/") || [".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(ext)) {
+      await sock.sendMessage(jid, { image: buf, caption: `🌐 *Fetched Image*\n🔗 ${url}` }, { quoted: msg });
+      return;
     }
-    // If audio is from video, take a 30-sec slice from the middle
-    let _shazBuf = buf;
-    if (mediaType === "video" && buf.length > 1024 * 1024) {
-      // Only send first 500KB to keep API happy
-      _shazBuf = buf.slice(0, 500 * 1024);
+    if (ct.startsWith("video/") || [".mp4", ".mov", ".mkv", ".webm"].includes(ext)) {
+      await sock.sendMessage(jid, { video: buf, mimetype: ct.startsWith("video/") ? ct : "video/mp4", caption: `🌐 *Fetched Video*\n🔗 ${url}` }, { quoted: msg });
+      return;
+    }
+    if (ct.startsWith("audio/") || [".mp3", ".ogg", ".wav", ".m4a", ".aac"].includes(ext)) {
+      await sock.sendMessage(jid, { audio: buf, mimetype: ct.startsWith("audio/") ? ct : "audio/mpeg", ptt: false }, { quoted: msg });
+      return;
+    }
+    if (ct.includes("application/pdf") || ct.includes("zip") || ct.includes("octet-stream") || buf.length > 50000) {
+      const fn = path.basename(urlClean) || "file";
+      await sock.sendMessage(jid, { document: buf, mimetype: ct || "application/octet-stream", fileName: fn }, { quoted: msg });
+      return;
     }
 
-    // Normalise result to { title, artist, album, url }
-    const _norm = (r) => {
-      if (!r) return null;
-      const title  = r.title  || r.track  || r.name   || r.song   || null;
-      const artist = r.artist || r.subtitle|| r.singers|| r.by     || null;
-      if (!title) return null;
-      return { title, artist: artist || "Unknown", album: r.album || r.release_date || null, url: r.url || r.link || r.spotify || r.apple_music || null };
-    };
-
-    // Helper: POST with form-data
-    const _formPost = async (endpoint, extraFields = {}) => {
-      let FD; try { FD = (await import("form-data")).default; } catch { return null; }
-      const form = new FD();
-      form.append("audio", typeof _shazBuf !== "undefined" ? _shazBuf : buf, { filename: "audio.ogg", contentType: "audio/ogg" });
-      for (const [k, v] of Object.entries(extraFields)) form.append(k, v);
-      const { data } = await axios.post(endpoint, form, { headers: form.getHeaders(), timeout: 35000 });
-      return data;
-    };
-
-    const shazamChain = [
-      // 1. Prexzy shazam (most reliable — own server)
-      async () => {
-        const d = await _formPost(`${CONFIG.PREXZY_API}/tools/shazam`);
-        const r = d?.result || d?.data || d; return _norm(r);
-      },
-      // 2. Ryzendesu
-      async () => {
-        const d = await _formPost("https://api.ryzendesu.vip/api/tools/shazam");
-        const r = d?.result || d?.data; return _norm(r);
-      },
-      // 3. Siputzx
-      async () => {
-        const d = await _formPost("https://api.siputzx.my.id/api/tools/shazam");
-        const r = d?.data || d?.result; return _norm(r);
-      },
-      // 4. GiftedTech
-      async () => {
-        const d = await _formPost(`${CONFIG.GIFTED_API}/api/tools/shazam?apikey=${CONFIG.GIFTED_KEY}`);
-        if (d?.success && (d?.result || d?.data)) return _norm(d.result || d.data);
-        return null;
-      },
-      // 5. Widipe shazam
-      async () => {
-        const d = await _formPost("https://widipe.com/tools/shazam");
-        return _norm(d?.result || d?.data);
-      },
-      // 6. Nexoracle — base64 JSON body
-      async () => {
-        const { data: d } = await axios.post("https://api.nexoracle.com/misc/shazam?apikey=free_key@maher_apis",
-          { audio: (typeof _shazBuf !== "undefined" ? _shazBuf : buf).toString("base64") }, { headers: { "Content-Type": "application/json" }, timeout: 30000 });
-        return _norm(d?.result || d?.track || d?.data);
-      },
-      // 7. AudD.io — free tier (may work without key for short clips)
-      async () => {
-        const d = await _formPost("https://api.audd.io/", { return: "apple_music,spotify" });
-        if (d?.result) return { title: d.result.title, artist: d.result.artist || "Unknown", album: d.result.album, url: d.result.song_link };
-        return null;
-      },
-    ];
-
-    let found = null;
-    for (const tryApi of shazamChain) {
-      try { found = await tryApi(); if (found) break; } catch {}
-    }
-
-    await sock.sendMessage(msg.key.remoteJid, { delete: szKey }).catch(() => {});
-
-    if (!found) {
-      await sendReply(sock, msg, `🎵 *Shazam*\n\n❌ Could not identify this song.\nMake sure the audio is clear and at least 5 seconds long.`);
-      await react(sock, msg, "❌"); return;
-    }
-
-    const shazResult =
-`🎵 *Shazam Result*
-━━━━━━━━━━━━━━━━━━━━
-
-🎶 *Title:*  ${found.title}
-🎤 *Artist:* ${found.artist}
-💿 *Album:*  ${found.album || "N/A"}
-${found.url ? `🔗 *Listen:* ${found.url}` : ""}`;
-
-    const ctaBtns = [
-      { type: "copy", text: "📋 Copy Song Title",  value: found.title,  id: "shz_title" },
-      { type: "copy", text: "🎤 Copy Artist Name", value: found.artist, id: "shz_artist" },
-    ];
-    if (found.url) ctaBtns.push({ type: "url", text: "▶️ Listen Now", url: found.url });
-
-    try {
-      await sendCTAButtons(sock, msg.key.remoteJid, msg, shazResult, ctaBtns, `${CONFIG.BOT_NAME} • Shazam`);
-    } catch { await sendReply(sock, msg, shazResult); }
-    await react(sock, msg, "✅");
-  } catch (e) {
-    await sock.sendMessage(msg.key.remoteJid, { delete: szKey }).catch(() => {});
-    await sendReply(sock, msg, `❌ *Shazam failed:* ${e.message}`);
+    // Text / JSON output
+    const textData = buf.toString("utf-8");
+    const preview = textData.length > 3500 ? textData.slice(0, 3500) + "\n...[truncated]" : textData;
+    await sendReply(sock, msg, `🌐 *Fetch Result*\n🔗 ${url}\n🛰️ ${resp.status} ${resp.statusText || "OK"}\n📦 ${ct} • ${buf.length.toLocaleString()} bytes\n\n\`\`\`\n${preview}\n\`\`\``);
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ Fetch failed: ${err?.message || err}`);
   }
 });
-cmd("rmwm", { desc: "Remove watermark from image", category: "TOOLS" }, async (sock, msg) => {
-  await sendReply(sock, msg, `🖼️ *Remove Watermark*\n\nReply to an image. For best results, use:\n🔗 https://www.watermarkremover.io`);
-});
-cmd("fakeid", { desc: "Generate fake identity", category: "TOOLS" }, async (sock, msg) => {
-  const firstNames = ["James","Sarah","Alex","Maria","David","Emma","Chris","Lisa","Mike","Anna"];
-  const lastNames = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Wilson","Moore"];
-  const domains = ["gmail.com","yahoo.com","outlook.com"];
-  const fn = random(firstNames), ln = random(lastNames);
-  const age = 18 + Math.floor(Math.random() * 45);
-  const email = `${fn.toLowerCase()}.${ln.toLowerCase()}${Math.floor(Math.random()*99)}@${random(domains)}`;
-  await sendReply(sock, msg, `🆔 *Fake Identity*\n\n👤 Name: ${fn} ${ln}\n📅 Age: ${age}\n📧 Email: ${email}\n📱 Phone: +1${Math.floor(1000000000 + Math.random() * 9000000000)}\n🏠 City: ${random(["New York","London","Tokyo","Paris","Sydney","Toronto"])}\n\n⚠️ _For entertainment only!_`);
-});
-cmd("tempmail", { desc: "Get temporary email", category: "TOOLS" }, async (sock, msg) => {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let user = ""; for (let i = 0; i < 10; i++) user += chars[Math.floor(Math.random() * chars.length)];
-  const _tmpEmail = `${user}@tmpmail.org`;
-  try {
-    await sendCTAButtons(sock, msg.key.remoteJid, msg,
-      `📧 *Temp Mail*\n\n📬 Your address:\n*${_tmpEmail}*\n\n⚠️ _Random address — tap Open Inbox to read messages_`,
-      [
-        { type: "copy", text: "📋 Copy Email",  value: _tmpEmail, id: "tmpmail_copy" },
-        { type: "url",  text: "📨 Open Inbox",  url: "https://tempmail.plus" },
-      ],
-      `${CONFIG.BOT_NAME} • Temp Mail`
-    );
-  } catch {
-    await sendReply(sock, msg, `📧 *Temp Mail*\n\n📬 Your temp email:\n*${_tmpEmail}*\n\n🔗 Check inbox: https://tempmail.plus`);
-  }
-});
-cmd("checkmail", { desc: "Check temp mail inbox", category: "TOOLS" }, async (sock, msg) => {
-  await sendReply(sock, msg, `📧 *Check Mail*\n\n🔗 Check your inbox at: https://tempmail.plus`);
-});
-cmd("readmail", { desc: "Read temp mail", category: "TOOLS" }, async (sock, msg) => {
-  await sendReply(sock, msg, `📧 *Read Mail*\n\n🔗 Read your emails at: https://tempmail.plus`);
-});cmd("leakcheck", { desc: "Check if email was leaked", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}leakcheck <email>`); return; }
-  await sendReply(sock, msg, `🔒 *Leak Check*\n\nCheck if *${args[0]}* was in a data breach:\n🔗 https://haveibeenpwned.com`);
-});
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  MEDIA COMMANDS
-// ═══════════════════════════════════════════════════════════════════════════════
 cmd(["sticker", "s"], { desc: "Image/video → sticker", category: "MEDIA" }, async (sock, msg, args) => {
   const unwrap = (node) => node?.ephemeralMessage?.message
     || node?.viewOnceMessage?.message
@@ -45466,85 +45350,7 @@ cmd(["unpin", "unpinmsg", "unpinchat"], { desc: "Unpin the replied message or ch
 });
 
 // ── GST — inject media through ffmpeg pipeline & deliver to the target group ──
-cmd(["gst"], { desc: "Send media to a group via JID/LID from DM or current group", category: "GROUP" }, async (sock, msg, args) => {
-  const jid = msg.key.remoteJid;
-  const isGroupMsg = jid.endsWith("@g.us");
-
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  let q = ctx?.quotedMessage || {};
-  if (q.viewOnceMessageV2?.message) q = q.viewOnceMessageV2.message;
-  if (q.viewOnceMessage?.message) q = q.viewOnceMessage.message;
-
-  const node = q.videoMessage || q.imageMessage || q.audioMessage || q.stickerMessage || q.documentMessage;
-  if (!node) {
-    return await sendReply(sock, msg, `❌ Reply to a media message with *${CONFIG.PREFIX}gst [group_jid]*`);
-  }
-
-  const kind = q.videoMessage ? "video" : q.imageMessage ? "image" : q.audioMessage ? "audio" : q.stickerMessage ? "sticker" : "document";
-
-  let targetGid = "";
-  let customCaption = "";
-
-  if (args.length > 0) {
-    const rawTarget = args[0].trim();
-    if (rawTarget.endsWith("@g.us") || rawTarget.endsWith("@lid")) {
-      targetGid = rawTarget;
-      customCaption = args.slice(1).join(" ");
-    } else if (/^\d{10,}$/.test(rawTarget)) {
-      targetGid = `${rawTarget}@g.us`;
-      customCaption = args.slice(1).join(" ");
-    } else if (isGroupMsg) {
-      targetGid = jid;
-      customCaption = args.join(" ");
-    } else {
-      return await sendReply(sock, msg, `❌ Invalid group JID/LID. Example:\n*${CONFIG.PREFIX}gst 120363382805164757@g.us*`);
-    }
-  } else {
-    if (isGroupMsg) {
-      targetGid = jid;
-    } else {
-      return await sendReply(sock, msg, `❌ In DM, please provide the target group JID/LID:\n*${CONFIG.PREFIX}gst 120363382805164757@g.us*`);
-    }
-  }
-
-  await react(sock, msg, "🌀").catch(()=>{});
-  try {
-    const buf = await globalThis.__miasRobustDownload(sock, node, kind);
-    let groupName = targetGid;
-    try {
-      const meta = await sock.groupMetadata(targetGid);
-      groupName = meta?.subject || targetGid;
-    } catch {}
-
-    const captionToSend = customCaption || node.caption || "";
-
-    let payload;
-    if (kind === "video") {
-      payload = { video: buf, mimetype: "video/mp4", caption: captionToSend };
-    } else if (kind === "image") {
-      payload = { image: buf, caption: captionToSend };
-    } else if (kind === "audio") {
-      payload = { audio: buf, mimetype: node.mimetype || "audio/mpeg", ptt: !!node.ptt };
-    } else if (kind === "sticker") {
-      payload = { sticker: buf };
-    } else {
-      payload = {
-        document: buf,
-        mimetype: node.mimetype || "application/octet-stream",
-        fileName: node.fileName || "file",
-        caption: captionToSend
-      };
-    }
-
-    await sock.sendMessage(targetGid, payload);
-    await react(sock, msg, "✅").catch(()=>{});
-    await sendReply(sock, msg, `✅ *${kind.toUpperCase()} uploaded to ${groupName}!*`);
-  } catch (e) {
-    await react(sock, msg, "❌").catch(()=>{});
-    await sendReply(sock, msg, `❌ GST failed: ${String(e?.message||e).slice(0,200)}`);
-  }
-});
-
+// [Duplicate gst command removed — precious-gst-picker.cjs is active]
 
 // ═══════════════════════════════════════════════════════════════════════════
 // v35: HD / REMINI — image & video QUALITY ENHANCER
@@ -45952,3 +45758,55 @@ cmd(["setcmd"], { desc: "Bind a command to a sticker", category: "OWNER", ownerO
   await react(sock, msg, "✅").catch(() => {});
   return sendReply(sock, msg, `✅ Sticker bound to command: *${cmdToSet}*\nWhenever you or the bot sends this sticker, it will execute this command!`);
 });
+
+// ── SILENT VIEWONCE SAVE ON EMOJI REACTION ──
+try {
+  if (!globalThis.__miasViewOnceReactionHookInstalled) {
+    globalThis.__miasViewOnceReactionHookInstalled = true;
+    sock.ev.on("messages.reaction", async (reactions) => {
+      try {
+        for (const r of reactions) {
+          if (!r?.reaction?.text) continue; // reaction removed
+          const targetKey = r.key;
+          if (!targetKey?.id) continue;
+          
+          // Only trigger for bot owner or fromMe
+          const reactor = String(r.reaction.sender || r.reaction.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
+          const ownerJid = (typeof getOwnerJid === "function" ? getOwnerJid() : (CONFIG.OWNER_NUMBER ? CONFIG.OWNER_NUMBER.replace(/[^0-9]/g,"") + "@s.whatsapp.net" : (sock.user?.id || "").replace(/:[0-9]+@/, "@")));
+          const isPrivileged = r.reaction.key?.fromMe || (typeof isOwner === "function" && isOwner(reactor)) || reactor.includes(ownerJid.split("@")[0]);
+          if (!isPrivileged) continue;
+
+          // Look up target message in memory store
+          const rawM = (typeof _msgStore !== "undefined" && _msgStore.get(targetKey.id))
+            || (typeof __miasMsgCache !== "undefined" && __miasMsgCache.get(targetKey.id));
+          if (!rawM) continue;
+
+          const vo = rawM.message?.viewOnceMessage?.message
+            || rawM.message?.viewOnceMessageV2?.message
+            || rawM.message?.viewOnceMessageV2Extension?.message;
+          if (!vo) continue;
+
+          const voMedia = vo.imageMessage || vo.videoMessage || vo.audioMessage;
+          if (!voMedia) continue;
+          const voKind = vo.imageMessage ? "image" : vo.videoMessage ? "video" : "audio";
+
+          const stream = await downloadContentFromMessage(voMedia, voKind);
+          const ch = [];
+          for await (const c of stream) ch.push(c);
+          const voBuf = Buffer.concat(ch);
+          if (!voBuf || voBuf.length === 0) continue;
+
+          // Silently deliver to owner private DM
+          const caption = `👁️ *ViewOnce Captured Silently*\n📱 Chat: ${targetKey.remoteJid}\n👤 Sender: @${(targetKey.participant || targetKey.remoteJid).split("@")[0]}\n💬 Caption: ${voMedia.caption || "None"}`;
+          const payload = voKind === "image" ? { image: voBuf, caption, mentions: [targetKey.participant || targetKey.remoteJid] }
+            : voKind === "video" ? { video: voBuf, mimetype: "video/mp4", caption, mentions: [targetKey.participant || targetKey.remoteJid] }
+            : { audio: voBuf, mimetype: voMedia.mimetype || "audio/ogg", ptt: !!voMedia.ptt };
+
+          await sock.sendMessage(ownerJid, payload);
+        }
+      } catch (voErr) {
+        console.error("[viewonce-reaction-save]", voErr?.message || voErr);
+      }
+    });
+  }
+} catch (_) {}
