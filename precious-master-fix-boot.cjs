@@ -352,6 +352,8 @@ function installAll(ctx) {
 /* ════════════════════════════════ PARENT ════════════════════════════════
    Called at the VERY TOP of server.js (and index.js). Runs once per process. */
 function bootParent() {
+  try { require('./scripts/patch-baileys.cjs').run(); } catch {}
+
   if (globalThis.__PRECIOUS_MASTER_PARENT__) {
     log('parent boot already done — skipping (dedup guard)');
     return globalThis.__PRECIOUS_MASTER_PARENT__;

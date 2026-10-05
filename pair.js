@@ -1026,6 +1026,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         markOnlineOnConnect: false,
+            shouldSuppressDeliveryReceipt: (msg, type) => (globalThis.__miasShouldSuppressDelivery ? globalThis.__miasShouldSuppressDelivery(nexus?.user?.id, msg, type) : false),
     });
     } catch (err) {
         tracker.pairingError = 'Failed to create WhatsApp connection: ' + err.message;
