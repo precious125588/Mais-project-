@@ -9534,114 +9534,286 @@ cmd(["alive", "runtime", "uptime"], { desc: "Bot alive status and uptime info", 
 // The previous implementation returned its usage text before reaching the
 // forwarding code, and it did not normalize @lid/group JIDs.
 
-cmd(["forward", "fwd"], { desc: "Forward a quoted message — .forward <number or JID>", category: "MISC" }, async (sock, msg, args) => {
-  const ctx = getContextInfo(msg);
-  let quoted = ctx?.quotedMessage || null;
-  for (let i = 0; i < 5; i++) {
-    const inner = quoted?.viewOnceMessage?.message
-      || quoted?.viewOnceMessageV2?.message
-      || quoted?.viewOnceMessageV2Extension?.message
-      || quoted?.ephemeralMessage?.message
-      || quoted?.documentWithCaptionMessage?.message;
-    if (!inner || inner === quoted) break;
-    quoted = inner;
-  }
-  if (!quoted) {
-    await react(sock, msg, "❌").catch(() => {});
-    return sendReply(sock, msg, `↩️ Reply to a message first, then use ${CONFIG.PREFIX}forward <number|JID>.`);
-  }
+// ── UNIFIED ROBUST FORWARD (FWD) COMMAND ──
+// Reliably forwards quoted messages or marked (.1 .2 .3) messages to any number, JID, or group link.
+// Completely eliminates phantom "Forwarded" notices: media is downloaded and cleanly sent so WhatsApp
+// never drops it server-side.
 
-  let rawTarget = String(args?.[0] || "").trim();
-  const _gstGcMatch = rawTarget.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
-  if (_gstGcMatch) {
-    try {
-      const _gi = await sock.groupGetInviteInfo(_gstGcMatch[1]);
-      if (_gi?.id) rawTarget = _gi.id;
-    } catch {}
-  }
-  let targetJid = "";
-  const _gcMatch = rawTarget.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
-  if (_gcMatch) {
-    try {
-      const _gj = await sock.groupAcceptInvite(_gcMatch[1]);
-      if (_gj) targetJid = _gj;
-    } catch {
-      try { const _gi = await sock.groupGetInviteInfo(_gcMatch[1]); if (_gi?.id) targetJid = _gi.id; } catch {}
-    }
-  }
-  if (rawTarget && !targetJid) {
-    if (rawTarget.includes("@")) {
-      targetJid = rawTarget.toLowerCase().trim();
-    } else {
-      const digits = rawTarget.replace(/[^0-9]/g, "");
-      if (digits.length >= 7) targetJid = `${digits}@s.whatsapp.net`;
-    }
-  }
-  if (!targetJid) {
-    await react(sock, msg, "❌").catch(() => {});
-    return sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <number | JID | group link>\nExample: ${CONFIG.PREFIX}forward 2348012345678`);
-  }
-
-  await react(sock, msg, "🌀").catch(() => {});
-
-  let delivered = false;
+cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages — .forward <number | JID | group link>", category: "WHATSAPP" }, async (sock, msg, args) => {
   try {
-    // Determine content type and download if media
-    if (quoted.conversation || quoted.extendedTextMessage?.text) {
-      const txt = quoted.conversation || quoted.extendedTextMessage?.text;
-      await sock.sendMessage(targetJid, { text: txt });
-      delivered = true;
-    } else if (quoted.imageMessage) {
-      const stream = await downloadContentFromMessage(quoted.imageMessage, "image");
-      let buf = Buffer.alloc(0);
-      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-      await sock.sendMessage(targetJid, { image: buf, caption: quoted.imageMessage.caption || "" });
-      delivered = true;
-    } else if (quoted.videoMessage) {
-      const stream = await downloadContentFromMessage(quoted.videoMessage, "video");
-      let buf = Buffer.alloc(0);
-      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-      await sock.sendMessage(targetJid, { video: buf, caption: quoted.videoMessage.caption || "" });
-      delivered = true;
-    } else if (quoted.audioMessage) {
-      const stream = await downloadContentFromMessage(quoted.audioMessage, "audio");
-      let buf = Buffer.alloc(0);
-      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-      await sock.sendMessage(targetJid, { audio: buf, mimetype: quoted.audioMessage.mimetype || "audio/mp4", ptt: !!quoted.audioMessage.ptt });
-      delivered = true;
-    } else if (quoted.stickerMessage) {
-      const stream = await downloadContentFromMessage(quoted.stickerMessage, "sticker");
-      let buf = Buffer.alloc(0);
-      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-      await sock.sendMessage(targetJid, { sticker: buf });
-      delivered = true;
-    } else if (quoted.documentMessage) {
-      const stream = await downloadContentFromMessage(quoted.documentMessage, "document");
-      let buf = Buffer.alloc(0);
-      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-      await sock.sendMessage(targetJid, { document: buf, mimetype: quoted.documentMessage.mimetype, fileName: quoted.documentMessage.fileName || "document" });
-      delivered = true;
+    const oKey = typeof _cleanNum === "function" ? _cleanNum(getSender(msg)) : "";
+    const jid = msg.key.remoteJid;
+    const ctx = getContextInfo(msg);
+
+    const marked = (typeof _fwdMarks !== "undefined" && _fwdMarks.get(oKey)) || [];
+
+    // Helper to unwrap any layered message
+    const unwrapMsg = (m) => {
+      let cur = m;
+      for (let i = 0; i < 6 && cur && typeof cur === "object"; i++) {
+        const nxt = cur.ephemeralMessage?.message
+          || cur.viewOnceMessage?.message
+          || cur.viewOnceMessageV2?.message
+          || cur.viewOnceMessageV2Extension?.message
+          || cur.documentWithCaptionMessage?.message
+          || cur.editedMessage?.message
+          || null;
+        if (!nxt) break;
+        cur = nxt;
+      }
+      return cur;
+    };
+
+    let quoted = unwrapMsg(ctx?.quotedMessage);
+
+    if (!marked.length && !quoted) {
+      await react(sock, msg, "❌").catch(() => {});
+      return sendReply(sock, msg, `↩️ *Please quote/reply to a message first*, then type:\n*${CONFIG.PREFIX}forward <phone number | group JID | group link>*\n\nExample: *${CONFIG.PREFIX}forward 2348012345678*`);
+    }
+
+    const rawArg = String(args[0] || "").trim().replace(/^[{\[<]+|[}\]>]+$/g, "").trim();
+
+    if (!rawArg) {
+      await react(sock, msg, "❌").catch(() => {});
+      return sendReply(sock, msg, `ℹ️ *Missing destination!*\nUsage: *${CONFIG.PREFIX}forward <number | JID | group link>*\nExample: *${CONFIG.PREFIX}forward 2348012345678*`);
+    }
+
+    // Resolve target JID
+    let targetJid = "";
+    let targetLabel = "";
+
+    // 1. Group link
+    const gcLinkMatch = rawArg.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
+    if (gcLinkMatch) {
+      const code = gcLinkMatch[1];
+      try {
+        if (typeof sock.groupAcceptInvite === "function") {
+          const joined = await sock.groupAcceptInvite(code);
+          if (joined) targetJid = joined;
+        }
+      } catch (_) {}
+      if (!targetJid && typeof sock.groupGetInviteInfo === "function") {
+        try {
+          const gi = await sock.groupGetInviteInfo(code);
+          if (gi?.id) {
+            targetJid = gi.id.includes("@") ? gi.id : `${gi.id}@g.us`;
+            targetLabel = gi.subject ? `(${gi.subject})` : "";
+          }
+        } catch (_) {}
+      }
+    }
+
+    // 2. Direct JID or LID
+    if (!targetJid && rawArg.includes("@")) {
+      let candidate = rawArg.toLowerCase().trim();
+      if (candidate.endsWith("@lid") && typeof resolveLid === "function") {
+        candidate = resolveLid(candidate) || candidate;
+      }
+      if (candidate.endsWith("@g.us") || candidate.endsWith("@s.whatsapp.net")) {
+        targetJid = candidate;
+      }
+    }
+
+    // 3. Raw phone number digits
+    if (!targetJid) {
+      const digits = rawArg.replace(/[^0-9]/g, "");
+      if (digits.length >= 7) {
+        targetJid = `${digits}@s.whatsapp.net`;
+      }
+    }
+
+    if (!targetJid) {
+      await react(sock, msg, "❌").catch(() => {});
+      return sendReply(sock, msg, `❌ Invalid destination: *${rawArg}*. Please provide a valid phone number, JID, or group invite link.`);
+    }
+
+    if (targetJid.endsWith("@g.us") && !targetLabel) {
+      try {
+        const meta = await sock.groupMetadata(targetJid);
+        if (meta?.subject) targetLabel = `(${meta.subject})`;
+      } catch (_) {}
+    }
+
+    if (!targetLabel) {
+      targetLabel = targetJid.endsWith("@g.us") ? `group ${targetJid.split("@")[0]}` : `+${targetJid.split("@")[0]}`;
+    }
+
+    await react(sock, msg, "🌀").catch(() => {});
+
+    // Items to forward
+    const items = marked.length ? marked : [{ jid, id: ctx?.stanzaId, q: quoted, from: ctx?.participant || jid, _markMsg: msg }];
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const item of items) {
+      const q = unwrapMsg(item.q);
+      if (!q) {
+        failedCount++;
+        continue;
+      }
+
+      let sent = false;
+
+      // Robust media downloader helper
+      const getMediaBuf = async (mediaObj, kind) => {
+        try {
+          const stream = await downloadContentFromMessage(mediaObj, kind);
+          let buf = Buffer.alloc(0);
+          for await (const chunk of stream) {
+            buf = Buffer.concat([buf, chunk]);
+          }
+          if (buf && buf.length > 0) return buf;
+        } catch (_) {}
+        if (typeof globalThis.__miasRobustDownload === "function") {
+          try {
+            const buf = await globalThis.__miasRobustDownload(sock, mediaObj, kind);
+            if (buf && buf.length > 0) return buf;
+          } catch (_) {}
+        }
+        return null;
+      };
+
+      try {
+        // Image
+        if (q.imageMessage) {
+          const buf = await getMediaBuf(q.imageMessage, "image");
+          if (buf) {
+            await sock.sendMessage(targetJid, {
+              image: buf,
+              caption: q.imageMessage.caption || ""
+            });
+            sent = true;
+          }
+        }
+        // Video / Video Note
+        else if (q.videoMessage || q.ptvMessage) {
+          const vObj = q.videoMessage || q.ptvMessage;
+          const buf = await getMediaBuf(vObj, "video");
+          if (buf) {
+            await sock.sendMessage(targetJid, {
+              video: buf,
+              caption: vObj.caption || "",
+              mimetype: vObj.mimetype || "video/mp4",
+              ptv: !!q.ptvMessage
+            });
+            sent = true;
+          }
+        }
+        // Audio / Voice Note
+        else if (q.audioMessage) {
+          const buf = await getMediaBuf(q.audioMessage, "audio");
+          if (buf) {
+            await sock.sendMessage(targetJid, {
+              audio: buf,
+              mimetype: q.audioMessage.mimetype || "audio/ogg; codecs=opus",
+              ptt: !!q.audioMessage.ptt
+            });
+            sent = true;
+          }
+        }
+        // Sticker
+        else if (q.stickerMessage) {
+          const buf = await getMediaBuf(q.stickerMessage, "sticker");
+          if (buf) {
+            await sock.sendMessage(targetJid, {
+              sticker: buf,
+              isAnimated: !!q.stickerMessage.isAnimated
+            });
+            sent = true;
+          }
+        }
+        // Document
+        else if (q.documentMessage) {
+          const buf = await getMediaBuf(q.documentMessage, "document");
+          if (buf) {
+            await sock.sendMessage(targetJid, {
+              document: buf,
+              mimetype: q.documentMessage.mimetype || "application/octet-stream",
+              fileName: q.documentMessage.fileName || "document"
+            });
+            sent = true;
+          }
+        }
+        // Contact
+        else if (q.contactMessage || q.contactsArrayMessage) {
+          if (q.contactMessage) {
+            await sock.sendMessage(targetJid, { contacts: { displayName: q.contactMessage.displayName, contacts: [{ vcard: q.contactMessage.vcard }] } });
+          } else {
+            await sock.sendMessage(targetJid, { contacts: { contacts: q.contactsArrayMessage.contacts } });
+          }
+          sent = true;
+        }
+        // Location
+        else if (q.locationMessage || q.liveLocationMessage) {
+          const loc = q.locationMessage || q.liveLocationMessage;
+          await sock.sendMessage(targetJid, {
+            location: {
+              degreesLatitude: loc.degreesLatitude,
+              degreesLongitude: loc.degreesLongitude,
+              name: loc.name || loc.address || ""
+            }
+          });
+          sent = true;
+        }
+        // Text / Extended Text / Buttons / Interactive
+        else {
+          const text = q.conversation
+            || q.extendedTextMessage?.text
+            || q.interactiveMessage?.body?.text
+            || q.buttonsMessage?.contentText
+            || q.listMessage?.description
+            || "";
+
+          if (text) {
+            await sock.sendMessage(targetJid, { text });
+            sent = true;
+          } else {
+            // Last resort: native relay forwarding with message wrapper
+            try {
+              const fwdRes = await sock.sendMessage(targetJid, {
+                forward: {
+                  key: { remoteJid: item.jid || jid, id: item.id || ctx?.stanzaId, fromMe: false },
+                  message: q
+                },
+                force: true
+              });
+              if (fwdRes?.key) sent = true;
+            } catch (_) {}
+          }
+        }
+
+        if (sent) {
+          successCount++;
+          if (item._markMsg) { try { await react(sock, item._markMsg, "✅"); } catch (_) {} }
+        } else {
+          failedCount++;
+          if (item._markMsg) { try { await react(sock, item._markMsg, "❌"); } catch (_) {} }
+        }
+      } catch (sendErr) {
+        console.error("[forward] Error sending item:", sendErr?.message || sendErr);
+        failedCount++;
+        if (item._markMsg) { try { await react(sock, item._markMsg, "❌"); } catch (_) {} }
+      }
+    }
+
+    if (typeof _fwdMarks !== "undefined" && oKey) {
+      _fwdMarks.delete(oKey);
+    }
+
+    if (successCount > 0) {
+      await react(sock, msg, "✅").catch(() => {});
+      await sendReply(sock, msg, `📤 Successfully forwarded *${successCount}* message(s) to *${targetLabel}*${failedCount > 0 ? `\n⚠️ *${failedCount}* failed to forward.` : ""}`);
     } else {
-      // Forward generic
-      await sock.sendMessage(targetJid, { forward: { key: { remoteJid: msg.key.remoteJid, id: ctx?.stanzaId, fromMe: false }, message: quoted }, force: true });
-      delivered = true;
+      await react(sock, msg, "❌").catch(() => {});
+      await sendReply(sock, msg, `❌ Failed to forward to *${targetLabel}*. Make sure the target is reachable and media can be downloaded.`);
     }
   } catch (err) {
-    console.error("[forward-fail]", err);
-  }
-
-  if (delivered) {
-    await react(sock, msg, "✅").catch(() => {});
-    await sendReply(sock, msg, `✅ Forwarded to +${targetJid.split("@")[0]}`);
-  } else {
+    console.error("[forward] Unhandled error:", err?.message || err);
     await react(sock, msg, "❌").catch(() => {});
-    await sendReply(sock, msg, `❌ Could not deliver to +${targetJid.split("@")[0]}. Ensure the number is registered on WhatsApp.`);
+    await sendReply(sock, msg, `❌ Forward error: ${err?.message || "Failed to process request."}`);
   }
 });
 
-
-
-// ── .wasted — overlay GTA "WASTED" screen — NexRay only ───────────────────
 cmd(["wasted","drunk","gtawasted"], {
   desc: "GTA Wasted overlay — reply to an image or pass URL — .wasted",
   category: "FUN"
@@ -45039,171 +45211,8 @@ globalThis.__miasForwardMark = async (sock, msg, body) => {
   } catch { return false; }
 };
 
-cmd(["forward", "fwd"], { desc: "Forward marked (.1 .2 .3) messages or quoted message to a number", category: "WHATSAPP", ownerOnly: true }, async (sock, msg, args) => {
-  const oKey = _cleanNum(getSender(msg));
-  const jid = msg.key.remoteJid;
-  const _fArg0 = String(args[0]||"").trim().replace(/^[{\[<]+|[}\]>]+$/g, "").trim();
-  const _fLink = _fArg0.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
-  let _fGroupJid = "", _fGroupName = "";
-  if (_fLink) {
-    try { _fGroupJid = (await sock.groupAcceptInvite(_fLink[1])) || ""; } catch { try { const _gi = await sock.groupGetInviteInfo(_fLink[1]); _fGroupJid = _gi?.id || ""; _fGroupName = _gi?.subject || ""; } catch {} }
-    if (_fGroupJid && !_fGroupName) { try { const _m2 = await sock.groupMetadata(_fGroupJid); _fGroupName = _m2?.subject || ""; } catch {} }
-  }
-  let _fJidTarget = "";
-  if (!_fGroupJid && _fArg0.includes("@")) {
-    _fJidTarget = String(resolveLid(_fArg0) || _fArg0).trim().toLowerCase();
-    if (_fJidTarget.endsWith("@lid") && isGroup(msg)) {
-      try { const meta = await sock.groupMetadata(msg.key.remoteJid); updateLidMappingsFromMeta(meta); _fJidTarget = resolveLid(_fJidTarget); } catch {}
-    }
-    if (!_fJidTarget.endsWith("@g.us") && !_fJidTarget.endsWith("@broadcast")) _fJidTarget = toStandardJid(_fJidTarget);
-  }
-  const tRaw = (!_fGroupJid && !_fJidTarget) ? String(args[0]||"").replace(/[^0-9]/g,"") : "";
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  const marked = _fwdMarks.get(oKey) || [];
-  if (!marked.length && !ctx?.quotedMessage) { await sendReply(sock, msg, `❌ Reply to a message with ${CONFIG.PREFIX}forward <number>, or mark several with .1 .2 .3 first.`); return; }
-  if (!_fGroupJid && !_fJidTarget && (!tRaw || tRaw.length < 7)) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <number | JID | group link>\nExample: ${CONFIG.PREFIX}forward 12036302xxxxxxxxx@g.us\nExample: ${CONFIG.PREFIX}forward https://chat.whatsapp.com/xxx`); return; }
-  
-  try { await react(sock, msg, "🌀"); } catch {}
-  const target = _fGroupJid || _fJidTarget || (tRaw + "@s.whatsapp.net");
-  if (target.endsWith("@g.us") && !_fGroupName) {
-    try {
-      const _m = await sock.groupMetadata(target);
-      if (_m?.subject) _fGroupName = _m.subject;
-    } catch {}
-  }
-  const _fLabel = _fGroupName ? `(${_fGroupName})` : (target.endsWith("@g.us") ? "group (" + target.split("@")[0] + ")" : (_fJidTarget || "+" + tRaw));
-  const items = marked.length ? marked : [{ jid, id: ctx.stanzaId, q: ctx.quotedMessage, from: ctx.participant || jid, _markMsg: msg }];
-  let ok = 0, failed = [];
-  for (const it of items) {
-    try {
-      const q = it.q;
-      // FAST PATH: native forward/relay pushes WhatsApp servers to copy the media
-      // directly — instant even for big files, no download/re-upload lag.
-      let sent = false;
-      // FAST PATH: copyNForward delivers WhatsApp media server-to-server in seconds
-      if (typeof sock.copyNForward === "function") {
-        try {
-          const rawWrap = { key: { remoteJid: it.jid, id: it.id, fromMe: false, participant: it.from }, message: q };
-          const fRes = await sock.copyNForward(target, rawWrap, true);
-          if (fRes) sent = true;
-        } catch (_cfe) {}
-      }
-      if (!sent && (q.imageMessage || q.videoMessage || q.audioMessage || q.stickerMessage || q.documentMessage)) {
-        try {
-          const fwdMsg = await sock.sendMessage(target, { forward: { key: { remoteJid: it.jid, id: it.id, fromMe: false, participant: it.from }, message: q }, force: true });
-          if (fwdMsg && fwdMsg.key) sent = true;
-        } catch (_fe) {}
-      }
-      if (sent) {
-        ok++;
-        if (it._markMsg) { try { await react(sock, it._markMsg, "✅"); } catch {} }
-        continue;
-      }
-      let payload = null;
-      if (q.imageMessage) { const st = await downloadContentFromMessage(q.imageMessage,"image"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={image:b, caption:q.imageMessage.caption||""}; }
-      else if (q.videoMessage) { const st = await downloadContentFromMessage(q.videoMessage,"video"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={video:b, caption:q.videoMessage.caption||"", mimetype:"video/mp4"}; }
-      else if (q.audioMessage) { const st = await downloadContentFromMessage(q.audioMessage,"audio"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={audio:b, mimetype:q.audioMessage.mimetype||"audio/mpeg", ptt:!!q.audioMessage.ptt}; }
-      else if (q.stickerMessage) { const st = await downloadContentFromMessage(q.stickerMessage,"sticker"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={sticker:b}; }
-      else if (q.documentMessage) { const st = await downloadContentFromMessage(q.documentMessage,"document"); let b=Buffer.from([]); for await (const c of st) b=Buffer.concat([b,c]); payload={document:b, mimetype:q.documentMessage.mimetype||"application/octet-stream", fileName:q.documentMessage.fileName||"file"}; }
-      else { payload = { text: q.conversation || q.extendedTextMessage?.text || "" }; }
-      await sock.sendMessage(target, payload);
-      ok++;
-      if (it._markMsg) { try { await react(sock, it._markMsg, "✅"); } catch {} }
-    } catch (e) { failed.push(it); if (it._markMsg) { try { await react(sock, it._markMsg, "❌"); } catch {} } }
-  }
-  _fwdMarks.delete(oKey);
-  try { await react(sock, msg, "✅"); } catch {}
-  await sendReply(sock, msg, `📤 Forwarded *${ok}* message(s) to ${_fLabel}${failed.length?`\n❌ ${failed.length} failed`:""}`);
-});
+// [FORWARD DUPLICATE REMOVED — unified forward handler is active]
 
-// ── Download stability: keep bot alive during big/parallel downloads ──
-globalThis.__miasDownloadGuard = async function guardHeavy(buf) {
-  try { if (global.gc && buf && buf.length > 30*1024*1024) global.gc(); } catch {}
-  return buf;
-};
-process.on("unhandledRejection", (e)=>{ const m=String(e?.message||e||""); if(/ENOMEM|heap|Allocation failed|bad mac|BadMAC/i.test(m)) { try{global.gc&&global.gc();}catch{} return; } });
-process.on("uncaughtException", (e)=>{ const m=String(e?.message||e||""); if(/ENOMEM|heap|Allocation failed|bad mac|BadMAC/i.test(m)) { try{global.gc&&global.gc();}catch{} return; } console.error("[crash-guard]", m.slice(0,200)); });
-
-
-
-// ── AFK auto-reply: tell people WHY you're away ──
-try {
-  if (!globalThis.__miasAfkHookInstalled) {
-    globalThis.__miasAfkHookInstalled = true;
-    globalThis.__miasAfkCheck = async (sock, msg) => {
-      try {
-        if (!afkUsers || !afkUsers.size || msg.key.fromMe) return;
-        const ctx = msg.message?.extendedTextMessage?.contextInfo;
-        const mentioned = ctx?.mentionedJid || [];
-        const replyTo = ctx?.participant;
-        const isDm = !isGroup(msg);
-        for (const [afkJid, info] of afkUsers) {
-          const num = _cleanNum(afkJid);
-          const pinged = mentioned.some(j=>_cleanNum(j)===num) || _cleanNum(replyTo||"")===num || (isDm && _cleanNum(msg.key.remoteJid)===num);
-          if (pinged) {
-            const reason = (info && (info.reason || info.text)) || "I'm AFK right now.";
-            const since = info?.since ? new Date(info.since).toLocaleTimeString() : "";
-            await sock.sendMessage(msg.key.remoteJid, { text: `💤 *@${num} is AFK*\n📝 Reason: ${reason}${since?`\n🕐 Since: ${since}`:""}`, mentions: [afkJid] }, { quoted: msg }).catch(()=>{});
-          }
-        }
-      } catch {}
-    };
-  }
-} catch {}
-
-
-
-// ── ROBUST MEDIA DOWNLOAD — fixes "image quote goes silent" on some resolutions ──
-// Root cause: large/unusual-resolution images occasionally fail the first CDN
-// pull (stale media key / direct-path mismatch) and the error was swallowed by
-// an outer try{}catch{} so the command just went quiet. We retry once after a
-// sock.updateMediaMessage() re-upload, then throw a REAL error the command can
-// report instead of dying silently.
-globalThis.__miasRobustDownload = async function(sock, node, kind) {
-  const _tryDl = async (n) => {
-    const st = await downloadContentFromMessage(n, kind);
-    let b = Buffer.from([]);
-    for await (const c of st) b = Buffer.concat([b, c]);
-    return b;
-  };
-  try {
-    const buf = await _tryDl(node);
-    if (buf && buf.length > 100) return buf;
-    throw new Error("empty media buffer");
-  } catch (e1) {
-    try {
-      const reup = await sock.updateMediaMessage({ message: { [kind + "Message"]: node } });
-      const n2 = reup?.[kind + "Message"] || reup?.message?.[kind + "Message"] || node;
-      const buf2 = await _tryDl(n2);
-      if (buf2 && buf2.length > 100) return buf2;
-    } catch {}
-    throw e1;
-  }
-};
-// Wrap every image-quote command so a failed download REPLIES instead of going silent
-try {
-  const _quoteCmds = ["setpp","setgcpp","setgcpic","setpic","setazapic","tourl","removebg","rmbg","sticker","s","toimg","tovv","vv","vv2","remini","enhance","gst"];
-  for (const _cn of _quoteCmds) {
-    const _c = commands.get(_cn);
-    if (_c && !_c.__miasSilentGuard) {
-      const _run = _c.run || _c.execute || _c.handler;
-      if (typeof _run === "function") {
-        const _w = async (sock, msg, args, ...r) => {
-          try { return await _run(sock, msg, args, ...r); }
-          catch (e) {
-            console.error(`[${_cn}]`, e?.message || e);
-            try { await react(sock, msg, "❌"); } catch {}
-            try { await sendReply(sock, msg, `❌ *${_cn}* failed: ${String(e?.message || e).slice(0, 200)}`); } catch {}
-          }
-        };
-        if (_c.run) _c.run = _w; else if (_c.execute) _c.execute = _w; else if (_c.handler) _c.handler = _w;
-        _c.__miasSilentGuard = true;
-      }
-    }
-  }
-} catch {}
-
-// ── TKICK (temp-kick) — actually re-adds the member after the timeout ──
 cmd(["tkick", "tempkick", "tk"], { desc: "Kick member temporarily, auto re-add link after", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
   if (!isGroup(msg)) { await sendReply(sock, msg, "❌ Group only."); return; }
   const gid = msg.key.remoteJid;
