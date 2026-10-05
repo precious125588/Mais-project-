@@ -986,6 +986,10 @@ async function startpairing(nexusDevNumber, options = {}) {
         const authResult = await useMultiFileAuthState(sessionPath);
         state = authResult.state;
         saveCreds = authResult.saveCreds;
+        if (state && state.keys && typeof makeCacheableSignalKeyStore === "function") {
+            const pinoLogger = pino({ level: "silent" });
+            state.keys = makeCacheableSignalKeyStore(state.keys, pinoLogger);
+        }
     } catch (err) {
         tracker.pairingError = 'Failed to load session state: ' + err.message;
         throw new Error(tracker.pairingError);
@@ -1005,7 +1009,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: ['Mac OS', 'Chrome', '121.0.6167.85'],
+        browser: (Browsers && typeof Browsers.ubuntu === 'function') ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
