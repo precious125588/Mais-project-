@@ -2018,7 +2018,7 @@ async function connectToWA(force = false) {
       version,
       logger,
       printQRInTerminal: false,
-      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+      auth: { creds: state.creds, keys: state.keys },
       browser: ["Mac OS", "Chrome", "121.0.6167.85"],
       // ── v4.9.4 FIX ──────────────────────────────────────────────────
       // Was `false` → linked-devices screen showed the bot as OFFLINE
@@ -35991,8 +35991,8 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
           version,
           logger: (typeof silentLog !== "undefined" ? silentLog : (typeof logger !== "undefined" ? logger : undefined)),
           printQRInTerminal: false,
-          auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, (typeof silentLog !== "undefined" ? silentLog : undefined)) },
-          browser: (Browsers && typeof Browsers.macOS === "function") ? Browsers.macOS("Safari") : ["MIAS MDX LinkMe", "Chrome", "3.0.0"],
+          auth: { creds: state.creds, keys: state.keys },
+          browser: ["Mac OS", "Chrome", "121.0.6167.85"],
           markOnlineOnConnect: false,
           generateHighQualityLinkPreview: false,
           defaultQueryTimeoutMs: 60000,
