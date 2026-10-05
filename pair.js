@@ -1017,7 +1017,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: (Browsers && typeof Browsers.macOS === 'function') ? Browsers.macOS('Chrome') : ['Mac OS', 'Chrome', '14.0.0'],
+        browser: (Browsers && typeof Browsers.ubuntu === 'function') ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
@@ -1101,14 +1101,7 @@ async function startpairing(nexusDevNumber, options = {}) {
             while (!tracker.disconnected && nexus.ws?.readyState !== 3 && attempt < MAX_CODE_ATTEMPTS) {
                 attempt += 1;
                 try {
-                    let code;
-                    try {
-                        code = await nexus.requestPairingCode(phoneNumber, "PR3CIOUS");
-                    } catch (customCodeErr) {
-                        console.log(chalk.yellow());
-                        code = await nexus.requestPairingCode(phoneNumber);
-                    }
-                    if (!code) code = "PR3CIOUS";
+                    let code = await nexus.requestPairingCode(phoneNumber);
                     code = code?.match(/.{1,4}/g)?.join("-") || code;
 
                     if (!code) {
