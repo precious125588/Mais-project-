@@ -7855,7 +7855,7 @@ MENU_CATEGORIES.splice(
 // ── Robust bot picture fetcher with validation + fallbacks ──────────────────
 // Includes 3 NEW local pics bundled in /assets/ (never expire) + remote fallbacks
 const _ASSETS_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "assets");
-const _LOCAL_BOT_PICS = ["menu-cover.jpg", "botpic1.jpg", "botpic2.jpg"]
+const _LOCAL_BOT_PICS = ["allmenu.jpg", "botpic1.jpg", "menu-cover.jpg", "botpic2.jpg"]
   .map(f => path.join(_ASSETS_DIR, f))
   .filter(p => { try { return fs.existsSync(p); } catch { return false; } });
 const _BOT_PIC_FALLBACKS = [
@@ -8531,15 +8531,42 @@ function buildMenu(jid, senderName, sender) {
 cmd(["allmenu", "fullmenu"], {
   desc: "Display all bot commands across all categories attached with bot info and cover photo in a single message",
   category: "main",
-  react: "🗄️"
+  react: "🏷️"
 }, async (sock, msg, args) => {
   const jid = msg.key.remoteJid;
   const sender = msg.key.fromMe ? (sock.user?.id || "").replace(/:[0-9]+@/, "@") : (msg.key.participant || msg.participant || jid).replace(/:[0-9]+@/, "@");
   const senderName = msg.pushName || "User";
   try {
+    await react(sock, msg, "🏷️");
     const userQuote = _randomMenuQuoteForUser(sender || jid);
     let botPic = null;
-    try { botPic = await getBotPic(); } catch (_) {}
+    const _candidatePaths = [
+      path.join(_ASSETS_DIR, "allmenu.jpg"),
+      path.join(_ASSETS_DIR, "botpic1.jpg"),
+      path.join(_ASSETS_DIR, "menu-cover.jpg")
+    ];
+    for (const p of _candidatePaths) {
+      try {
+        if (fs.existsSync(p)) {
+          const buf = fs.readFileSync(p);
+          if (buf && buf.length > 1000) { botPic = buf; break; }
+        }
+      } catch (_) {}
+    }
+    if (!botPic) {
+      try { botPic = await getBotPic(); } catch (_) {}
+    }
+    if (!botPic) {
+      try {
+        const _botJ = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
+        const ppUrl = await sock.profilePictureUrl(_botJ, "image").catch(() => null)
+                   || await sock.profilePictureUrl(sock.user?.id, "image").catch(() => null);
+        if (ppUrl) {
+          const rPp = await axios.get(ppUrl, { responseType: "arraybuffer", timeout: 10000 });
+          if (rPp.data) botPic = Buffer.from(rPp.data);
+        }
+      } catch (_) {}
+    }
     const botName = CONFIG.BOT_NAME || "MAIS MDX";
     const botOwner = CONFIG.OWNER_NAME || "Precious";
     const botJid = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
@@ -8591,27 +8618,9 @@ cmd(["allmenu", "fullmenu"], {
 
     const mentions = [sender, botJid].filter(Boolean);
 
-    // Send attached together in ONE message:
+    // Send attached together with bot picture in ONE message:
     if (botPic && Buffer.isBuffer(botPic)) {
       try {
-        await sock.sendMessage(jid, {
-          document: botPic,
-          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          fileName: `👑 ${botName} • @${botNumber} [${totalCount} CMDS]`,
-          fileLength: 999999999999,
-          pageCount: 2026,
-          caption: allText,
-          jpegThumbnail: botPic,
-          mentions,
-          contextInfo: {
-            mentionedJid: mentions,
-            forwardingScore: 999,
-            isForwarded: true
-          }
-        }, { quoted: msg });
-        return;
-      } catch (errDoc) {
-        console.error('[ALLMENU] Document send fallback to image:', errDoc.message);
         await sock.sendMessage(jid, {
           image: botPic,
           caption: allText,
@@ -8623,6 +8632,8 @@ cmd(["allmenu", "fullmenu"], {
           }
         }, { quoted: msg });
         return;
+      } catch (errImg) {
+        console.error('[ALLMENU] Image send fallback:', errImg.message);
       }
     }
 
