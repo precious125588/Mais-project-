@@ -3822,6 +3822,7 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
     } catch (_cuzErr) {}
     if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
+              if (typeof handleSettingsNumericReply === "function" && await handleSettingsNumericReply(sock, msg, body)) return;
             } catch (e) {
               console.error("[numbered-reply]", e?.message || e);
             }
@@ -33544,69 +33545,36 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
   // canvas with a blurred version of the image as background — exactly like
   // levanter.site/profile-picture. setpp keeps its normal crop behaviour.
   const __miasFullDpHandler = async (sock, msg, args) => {
-    await react(sock, msg, "🖼️");
+    try { await react(sock, msg, "🌀"); } catch {}
     try {
       const buf = await __miasReadImageBuf(sock, msg, args);
       if (!buf || buf.length < 200) {
-        await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}fulldp <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}fulldp*\n\n_Sets the full picture — no cropping, original quality & ratio preserved._`);
+        await sendReply(sock, msg, "Usage: *" + CONFIG.PREFIX + "fulldp <image_url>*\nOr reply to an image with *" + CONFIG.PREFIX + "fulldp*\n\n_Sets the full picture — no cropping, original quality & ratio preserved._");
         return;
       }
-      // v36: compose the full-DP via the shared levanter-style engine
-      // (square canvas + blurred fill, sharp-first / jimp-fallback / plain-JPEG last resort)
-      let outBuf = await globalThis.__miasFullDpBuffer(buf);
-      const me = sock.user?.id || sock.user?.jid || "";
-      // Send DIRECTLY to WhatsApp — bypass the crop-resize shim so nothing
-      // ever crops or downscales the composed image again.
-      // FORCE-UPLOAD LADDER: WhatsApp answers non-JPEG / oversized / odd
-      // pictures with "not-acceptable" (406). Instead of giving up, retry
-      // with progressively smaller JPEGs, and as a last resort fall back to
-      // the normal (cropped) profile-picture path — a cropped DP beats no DP.
-      const __sendDp = async (pictureBuf) => sock.query({
+
+      const Jimp = require("jimp");
+      const jimpImage = await Jimp.read(buf);
+      const width = jimpImage.getWidth();
+      const height = jimpImage.getHeight();
+      const cropped = jimpImage.crop(0, 0, width, height);
+      const imgBuf = await cropped.scaleToFit(720, 720).getBufferAsync(Jimp.MIME_JPEG);
+
+      await sock.query({
         tag: "iq",
         attrs: { to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
-        content: [{ tag: "picture", attrs: { type: "image" }, content: pictureBuf }],
+        content: [{ tag: "picture", attrs: { type: "image" }, content: imgBuf }],
       });
-      let __dpUploaded = false;
-      let __dpLastErr = null;
-      try { await __sendDp(outBuf); __dpUploaded = true; }
-      catch (e0) { __dpLastErr = e0; }
-      if (!__dpUploaded) {
-        try {
-          const Jimp = require("jimp");
-          const base = await Jimp.read(outBuf).catch(() => Jimp.read(buf));
-          for (const step of [{ side: 1080, q: 88 }, { side: 720, q: 82 }, { side: 480, q: 75 }]) {
-            if (__dpUploaded) break;
-            try {
-              const attempt = await base.clone().scaleToFit(step.side, step.side).quality(step.q).getBufferAsync(Jimp.MIME_JPEG);
-              await __sendDp(attempt);
-              outBuf = attempt;
-              __dpUploaded = true;
-            } catch (eStep) { __dpLastErr = eStep; }
-          }
-        } catch (eLadder) { __dpLastErr = eLadder; }
-      }
-      if (!__dpUploaded) {
-        // Final force: go through the resize shim (square-crop) so the
-        // picture uploads even when WhatsApp rejected the full-bleed version.
-        try {
-          const forced = await __miasResizeProfilePic(outBuf).catch(() => outBuf);
-          await sock.updateProfilePicture(me, forced);
-          outBuf = forced;
-          __dpUploaded = true;
-        } catch (eFinal) { throw (__dpLastErr || eFinal); }
-      }
-      try {
-        const target = _path.join(__dirname, "assets", "botpic1.jpg");
-        _fs.mkdirSync(_path.dirname(target), { recursive: true });
-        _fs.writeFileSync(target, outBuf);
-      } catch {}
-      await react(sock, msg, "✅");
-      await sendReply(sock, msg, `✅ *Full DP updated!*\n_Entire picture set — no cropping, original quality & aspect ratio preserved (square canvas + blurred fill). If WhatsApp initially rejected it, the upload was forced through automatically._`);
-    } catch (e) {
-      await react(sock, msg, "❌");
-      await sendReply(sock, msg, `❌ Full DP failed: ${e?.message || e}`);
+
+      try { await react(sock, msg, "✅"); } catch {}
+      await sendReply(sock, msg, "*_Profile picture updated successfully! Full screen edge-to-edge applied._*\n\n_*Made by JUST X*_");
+    } catch (err) {
+      console.error("[FULLDP ERROR]", err);
+      try { await react(sock, msg, "❌"); } catch {}
+      await sendReply(sock, msg, "❌ Failed to update full profile picture: " + (err?.message || err));
     }
   };
+
   for (const n of ["fulldp", "setfulldp", "setfullpp", "fullpp"]) {
     const ex = commands.get(n) || { desc: "Set full profile pic (no crop, original quality)", category: "SETTINGS", ownerOnly: true };
     ex.handler = __miasFullDpHandler;
@@ -45009,7 +44977,22 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
           try { await react(sock, msg, "ℹ️"); } catch {}
           await sendReply(sock, msg, `ℹ️ @${tNum} is *already* a Sudo (DM) user.\n\n_No action done._`, [target]);
         } else {
-          sudoUsers.add(tNum);
+                    sudoUsers.add(tNum);
+          try {
+            const fs = require('fs');
+            const sudoPath = './database/sudo.json';
+            let sList = [];
+            if (fs.existsSync(sudoPath)) {
+              try { sList = JSON.parse(fs.readFileSync(sudoPath, 'utf8')); } catch (_) { sList = []; }
+            }
+            const sJid = tNum + '@s.whatsapp.net';
+            if (!sList.includes(sJid)) {
+              sList.push(sJid);
+              fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
+            }
+          } catch (eSudo) {
+            console.error('[Sudo-Sync]', eSudo.message);
+          }
           try { if (typeof saveNow === "function") saveNow(); } catch {}
           _sudoPending.delete(key);
           _sudoPending.delete(jid);
@@ -45025,6 +45008,22 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
         } else {
           sudoUsers.add(tNum);
           sudoUsers.add(tNum+":vip");
+          sudoUsers.add(tNum);
+          try {
+            const fs = require('fs');
+            const sudoPath = './database/sudo.json';
+            let sList = [];
+            if (fs.existsSync(sudoPath)) {
+              try { sList = JSON.parse(fs.readFileSync(sudoPath, 'utf8')); } catch (_) { sList = []; }
+            }
+            const sJid = tNum + '@s.whatsapp.net';
+            if (!sList.includes(sJid)) {
+              sList.push(sJid);
+              fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
+            }
+          } catch (eSudo) {
+            console.error('[Sudo-Sync]', eSudo.message);
+          }
           try { if (typeof saveNow === "function") saveNow(); } catch {}
           _sudoPending.delete(key);
           _sudoPending.delete(jid);
@@ -45040,6 +45039,17 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
           await sendReply(sock, msg, `ℹ️ @${tNum} has *no* sudo access to remove.\n\n_No action done._`, [target]);
         } else {
           sudoUsers.delete(tNum);
+        sudoUsers.delete(tNum+":vip");
+        try {
+          const fs = require('fs');
+          const sudoPath = './database/sudo.json';
+          if (fs.existsSync(sudoPath)) {
+            let sList = JSON.parse(fs.readFileSync(sudoPath, 'utf8'));
+            const sJid = tNum + '@s.whatsapp.net';
+            sList = sList.filter(x => x !== sJid && x !== tNum);
+            fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
+          }
+        } catch (_) {}
           sudoUsers.delete(tNum+":vip");
           try { if (typeof saveNow === "function") saveNow(); } catch {}
           _sudoPending.delete(key);

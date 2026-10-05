@@ -350,7 +350,11 @@ async function handleCuzReply(sock, msg, body, P) {
   }
 
   // Expecting menu option number reply
-  if (quotedId && quotedId === sess.menuMessageId) {
+  const isCuzQuoted = (quotedId && (quotedId === sess.menuMessageId || quotedId === sess.menuMessageId?.id))
+    || (ctx && /CUZ|CUSTOMIZATION|BRANDING|PRESENTATION/i.test(String(ctx.quotedMessage?.conversation || ctx.quotedMessage?.extendedTextMessage?.text || ctx.quotedMessage?.imageMessage?.caption || "")))
+    || (Date.now() - sess.createdAt < 10 * 60 * 1000);
+
+  if (isCuzQuoted) {
     const num = parseInt(rawText, 10);
     if (isNaN(num) || num < 1 || num > customizationOptions.length) {
       await sock.sendMessage(jid, { text: "Invalid option. Please reply with a number from 1 to 17." }, { quoted: msg });
