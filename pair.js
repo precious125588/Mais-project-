@@ -750,7 +750,7 @@ function ensureDirectoryExists(dirPath) {
 // (this is why the site "counted for 60 seconds"). We now cache the result
 // for 6 hours, cap the lookup at 6 seconds, and fall back to a known-good
 // version instead of failing the whole pairing.
-const FALLBACK_WA_VERSION = [2, 3000, 1043857760];
+const FALLBACK_WA_VERSION = [2, 3000, 1015901307];
 let _waVersionCache = { version: null, at: 0 };
 const WA_VERSION_TTL = 6 * 60 * 60 * 1000;
 
@@ -966,7 +966,7 @@ async function startpairing(nexusDevNumber, options = {}) {
     // A pairing code is bound to the identity keys generated for it. Left-over
     // half-written key files from an abandoned attempt make WhatsApp reject the
     // link. Start every fresh code pairing from a clean key store.
-    if (pairingMode === 'code') {
+    if (pairingMode === 'code' && !tracker.isRestarting515) {
         try {
             const credsFile = path.join(sessionPath, 'creds.json');
             let registered = false;
@@ -997,10 +997,9 @@ async function startpairing(nexusDevNumber, options = {}) {
         const authResult = await useMultiFileAuthState(sessionPath);
         state = authResult.state;
         saveCreds = authResult.saveCreds;
-        if (state && state.keys && typeof makeCacheableSignalKeyStore === "function") {
-            const pinoLogger = pino({ level: "silent" });
-            state.keys = makeCacheableSignalKeyStore(state.keys, pinoLogger);
-        }
+        // Match full-dp-uploader: do not wrap keys in makeCacheableSignalKeyStore during the
+        // pairing handshake. A cache layer over the key store can desync from the fresh key
+        // files WhatsApp just accepted, which shows up phone-side as "Couldn't link device".
     } catch (err) {
         tracker.pairingError = 'Failed to load session state: ' + err.message;
         throw new Error(tracker.pairingError);
@@ -1727,6 +1726,7 @@ async function startpairing(nexusDevNumber, options = {}) {
             // 515: WhatsApp always asks for a restart right after a successful
             // pairing — reconnect, never wipe the session.
             if (reason === 515) {
+                tracker.isRestarting515 = true;
                 console.log(chalk.blue(`🔄 Restart required (515) for ${nexusDevNumber}`));
                 if (ownership.isOwnedByBot(nexusDevNumber)) {
                     console.log(chalk.gray(`🛡️ Bot owns ${nexusDevNumber} — leaving the restart to it.`));
