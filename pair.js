@@ -967,10 +967,15 @@ async function startpairing(nexusDevNumber, options = {}) {
         try {
             const credsFile = path.join(sessionPath, 'creds.json');
             let registered = false;
+            let hasMe = false;
             if (fs.existsSync(credsFile)) {
-                try { registered = JSON.parse(fs.readFileSync(credsFile, 'utf8'))?.registered === true; } catch {}
+                try {
+                    const c = JSON.parse(fs.readFileSync(credsFile, 'utf8'));
+                    registered = c?.registered === true;
+                    hasMe = !!(c?.me && c?.me?.id);
+                } catch {}
             }
-            if (!registered) {
+            if (!registered && !hasMe) {
                 let wiped = 0;
                 for (const f of fs.readdirSync(sessionPath)) {
                     if (!f.endsWith('.json')) continue;
@@ -1012,7 +1017,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: (Browsers && typeof Browsers.ubuntu === 'function') ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
+        browser: (Browsers && typeof Browsers.macOS === 'function') ? Browsers.macOS('Chrome') : ['Mac OS', 'Chrome', '14.0.0'],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
@@ -1057,7 +1062,7 @@ async function startpairing(nexusDevNumber, options = {}) {
 
     if (store) store.bind(nexus.ev);
 
-    if (pairingMode === 'code' && !state.creds.registered) {
+    if (pairingMode === 'code' && !state.creds.registered && !state.creds?.me?.id) {
         if (useMobile) {
             throw new Error('Cannot use pairing code with mobile API');
         }
