@@ -10,8 +10,7 @@
     "check:infrastructure": "node scripts/validate-infrastructure.cjs",
     "test": "node --test tests/*.test.mjs",
     "test:davidcyril": "node tests/davidcyril-client.test.mjs",
-    "test:status": "node --test tests/status-edit-flow.test.mjs",
-    "postinstall": "node scripts/patch-baileys.cjs"
+    "test:status": "node --test tests/status-edit-flow.test.mjs"
   },
   "author": "MAIS",
   "license": "MIT",

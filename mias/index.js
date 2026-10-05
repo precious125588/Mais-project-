@@ -1627,50 +1627,6 @@ try {
 
 // Advanced settings per-chat
 
-// ── ANONYMOUS MODE DELIVERY SUPPRESSOR HOOK ────────────────────────────────
-globalThis.__miasShouldSuppressDelivery = function(botId, msg, type) {
-  try {
-    // Never suppress receipts for messages sent by the bot itself (type sender)
-    if (msg?.key?.fromMe || type === "sender") return false;
-    // Never suppress peer data operations, history sync, or internal protocol
-    if (type === "peer_msg" || type === "hist_sync") return false;
-
-    // Normal incoming delivery receipts have type undefined or "inactive"
-    if (type !== undefined && type !== "inactive") return false;
-
-    // Resolve bot number / JID
-    const botNum = String(botId || globalThis.__BOT_OWNER_NUMBER || "").replace(/[^0-9]/g, "");
-    const botJid = botNum ? (botNum + "@s.whatsapp.net") : "";
-
-    // Check settings in local settings Map or global.db
-    let isAnon = false;
-    if (typeof getSettings === "function") {
-      if (botJid && getSettings(botJid)?.anonymousMode) isAnon = true;
-      else if (botNum && getSettings(botNum)?.anonymousMode) isAnon = true;
-      else if (botJid && getSettings(botJid)?.anonymous) isAnon = true;
-      else if (getSettings("bot")?.anonymousMode || getSettings("bot")?.anonymous) isAnon = true;
-      else if (CONFIG?.OWNER_JID && (getSettings(CONFIG.OWNER_JID)?.anonymousMode || getSettings(CONFIG.OWNER_JID)?.anonymous)) isAnon = true;
-    }
-
-    if (!isAnon && global?.db?.data?.settings) {
-      if (botNum && (global.db.data.settings[botNum]?.anonymousMode || global.db.data.settings[botNum]?.anonymous)) isAnon = true;
-      else if (botJid && (global.db.data.settings[botJid]?.anonymousMode || global.db.data.settings[botJid]?.anonymous)) isAnon = true;
-    }
-
-    if (isAnon) {
-      try {
-        const id = msg?.key?.id || "unknown";
-        console.log("[Anonymous Mode] Suppressed delivery receipt for " + id);
-      } catch {}
-      return true;
-    }
-    return false;
-  } catch (_e) {
-    // Failure safety: default to normal behavior (do not suppress)
-    return false;
-  }
-};
-
 function defaultSettings() {
   return {
     adultMode: false, privateMode: false, antiLink: false,
@@ -1695,8 +1651,7 @@ function defaultSettings() {
     // v23: when ON, senders of broadcast messages are auto-blocked (.setting §34)
     antiBroadcast: false,
     ownerReact: false, adultDl: false, movieDl: "disable",
-    forcePrivate: false, autoDownload: 'off', autoDlChat: false, statusForwarder: false,
-    buttonsMode: false,
+    forcePrivate: false, autoDownload: 'off', autoDlChat: false,     buttonsMode: false,
     stickerGuard: "delete", linkGuard: "delete",
     // ── v4.9.4 NEW ──────────────────────────────────────────────────
     // autoReactMsgs : when ON, every incoming non-command message gets
@@ -1715,8 +1670,7 @@ function defaultSettings() {
     // so nothing changes for anyone until they explicitly opt in with
     // `.richmode on`.
     richMode: false,
-    anonymousMode: false,
-    anonymous: false,
+        anonymous: false,
   };
 }
 let _settingsDirty = false;
@@ -8784,8 +8738,6 @@ function buildSettingsMenu(jid) {
 ┃ 28.2 ᴅɪsᴀʙʟᴇ  ${!s.forcePrivate ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝘂𝘁𝗼-𝗗𝗟 𝗧𝗵𝗶𝘀 𝗖𝗵𝗮𝘁* ❯━━╮
-┃ 30.1 ᴇɴᴀʙʟᴇ  ${s.autoDlChat ? "✅" : ""}
-┃ 30.2 ᴅɪsᴀʙʟᴇ  ${!s.autoDlChat ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝘂𝘁𝗼 𝗗𝗼𝘄𝗻𝗹𝗼𝗮𝗱𝗲𝗿* ❯━━╮
 ┃ 29.1 ᴏꜰꜰ  ${s.autoDownload === 'off' || !s.autoDownload ? "✅" : ""}
@@ -8811,8 +8763,6 @@ function buildSettingsMenu(jid) {
 ┃ 35.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("234") ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗙𝗼𝗿𝘄𝗮𝗿𝗱𝗲𝗿* ❯━━╮
-┃ 30.1 ᴇɴᴀʙʟᴇ  ${s.statusForwarder ? "✅" : ""}
-┃ 30.2 ᴅɪsᴀʙʟᴇ  ${!s.statusForwarder ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗖𝗼𝗻𝘁𝗮𝗰𝘁 𝗥𝗲𝗽𝗹𝘆* ❯━━╮
 ┃ 31.1 ᴇɴᴀʙʟᴇ  ${s.contactReply ? "✅" : ""}
@@ -8910,29 +8860,10 @@ const SETTINGS_MAP = {
   "29.1": s => { s.autoDownload = 'off';    if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','off');    return "{ autodl off }"; },
   "29.2": s => { s.autoDownload = 'dm';     if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','dm');     return "{ autodl dm }"; },
   "29.3": s => { s.autoDownload = 'global'; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','global'); return "{ autodl all }"; },
-  "30.1": s => { s.autoDlChat = true;  if (typeof saveNow === "function") saveNow(); return "{ autodlchat on }"; },
-  "30.2": s => { s.autoDlChat = false; if (typeof saveNow === "function") saveNow(); return "{ autodlchat off }"; },
+  
   "36.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
   "36.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
-  "37.1": s => {
-    s.anonymousMode = true;
-    s.anonymous = true;
-    if (typeof _settingsDirty !== "undefined") _settingsDirty = true;
-    if (typeof saveNow === "function") saveNow();
-    return "🕶️ Anonymous Mode: ON\n_MIAS will not send the normal incoming-message delivery receipt. Read receipts and bot replies continue working independently._";
-  },
-  "37.2": s => {
-    s.anonymous = false;
-    try {
-      const _target = globalThis.__miasSock || (typeof sock !== "undefined" ? sock : null);
-      if (_target) {
-        _target.updatePrivacySettings?.("last", "all").catch(() => {});
-        _target.updatePrivacySettings?.("online", "all").catch(() => {});
-        _target.updatePrivacySettings?.("readreceipts", "all").catch(() => {});
-      }
-    } catch {}
-    return "✅ Anonymous Mode: OFF\n_Your online presence and read receipts are visible again._";
-  },
+  
   "31.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
   "31.2": s => { s.contactReply = false; return "{ contactreply off }"; },
   "32.1": s => { s.statusReply = true;  return "{ statusreply on }"; },
@@ -9580,6 +9511,7 @@ cmd(["alive", "runtime", "uptime"], { desc: "Bot alive status and uptime info", 
 // .forward / .fwd — forward a quoted message to a target number/JID.
 // The previous implementation returned its usage text before reaching the
 // forwarding code, and it did not normalize @lid/group JIDs.
+
 cmd(["forward", "fwd"], { desc: "Forward a quoted message — .forward <number or JID>", category: "MISC" }, async (sock, msg, args) => {
   const ctx = getContextInfo(msg);
   let quoted = ctx?.quotedMessage || null;
@@ -9597,9 +9529,15 @@ cmd(["forward", "fwd"], { desc: "Forward a quoted message — .forward <number o
     return sendReply(sock, msg, `↩️ Reply to a message first, then use ${CONFIG.PREFIX}forward <number|JID>.`);
   }
 
-  const rawTarget = String(args?.[0] || "").trim();
+  let rawTarget = String(args?.[0] || "").trim();
+  const _gstGcMatch = rawTarget.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
+  if (_gstGcMatch) {
+    try {
+      const _gi = await sock.groupGetInviteInfo(_gstGcMatch[1]);
+      if (_gi?.id) rawTarget = _gi.id;
+    } catch {}
+  }
   let targetJid = "";
-  // Group-link support: .forward https://chat.whatsapp.com/<code>
   const _gcMatch = rawTarget.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
   if (_gcMatch) {
     try {
@@ -9609,19 +9547,9 @@ cmd(["forward", "fwd"], { desc: "Forward a quoted message — .forward <number o
       try { const _gi = await sock.groupGetInviteInfo(_gcMatch[1]); if (_gi?.id) targetJid = _gi.id; } catch {}
     }
   }
-  if (rawTarget) {
+  if (rawTarget && !targetJid) {
     if (rawTarget.includes("@")) {
-      targetJid = String(resolveLid(rawTarget)).trim().toLowerCase();
-      if (targetJid.endsWith("@lid") && isGroup(msg)) {
-        try {
-          const meta = await sock.groupMetadata(msg.key.remoteJid);
-          updateLidMappingsFromMeta(meta);
-          targetJid = resolveLid(targetJid);
-        } catch {}
-      }
-      if (!targetJid.endsWith("@g.us") && !targetJid.endsWith("@broadcast")) {
-        targetJid = toStandardJid(targetJid);
-      }
+      targetJid = rawTarget.toLowerCase().trim();
     } else {
       const digits = rawTarget.replace(/[^0-9]/g, "");
       if (digits.length >= 7) targetJid = `${digits}@s.whatsapp.net`;
@@ -9629,109 +9557,66 @@ cmd(["forward", "fwd"], { desc: "Forward a quoted message — .forward <number o
   }
   if (!targetJid) {
     await react(sock, msg, "❌").catch(() => {});
-    return sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <number | JID | group link>\nExample: ${CONFIG.PREFIX}forward 2348012345678\nExample: ${CONFIG.PREFIX}forward https://chat.whatsapp.com/AbCdEf123`);
+    return sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}forward <number | JID | group link>\nExample: ${CONFIG.PREFIX}forward 2348012345678`);
   }
 
   await react(sock, msg, "🌀").catch(() => {});
-  const stanzaId = ctx?.stanzaId || `fwd_${Date.now()}`;
-  let targetLabel = `+${targetJid.split("@")[0]}`;
-  if (targetJid.endsWith("@g.us")) {
-    try {
-      const targetMeta = await sock.groupMetadata(targetJid);
-      if (targetMeta?.subject?.trim()) targetLabel = targetMeta.subject.trim();
-    } catch (error) {
-      console.log("[forward] group name lookup failed:", error?.message || error);
+
+  let delivered = false;
+  try {
+    // Determine content type and download if media
+    if (quoted.conversation || quoted.extendedTextMessage?.text) {
+      const txt = quoted.conversation || quoted.extendedTextMessage?.text;
+      await sock.sendMessage(targetJid, { text: txt });
+      delivered = true;
+    } else if (quoted.imageMessage) {
+      const stream = await downloadContentFromMessage(quoted.imageMessage, "image");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      await sock.sendMessage(targetJid, { image: buf, caption: quoted.imageMessage.caption || "" });
+      delivered = true;
+    } else if (quoted.videoMessage) {
+      const stream = await downloadContentFromMessage(quoted.videoMessage, "video");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      await sock.sendMessage(targetJid, { video: buf, caption: quoted.videoMessage.caption || "" });
+      delivered = true;
+    } else if (quoted.audioMessage) {
+      const stream = await downloadContentFromMessage(quoted.audioMessage, "audio");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      await sock.sendMessage(targetJid, { audio: buf, mimetype: quoted.audioMessage.mimetype || "audio/mp4", ptt: !!quoted.audioMessage.ptt });
+      delivered = true;
+    } else if (quoted.stickerMessage) {
+      const stream = await downloadContentFromMessage(quoted.stickerMessage, "sticker");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      await sock.sendMessage(targetJid, { sticker: buf });
+      delivered = true;
+    } else if (quoted.documentMessage) {
+      const stream = await downloadContentFromMessage(quoted.documentMessage, "document");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      await sock.sendMessage(targetJid, { document: buf, mimetype: quoted.documentMessage.mimetype, fileName: quoted.documentMessage.fileName || "document" });
+      delivered = true;
+    } else {
+      // Forward generic
+      await sock.sendMessage(targetJid, { forward: { key: { remoteJid: msg.key.remoteJid, id: ctx?.stanzaId, fromMe: false }, message: quoted }, force: true });
+      delivered = true;
     }
-    if (targetLabel.startsWith("+")) targetLabel = "group";
-  } else if (targetJid.endsWith("@s.whatsapp.net")) {
-    try {
-      targetLabel = await getDisplayName(sock, targetJid, isGroup(msg) ? msg.key.remoteJid : "");
-    } catch {}
+  } catch (err) {
+    console.error("[forward-fail]", err);
   }
-  const confirmForward = async () => {
+
+  if (delivered) {
     await react(sock, msg, "✅").catch(() => {});
-    await sendReply(sock, msg, `✅ Forwarded to ${targetLabel}`);
-  };
-  const quotedKey = {
-    remoteJid: msg.key.remoteJid,
-    id: ctx?.stanzaId || stanzaId,
-    fromMe: false,
-    participant: ctx?.participant || undefined,
-  };
-
-  // 1) Proper Baileys forward — keeps media, caption and the forwarded tag,
-  //    and (unlike a bare relay) actually reports whether it was delivered.
-  try {
-    const sentForward = await sock.sendMessage(targetJid, {
-      forward: { key: quotedKey, message: quoted },
-      force: true,
-    });
-    if (sentForward) {
-      await confirmForward();
-      return;
-    }
-  } catch (forwardError) {
-    console.log("[forward] forward send failed, trying relay:", forwardError?.message || forwardError);
-  }
-
-  // 2) Raw relay of the quoted node.
-  try {
-    await sock.relayMessage(targetJid, quoted, { messageId: `${stanzaId}_${Date.now()}` });
-    await confirmForward();
-    return;
-  } catch (relayError) {
-    console.log("[forward] relay failed, falling back to media download:", relayError?.message || relayError);
-  }
-
-  try {
-    const mediaTypes = [
-      ["imageMessage", "image"],
-      ["videoMessage", "video"],
-      ["audioMessage", "audio"],
-      ["stickerMessage", "sticker"],
-      ["documentMessage", "document"],
-    ];
-    let sent = false;
-    for (const [key, type] of mediaTypes) {
-      const media = quoted[key];
-      if (!media) continue;
-      const stream = await downloadContentFromMessage(media, type);
-      const chunks = [];
-      for await (const chunk of stream) chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (!buf.length) continue;
-      let payload;
-      if (key === "imageMessage") {
-        payload = { image: buf, caption: media.caption || "" };
-      } else if (key === "videoMessage") {
-        payload = { video: buf, mimetype: media.mimetype || "video/mp4", caption: media.caption || "" };
-      } else if (key === "audioMessage") {
-        payload = { audio: buf, mimetype: media.mimetype || "audio/ogg; codecs=opus", ptt: !!media.ptt };
-      } else if (key === "stickerMessage") {
-        payload = { sticker: buf };
-      } else {
-        payload = {
-          document: buf,
-          mimetype: media.mimetype || "application/octet-stream",
-          fileName: media.fileName || "forwarded_file",
-          caption: media.caption || "",
-        };
-      }
-      await sock.sendMessage(targetJid, payload);
-      sent = true;
-      break;
-    }
-    if (!sent) {
-      const text = quoted.conversation || quoted.extendedTextMessage?.text;
-      if (!text) throw new Error("unsupported quoted message type");
-      await sock.sendMessage(targetJid, { text });
-    }
-    await confirmForward();
-  } catch (e) {
+    await sendReply(sock, msg, `✅ Forwarded to +${targetJid.split("@")[0]}`);
+  } else {
     await react(sock, msg, "❌").catch(() => {});
-    await sendReply(sock, msg, `❌ Forward failed: ${e?.message || e}`);
+    await sendReply(sock, msg, `❌ Could not deliver to +${targetJid.split("@")[0]}. Ensure the number is registered on WhatsApp.`);
   }
 });
+
 
 
 // ── .wasted — overlay GTA "WASTED" screen — NexRay only ───────────────────
@@ -24378,7 +24263,25 @@ try {
 } catch (e) { console.log("[GROUP_ONLY_WRAP]", e?.message); }
 
 // ── setbotpic / botpic: change the bot's WhatsApp profile picture ──
-cmd(["setbotpic", "botpic", "setpp"], { desc: "Set bot profile pic from URL or replied image", category: "SETTINGS", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["setbotpic", "botpic", "setpp"], { desc: "Set normal cropped bot profile pic", category: "SETTINGS", ownerOnly: true }, async (sock, msg, args) => {
+    try {
+      const ctx = getContextInfo(msg);
+      const quoted = ctx?.quotedMessage?.imageMessage || msg.message?.imageMessage;
+      if (!quoted) return sendReply(sock, msg, "❌ Reply to an image to set as normal profile picture.");
+      await react(sock, msg, "🌀").catch(() => {});
+      const stream = await downloadContentFromMessage(quoted, "image");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      await sock.updateProfilePicture(sock.user.id, buf);
+      await react(sock, msg, "✅").catch(() => {});
+      return sendReply(sock, msg, "✅ Profile picture updated (normal cropped)!");
+    } catch (e) {
+      await react(sock, msg, "❌").catch(() => {});
+      return sendReply(sock, msg, "❌ Failed to update profile picture: " + e.message);
+    }
+  });
+  
+  cmd(["fulldp", "setfullpp"], { desc: "Set full edge-to-edge profile picture (for bot or target number)", category: "SETTINGS", ownerOnly: true }, async (sock, msg, args) => {
   await react(sock, msg, "🖼️");
   try {
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
@@ -44928,187 +44831,101 @@ cmd(["sudo"], { desc: "Grant sudo: .sudo in a DM or reply to a user", category: 
 });
 
 // numeric reply handler for the sudo card
+
 globalThis.__miasSudoNumeric = async (sock, msg, body) => {
   try {
-    const raw = String(body||"").trim();
+    const raw = String(body || "").trim();
     const pickMatch = raw.match(/^[.!#/]?([123])$/);
     if (!pickMatch) return false;
-    // [SUDO-QUOTE] diagnostics: trace reply-to-card handling (never log content)
-    try {
-      const _sqc = msg.message?.extendedTextMessage?.contextInfo;
-      const _sqm = _sqc?.quotedMessage;
-      if (_sqm) {
-        console.log('[SUDO-QUOTE] reply detected');
-        console.log('[SUDO-QUOTE] quoted type: ' + (Object.keys(_sqm)[0] || 'unknown'));
-        console.log('[SUDO-QUOTE] quoted ID: ' + (_sqc.stanzaId || ''));
-      }
-    } catch {}
     const pick = pickMatch[1];
     const jid = msg.key.remoteJid;
     const sNum = _cleanNum(getSender(msg));
     const key = sNum + "|" + jid;
 
-    let pend = _sudoPending.get(key) || _sudoPending.get(jid);
-    if (!pend) {
-      for (const [k, v] of _sudoPending.entries()) {
-        if (k.endsWith("|" + jid) && (Date.now() - v.ts) <= 10*60*1000) {
-          pend = v;
-          break;
-        }
-      }
-    }
+    // Check context info and quoted message thoroughly
+    const ctx = msg.message?.extendedTextMessage?.contextInfo || {};
+    const quotedMsg = ctx.quotedMessage || {};
+    let quotedText = String(
+      quotedMsg.conversation ||
+      quotedMsg.extendedTextMessage?.text ||
+      quotedMsg.imageMessage?.caption ||
+      quotedMsg.videoMessage?.caption ||
+      quotedMsg.buttonsMessage?.contentText ||
+      quotedMsg.listMessage?.description ||
+      quotedMsg.interactiveMessage?.body?.text ||
+      ""
+    );
 
-    let _qt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || (typeof __v31QuotedText === "function" ? __v31QuotedText(msg) : "");
-    // HARDEN (sudo silent fix): fall back to reading the quoted message
-    // directly. If the shared extractors miss the card (interactive/buttons
-    // wrapper, edited message, etc.) the whole pick used to die silently
-    // right here — no pending entry AND no card text → return false.
-    if (!_qt) {
-      try {
-        const _q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        if (_q) {
-          _qt = String(
-            _q.conversation
-            || _q.extendedTextMessage?.text
-            || _q.imageMessage?.caption
-            || _q.videoMessage?.caption
-            || _q.buttonsMessage?.contentText
-            || _q.listMessage?.description
-            || _q.interactiveMessage?.body?.text
-            || _q.interactiveMessage?.header?.title
-            || ""
-          );
-        }
-      } catch {}
-    }
-    const isSudoCard = _qt && /SUDO|GRANT SUDO|REMOVE SUDO|ACCESS CONTROL/i.test(_qt);
+    let pend = _sudoPending.get(key) || _sudoPending.get(jid) || globalThis.__lastSudoPending;
+    const isSudoCard = /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedText);
 
-    // If not in memory but quoting a valid card, extract target directly from card text
     if (!pend && isSudoCard) {
-      let tm = _qt.match(/Target:\s*@?(\d{7,15})/i);
-      if (!tm) tm = _qt.match(/@(\d{7,15})/);          // card mentions @number
-      if (!tm) tm = _qt.match(/\b(\d{7,15})\b/);       // last resort: any phone-length number on the card
+      let tm = quotedText.match(/Target:s*@?(\d{7,15})/i) || quotedText.match(/@(\d{7,15})/) || quotedText.match(/\b(\d{7,15})\b/);
       if (tm) {
         const tNum = tm[1];
         pend = { target: tNum + "@s.whatsapp.net", tNum, ts: Date.now(), recovered: true };
-        // store it back so this pick (and later replies) resolve normally
-        try { _sudoPending.set(key, pend); _sudoPending.set(jid, pend); } catch {}
+        _sudoPending.set(key, pend);
+        _sudoPending.set(jid, pend);
       }
     }
 
-    if (!pend) {
-      if (isSudoCard) {
-        await sendReply(sock, msg, "⌛ That *Sudo* menu has expired. Please run .sudo again.");
-        return true;
+    if (!pend && !isSudoCard) {
+      // If user typed 1, 2, or 3 without quote and lastSudoPending was within 10 minutes
+      if (globalThis.__lastSudoPending && (Date.now() - globalThis.__lastSudoPending.ts) <= 10 * 60 * 1000) {
+        pend = globalThis.__lastSudoPending;
       }
-      return false;
     }
 
-    // Loading reaction on the reply message
+    if (!pend) return false;
+
     try { await react(sock, msg, "🌀"); } catch {}
+    const { target, tNum } = pend;
 
-    const { target, tNum, cmdKey } = pend;
-    try { console.log('[SUDO-QUOTE] handler matched'); } catch {}
-    if (typeof sudoUsers !== "undefined") {
-      // Idempotent picks: report "already done / no action done" instead of
-      // silently re-adding, and persist every real change so it survives restart.
-      if (pick === "1") {
-        if (sudoUsers.has(tNum)) {
-          _sudoPending.delete(key); _sudoPending.delete(jid);
-          try { await react(sock, msg, "ℹ️"); } catch {}
-          await sendReply(sock, msg, `ℹ️ @${tNum} is *already* a Sudo (DM) user.\n\n_No action done._`, [target]);
-        } else {
-                    sudoUsers.add(tNum);
-          try {
-            const fs = require('fs');
-            const sudoPath = './database/sudo.json';
-            let sList = [];
-            if (fs.existsSync(sudoPath)) {
-              try { sList = JSON.parse(fs.readFileSync(sudoPath, 'utf8')); } catch (_) { sList = []; }
-            }
-            const sJid = tNum + '@s.whatsapp.net';
-            if (!sList.includes(sJid)) {
-              sList.push(sJid);
-              fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
-            }
-          } catch (eSudo) {
-            console.error('[Sudo-Sync]', eSudo.message);
-          }
-          try { if (typeof saveNow === "function") saveNow(); } catch {}
-          _sudoPending.delete(key);
-          _sudoPending.delete(jid);
-          if (cmdKey) { try { await sock.sendMessage(jid, { react: { text: "✅", key: cmdKey } }); } catch {} }
-          try { await react(sock, msg, "✅"); } catch {}
-          await sendReply(sock, msg, `✅ @${tNum} granted *SUDO (DM)* access.`, [target]);
+    if (pick === "1" || pick === "2") {
+      const isVip = pick === "2";
+      if (typeof sudoUsers !== "undefined") sudoUsers.add(tNum);
+      try {
+        const fs = require("fs");
+        const sudoPath = "./database/sudo.json";
+        let sList = [];
+        if (fs.existsSync(sudoPath)) {
+          try { sList = JSON.parse(fs.readFileSync(sudoPath, "utf8")); } catch (_) { sList = []; }
         }
-      } else if (pick === "2") {
-        if (sudoUsers.has(tNum+":vip")) {
-          _sudoPending.delete(key); _sudoPending.delete(jid);
-          try { await react(sock, msg, "ℹ️"); } catch {}
-          await sendReply(sock, msg, `ℹ️ @${tNum} is *already* a Sudo VIP.\n\n_No action done._`, [target]);
-        } else {
-          sudoUsers.add(tNum);
-          sudoUsers.add(tNum+":vip");
-          sudoUsers.add(tNum);
-          try {
-            const fs = require('fs');
-            const sudoPath = './database/sudo.json';
-            let sList = [];
-            if (fs.existsSync(sudoPath)) {
-              try { sList = JSON.parse(fs.readFileSync(sudoPath, 'utf8')); } catch (_) { sList = []; }
-            }
-            const sJid = tNum + '@s.whatsapp.net';
-            if (!sList.includes(sJid)) {
-              sList.push(sJid);
-              fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
-            }
-          } catch (eSudo) {
-            console.error('[Sudo-Sync]', eSudo.message);
-          }
-          try { if (typeof saveNow === "function") saveNow(); } catch {}
-          _sudoPending.delete(key);
-          _sudoPending.delete(jid);
-          if (cmdKey) { try { await sock.sendMessage(jid, { react: { text: "✅", key: cmdKey } }); } catch {} }
-          try { await react(sock, msg, "✅"); } catch {}
-          await sendReply(sock, msg, `✅ @${tNum} granted *SUDO VIP* (Group + DM).`, [target]);
+        const sJid = tNum + "@s.whatsapp.net";
+        if (!sList.includes(sJid)) {
+          sList.push(sJid);
+          fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
         }
-      } else if (pick === "3") {
-        const hadAny = sudoUsers.has(tNum) || sudoUsers.has(tNum+":vip");
-        if (!hadAny) {
-          _sudoPending.delete(key); _sudoPending.delete(jid);
-          try { await react(sock, msg, "ℹ️"); } catch {}
-          await sendReply(sock, msg, `ℹ️ @${tNum} has *no* sudo access to remove.\n\n_No action done._`, [target]);
-        } else {
-          sudoUsers.delete(tNum);
-        sudoUsers.delete(tNum+":vip");
-        try {
-          const fs = require('fs');
-          const sudoPath = './database/sudo.json';
-          if (fs.existsSync(sudoPath)) {
-            let sList = JSON.parse(fs.readFileSync(sudoPath, 'utf8'));
-            const sJid = tNum + '@s.whatsapp.net';
-            sList = sList.filter(x => x !== sJid && x !== tNum);
-            fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
-          }
-        } catch (_) {}
-          sudoUsers.delete(tNum+":vip");
-          try { if (typeof saveNow === "function") saveNow(); } catch {}
-          _sudoPending.delete(key);
-          _sudoPending.delete(jid);
-          if (cmdKey) { try { await sock.sendMessage(jid, { react: { text: "✅", key: cmdKey } }); } catch {} }
-          try { await react(sock, msg, "✅"); } catch {}
-          await sendReply(sock, msg, `🗑️ All sudo access removed for @${tNum}.`, [target]);
+      } catch {}
+      _sudoPending.delete(key);
+      _sudoPending.delete(jid);
+      try { await react(sock, msg, "✅"); } catch {}
+      await sendReply(sock, msg, `👑 Successfully added @${tNum} as Sudo${isVip ? " VIP" : ""}!\n\n_Access granted._`, [target]);
+      return true;
+    } else if (pick === "3") {
+      if (typeof sudoUsers !== "undefined") sudoUsers.delete(tNum);
+      try {
+        const fs = require("fs");
+        const sudoPath = "./database/sudo.json";
+        if (fs.existsSync(sudoPath)) {
+          let sList = JSON.parse(fs.readFileSync(sudoPath, "utf8"));
+          sList = sList.filter(u => !u.includes(tNum));
+          fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
         }
-      }
+      } catch {}
+      _sudoPending.delete(key);
+      _sudoPending.delete(jid);
+      try { await react(sock, msg, "✅"); } catch {}
+      await sendReply(sock, msg, `🗑️ Successfully removed @${tNum} from Sudo list.`, [target]);
+      return true;
     }
-    try { console.log('[SUDO-QUOTE] response sent'); } catch {}
-    return true;
-  } catch (e) {
-    console.error("[sudo-numeric]", e);
-    try { console.error('[SUDO-QUOTE] failed: ' + (e?.message || e)); } catch {}
+    return false;
+  } catch (err) {
+    console.error("[sudo-reply error]", err);
     return false;
   }
 };
+
 
 
 // ── .save reaction patch: 🌀 while working, ✅ when delivered ──
@@ -46016,3 +45833,82 @@ try {
   };
   console.log("[reencode] core command + quality picker armed");
 } catch (_reErr) { console.error("[reencode] init:", _reErr && _reErr.message || _reErr); }
+
+
+cmd(["jid"], { desc: "Get JID / LID or group link JID & LID", category: "INFO" }, async (sock, msg, args) => {
+  try {
+    await react(sock, msg, "🌀").catch(() => {});
+    const target = String(args?.[0] || "").trim();
+    const _gcMatch = target.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
+    if (_gcMatch) {
+      const code = _gcMatch[1];
+      let info = null;
+      try { info = await sock.groupGetInviteInfo(code); } catch {}
+      if (!info) {
+        await react(sock, msg, "❌").catch(() => {});
+        return sendReply(sock, msg, "❌ Invalid or revoked group link.");
+      }
+      let replyTxt = `👥 *GROUP LINK INFO*\n\n📌 *Name:* ${info.subject || "Unknown"}\n🆔 *Group JID:* ${info.id}\n`;
+      if (info.lid) replyTxt += `🔒 *Group LID:* ${info.lid}\n`;
+      replyTxt += `👑 *Creator:* @${(info.owner || "").split("@")[0] || "Unknown"}\n👥 *Participants:* ${info.size || "Unknown"}`;
+      await react(sock, msg, "✅").catch(() => {});
+      return sendReply(sock, msg, replyTxt, info.owner ? [info.owner] : []);
+    }
+
+    const ctx = getContextInfo(msg);
+    let userJid = ctx?.participant || ctx?.mentionedJid?.[0] || target;
+    if (!userJid && isGroup(msg)) userJid = msg.key.remoteJid;
+    if (!userJid) userJid = msg.key.remoteJid;
+
+    let resText = `🆔 *JID:* ${userJid}`;
+    if (userJid.endsWith("@g.us")) {
+      try {
+        const meta = await sock.groupMetadata(userJid);
+        if (meta?.lid) resText += `\n🔒 *Group LID:* ${meta.lid}`;
+      } catch {}
+    }
+    await react(sock, msg, "✅").catch(() => {});
+    return sendReply(sock, msg, resText);
+  } catch (e) {
+    await react(sock, msg, "❌").catch(() => {});
+    return sendReply(sock, msg, `❌ Error: ${e.message}`);
+  }
+});
+
+
+// ── STICKER SETCMD SYSTEM ──────────────────────────────────────────────────
+const STICKER_CMD_FILE = "./database/stickerCmds.json";
+function getStickerCmds() {
+  try {
+    if (fs.existsSync(STICKER_CMD_FILE)) return JSON.parse(fs.readFileSync(STICKER_CMD_FILE, "utf8"));
+  } catch {}
+  return {};
+}
+function saveStickerCmd(hash, command) {
+  try {
+    const dir = path.dirname(STICKER_CMD_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const cmds = getStickerCmds();
+    cmds[hash] = command;
+    fs.writeFileSync(STICKER_CMD_FILE, JSON.stringify(cmds, null, 2));
+    return true;
+  } catch { return false; }
+}
+
+cmd(["setcmd"], { desc: "Bind a command to a sticker", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  const ctx = getContextInfo(msg);
+  const quoted = ctx?.quotedMessage;
+  if (!quoted?.stickerMessage) {
+    return sendReply(sock, msg, `⚠️ *Reply to a sticker* with ${CONFIG.PREFIX}setcmd <command>\nExample: ${CONFIG.PREFIX}setcmd ping\nExample: ${CONFIG.PREFIX}setcmd .forward 2349068551055`);
+  }
+  const cmdToSet = args.join(" ").trim();
+  if (!cmdToSet) {
+    return sendReply(sock, msg, "⚠️ Please provide the command to bind to this sticker.");
+  }
+  const hash = quoted.stickerMessage.fileSha256 ? Buffer.from(quoted.stickerMessage.fileSha256).toString("base64") : null;
+  if (!hash) return sendReply(sock, msg, "❌ Could not calculate sticker hash.");
+
+  saveStickerCmd(hash, cmdToSet);
+  await react(sock, msg, "✅").catch(() => {});
+  return sendReply(sock, msg, `✅ Sticker bound to command: *${cmdToSet}*\nWhenever you or the bot sends this sticker, it will execute this command!`);
+});

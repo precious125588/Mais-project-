@@ -6,8 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node --expose-gc --max-old-space-size=896 index.js",
-    "dev": "node --expose-gc --max-old-space-size=896 --watch index.js",
-    "postinstall": "node ../scripts/patch-baileys.cjs"
+    "dev": "node --expose-gc --max-old-space-size=896 --watch index.js"
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.10",

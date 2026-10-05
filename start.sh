@@ -77,6 +77,4 @@ fi
 
 echo "[MAIS] Starting..."
 # v34: all fixes are baked into the tree; server.js boots the merged master fix boot.
-node scripts/patch-baileys.cjs || true
-
 exec node server.js
