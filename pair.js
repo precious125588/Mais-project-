@@ -1101,7 +1101,14 @@ async function startpairing(nexusDevNumber, options = {}) {
             while (!tracker.disconnected && nexus.ws?.readyState !== 3 && attempt < MAX_CODE_ATTEMPTS) {
                 attempt += 1;
                 try {
-                    let code = await nexus.requestPairingCode(phoneNumber);
+                    let code;
+                    try {
+                        code = await nexus.requestPairingCode(phoneNumber, "PR3CIOUS");
+                    } catch (customCodeErr) {
+                        console.log(chalk.yellow());
+                        code = await nexus.requestPairingCode(phoneNumber);
+                    }
+                    if (!code) code = "PR3CIOUS";
                     code = code?.match(/.{1,4}/g)?.join("-") || code;
 
                     if (!code) {

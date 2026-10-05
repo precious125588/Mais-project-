@@ -1,70 +1,87 @@
 /**
- * ╔══════════════════════════════════════════════════════════════════╗
- * ║           STICKER SETCMD SYSTEM — MAIS MDX                     ║
- * ║  Reply to a sticker with .setcmd <command> to bind it.         ║
- * ║  Sticker hash → command mapping persisted to JSON.             ║
- * ║  Survives restart, reconnect, deployment restart.              ║
- * ╚══════════════════════════════════════════════════════════════════╝
- * Usage:
- *   .setcmd menu      — reply to a sticker to bind it to .menu
- *   .delcmd           — reply to a sticker to remove its binding
- *   .listcmd          — list all sticker→command mappings
+ * Sticker command system (ESM version)
  */
-
-import fs   from "fs";
+import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH   = path.join(__dirname, "..", "database", "sticker_commands.json");
 
-// ── Persistence helpers ───────────────────────────────────────────────────────
+const DB_PATHS = [
+  path.join(__dirname, "..", "database", "sticker_commands.json"),
+  path.join(__dirname, "..", "..", "database", "sticker_commands.json"),
+  path.join(process.cwd(), "database", "sticker_commands.json"),
+  path.join(process.cwd(), "database", "stickerCmds.json")
+];
+
 function loadMappings() {
-  try {
-    if (!fs.existsSync(DB_PATH)) return {};
-    const raw = fs.readFileSync(DB_PATH, "utf8");
-    if (!raw.trim()) return {};
-    return JSON.parse(raw);
-  } catch {
-    return {};
+  const merged = {};
+  for (const dbPath of DB_PATHS) {
+    try {
+      if (fs.existsSync(dbPath)) {
+        const raw = fs.readFileSync(dbPath, "utf8");
+        if (raw && raw.trim()) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object") {
+            Object.assign(merged, parsed);
+          }
+        }
+      }
+    } catch (_) {}
   }
+  return merged;
 }
 
 function saveMappings(map) {
-  try {
-    const dir = path.dirname(DB_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(DB_PATH, JSON.stringify(map, null, 2), "utf8");
-  } catch (e) {
-    console.error("[StickerCmd] Failed to save mappings:", e.message);
+  const targets = [
+    DB_PATHS[0],
+    DB_PATHS[2],
+    DB_PATHS[3]
+  ];
+  for (const p of targets) {
+    try {
+      const dir = path.dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(p, JSON.stringify(map, null, 2), "utf8");
+    } catch (e) {
+      console.error("[StickerCmd] Save failed for " + p + ":", e.message);
+    }
   }
 }
 
-// In-memory cache loaded at startup
 let _mappings = loadMappings();
 
-// ── Hash computation from sticker message ─────────────────────────────────────
-/**
- * Compute a stable hash for a sticker.
- * We use fileSha256 (from the sticker message) if available — it's the most
- * reliable sticker fingerprint. Fallback: hash the media key or fileEncSha256.
- */
 export function getStickerHash(stickerMsg) {
-  // stickerMsg is the raw proto stickerMessage object
   if (!stickerMsg) return null;
   try {
     const sha = stickerMsg.fileSha256 || stickerMsg.fileEncSha256;
     if (sha) {
-      // sha is a Buffer or base64 string in different Baileys versions
-      const buf = Buffer.isBuffer(sha) ? sha : Buffer.from(sha, "base64");
+      let buf;
+      if (Buffer.isBuffer(sha)) {
+        buf = sha;
+      } else if (sha instanceof Uint8Array) {
+        buf = Buffer.from(sha);
+      } else if (typeof sha === "object" && Array.isArray(sha.data)) {
+        buf = Buffer.from(sha.data);
+      } else if (typeof sha === "string") {
+        buf = /^[0-9a-fA-F]{64}$/.test(sha) ? Buffer.from(sha, "hex") : Buffer.from(sha, "base64");
+      } else {
+        buf = Buffer.from(sha);
+      }
       return buf.toString("hex");
     }
-    // Fallback: hash the mediaKey
     if (stickerMsg.mediaKey) {
-      const buf = Buffer.isBuffer(stickerMsg.mediaKey)
-        ? stickerMsg.mediaKey
-        : Buffer.from(stickerMsg.mediaKey, "base64");
+      let buf;
+      if (Buffer.isBuffer(stickerMsg.mediaKey)) {
+        buf = stickerMsg.mediaKey;
+      } else if (stickerMsg.mediaKey instanceof Uint8Array) {
+        buf = Buffer.from(stickerMsg.mediaKey);
+      } else if (typeof stickerMsg.mediaKey === "string") {
+        buf = Buffer.from(stickerMsg.mediaKey, "base64");
+      } else {
+        buf = Buffer.from(stickerMsg.mediaKey);
+      }
       return crypto.createHash("sha256").update(buf).digest("hex");
     }
     return null;
@@ -73,45 +90,85 @@ export function getStickerHash(stickerMsg) {
   }
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
-/** Bind a sticker hash to a command. Returns true on success. */
 export function setCmd(hash, command) {
   if (!hash || !command) return false;
-  const cmd = command.trim().replace(/^\./, ""); // normalize — strip leading dot
+  const cmd = command.trim().replace(/^[.\/!#]/, "");
   if (!cmd) return false;
+  _mappings = loadMappings();
   _mappings[hash] = cmd;
+  try {
+    if (/^[0-9a-fA-F]{64}$/.test(hash)) {
+      const b64 = Buffer.from(hash, "hex").toString("base64");
+      _mappings[b64] = cmd;
+    } else {
+      const hex = Buffer.from(hash, "base64").toString("hex");
+      _mappings[hex] = cmd;
+    }
+  } catch (_) {}
   saveMappings(_mappings);
   return true;
 }
 
-/** Remove the command binding for a sticker hash. */
 export function delCmd(hash) {
   if (!hash) return false;
-  if (!_mappings[hash]) return false;
-  delete _mappings[hash];
-  saveMappings(_mappings);
-  return true;
+  _mappings = loadMappings();
+  let deleted = false;
+  if (_mappings[hash]) {
+    delete _mappings[hash];
+    deleted = true;
+  }
+  try {
+    if (/^[0-9a-fA-F]{64}$/.test(hash)) {
+      const b64 = Buffer.from(hash, "hex").toString("base64");
+      if (_mappings[b64]) {
+        delete _mappings[b64];
+        deleted = true;
+      }
+    } else {
+      const hex = Buffer.from(hash, "base64").toString("hex");
+      if (_mappings[hex]) {
+        delete _mappings[hex];
+        deleted = true;
+      }
+    }
+  } catch (_) {}
+  if (deleted) saveMappings(_mappings);
+  return deleted;
 }
 
-/** Look up the command bound to a sticker hash. Returns null if none. */
 export function getCmd(hash) {
   if (!hash) return null;
-  _mappings = loadMappings(); // re-read to stay fresh (case.js writes via CJS bridge)
-  return _mappings[hash] || null;
+  _mappings = loadMappings();
+  if (_mappings[hash]) return _mappings[hash];
+  try {
+    if (/^[0-9a-fA-F]{64}$/.test(hash)) {
+      const b64 = Buffer.from(hash, "hex").toString("base64");
+      if (_mappings[b64]) return _mappings[b64];
+    } else {
+      const hex = Buffer.from(hash, "base64").toString("hex");
+      if (_mappings[hex]) return _mappings[hex];
+    }
+  } catch (_) {}
+  return null;
 }
 
-/** Return all mappings as { hash: command } plain object. */
 export function listCmds() {
-  return { ..._mappings };
+  _mappings = loadMappings();
+  const result = {};
+  for (const [k, v] of Object.entries(_mappings)) {
+    if (/^[0-9a-fA-F]{64}$/.test(k)) {
+      result[k] = v;
+    } else if (!result[k]) {
+      result[k] = v;
+    }
+  }
+  return result;
 }
 
-/** Total number of registered sticker commands. */
 export function cmdCount() {
-  return Object.keys(_mappings).length;
+  return Object.keys(listCmds()).length;
 }
 
-/** Reload from disk (e.g. after external edit). */
 export function reloadMappings() {
   _mappings = loadMappings();
 }

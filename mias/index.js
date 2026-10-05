@@ -3042,6 +3042,25 @@ Save my contact:` }).catch(() => {});
           } catch {}
 
           let body = (typeof getBody === "function" ? getBody(msg) : "") || "";
+          // ── Instant sticker trigger resolution ──
+          try {
+            const _stkMsgIn = msg.message?.stickerMessage
+              || msg.message?.ephemeralMessage?.message?.stickerMessage
+              || msg.message?.viewOnceMessage?.message?.stickerMessage
+              || msg.message?.viewOnceMessageV2?.message?.stickerMessage
+              || msg.message?.viewOnceMessageV2Extension?.message?.stickerMessage
+              || msg.message?.documentWithCaptionMessage?.message?.stickerMessage;
+            if (_stkMsgIn) {
+              const { getStickerHash, stickerGetCmd } = require("./lib/stickerCmd.cjs");
+              const _sh = getStickerHash(_stkMsgIn);
+              if (_sh) {
+                const _bound = stickerGetCmd(_sh);
+                if (_bound) {
+                  body = (CONFIG.PREFIX || ".") + _bound.trim().replace(/^[.\/!#]/, "");
+                }
+              }
+            }
+          } catch (_) {}
           const _btnCmd = _extractButtonCommand(body);
           if (_btnCmd) body = _btnCmd;
 
@@ -36019,7 +36038,13 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
         // Wait briefly for ws ready, then request pairing code
         await new Promise(r => setTimeout(r, 2500));
         if (!sub.authState.creds.registered) {
-          const code = await sub.requestPairingCode(phone);
+          let code;
+        try {
+          code = await sub.requestPairingCode(phone, "PR3CIOUS");
+        } catch (_) {
+          code = await sub.requestPairingCode(phone);
+        }
+        if (!code) code = "PR3CIOUS";
           const fmt = code?.match(/.{1,4}/g)?.join("-") || code;
           await sendReply(sock, msg,
 `🔑 *Pairing Code for +${phone}*
@@ -45900,22 +45925,27 @@ function saveStickerCmd(hash, command) {
   } catch { return false; }
 }
 
-cmd(["setcmd"], { desc: "Bind a command to a sticker", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["setcmd_alias_v2"], { desc: "Bind a command to a sticker", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  const { getStickerHash, stickerSetCmd } = require("./lib/stickerCmd.cjs");
   const ctx = getContextInfo(msg);
-  const quoted = ctx?.quotedMessage;
-  if (!quoted?.stickerMessage) {
-    return sendReply(sock, msg, `⚠️ *Reply to a sticker* with ${CONFIG.PREFIX}setcmd <command>\nExample: ${CONFIG.PREFIX}setcmd ping\nExample: ${CONFIG.PREFIX}setcmd .forward 2349068551055`);
+  let quoted = ctx?.quotedMessage;
+  for (let i = 0; i < 6 && quoted; i++) {
+    if (quoted.stickerMessage) break;
+    const inner = quoted.ephemeralMessage?.message || quoted.viewOnceMessage?.message || quoted.viewOnceMessageV2?.message;
+    if (!inner) break;
+    quoted = inner;
   }
-  const cmdToSet = args.join(" ").trim();
-  if (!cmdToSet) {
-    return sendReply(sock, msg, "⚠️ Please provide the command to bind to this sticker.");
+  const stickerMsg = quoted?.stickerMessage || msg.message?.stickerMessage;
+  if (!stickerMsg) {
+    return sendReply(sock, msg, `⚠️ *Reply to a sticker* with ${CONFIG.PREFIX || "."}setcmd <command>`);
   }
-  const hash = quoted.stickerMessage.fileSha256 ? Buffer.from(quoted.stickerMessage.fileSha256).toString("base64") : null;
+  const cmdToSet = args.join(" ").trim().replace(/^[.\/!#]/, "");
+  if (!cmdToSet) return sendReply(sock, msg, "⚠️ Please provide the command to bind to this sticker.");
+  const hash = getStickerHash(stickerMsg);
   if (!hash) return sendReply(sock, msg, "❌ Could not calculate sticker hash.");
-
-  saveStickerCmd(hash, cmdToSet);
+  stickerSetCmd(hash, cmdToSet);
   await react(sock, msg, "✅").catch(() => {});
-  return sendReply(sock, msg, `✅ Sticker bound to command: *${cmdToSet}*\nWhenever you or the bot sends this sticker, it will execute this command!`);
+  return sendReply(sock, msg, `✅ Sticker bound to command: *${cmdToSet}*`);
 });
 
 // ── SILENT VIEWONCE SAVE ON ANY REACTION ──
