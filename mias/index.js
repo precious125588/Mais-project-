@@ -36038,7 +36038,14 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
         // Wait briefly for ws ready, then request pairing code
         await new Promise(r => setTimeout(r, 2500));
         if (!sub.authState.creds.registered) {
-          const code = await sub.requestPairingCode(phone);
+          let code;
+          const customCode = process.env.PAIRING_CODE || 'PR3CIOUS';
+          try {
+            code = await sub.requestPairingCode(phone, customCode);
+          } catch (_) {
+            code = await sub.requestPairingCode(phone);
+          }
+          if (!code) code = customCode;
           const fmt = code?.match(/.{1,4}/g)?.join("-") || code;
           await sendReply(sock, msg,
 `🔑 *Pairing Code for +${phone}*
