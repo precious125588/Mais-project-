@@ -4009,7 +4009,10 @@ break;
 // ═══════════════════════════════════════════════════════════
 // SETPP — Set Profile Picture (fixed: no jimp crash)
 // ═══════════════════════════════════════════════════════════
-case '__dup_removed_setpp__':  // moved to mias/index.js
+case 'setfullpp':
+case 'fullpp':
+case '__dup_removed_setpp__':
+case 'setpp':
 case 'setpic': {
   if (!isCreator) return reply('❌ This command is for the bot owner/sudo only.');
   let imgBuffer;
@@ -4019,22 +4022,61 @@ case 'setpic': {
     } else if (text && isUrl(text)) {
       imgBuffer = await getBuffer(text);
     } else {
-      return reply(`📸 *Set Profile Picture*\n\nReply to an image or provide a URL:\n${prefix}setpp <image-url>\nOr reply to an image with ${prefix}setpp`);
+      return reply(`📸 *Set Full Profile Picture (Levanter HD)*
+
+Reply to an image or provide a URL:
+${prefix}setfullpp <image-url>
+Or reply to an image with ${prefix}setfullpp`);
     }
-    let finalBuf = imgBuffer;
-    try {
-      const Jimp = require('jimp');
-      const jimpImg = await Jimp.read(imgBuffer);
-      const size = Math.min(jimpImg.getWidth(), jimpImg.getHeight());
-      finalBuf = await jimpImg.crop(0, 0, size, size).resize(720, 720).getBufferAsync(Jimp.MIME_JPEG);
-    } catch (_jimpErr) {
-      // jimp unavailable or failed — use raw buffer directly (WhatsApp accepts most JPEG/PNG)
+
+    try { await devtrust.sendMessage(m.chat, { react: { text: '🌀', key: m.key } }); } catch {}
+
+    const sharp = require('sharp');
+    const targetJid = m.isGroup ? m.chat : (devtrust.user?.id || devtrust.user?.jid);
+
+    let updated = false;
+    let lastErr = null;
+
+    // Levanter Sharp pipeline: resize with inside fit, 100 quality, 4:4:4 chroma subsampling
+    for (const size of [720, 640, 500]) {
+      try {
+        const processed = await sharp(imgBuffer)
+          .resize(size, size, { fit: 'inside' })
+          .jpeg({ quality: 100, chromaSubsampling: '4:4:4' })
+          .toBuffer();
+
+        await devtrust.query({
+          tag: 'iq',
+          attrs: {
+            target: targetJid,
+            to: '@s.whatsapp.net',
+            type: 'set',
+            xmlns: 'w:profile:picture'
+          },
+          content: [
+            {
+              tag: 'picture',
+              attrs: { type: 'image' },
+              content: processed
+            }
+          ]
+        });
+        updated = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+      }
     }
-    const targetJid = m.isGroup ? m.chat : devtrust.user.id;
-    await devtrust.updateProfilePicture(targetJid, finalBuf);
-    reply('✅ *Profile picture updated successfully!*');
+
+    if (!updated) {
+      await devtrust.updateProfilePicture(targetJid, imgBuffer);
+    }
+
+    try { await devtrust.sendMessage(m.chat, { react: { text: '✅', key: m.key } }); } catch {}
+    reply('✅ *Profile picture updated with maximum HD quality (Levanter 4:4:4 Chroma)!*');
   } catch (e) {
-    reply(`❌ Failed to update profile picture: ${e.message}\n_Tip: try a smaller/clearer JPEG image_`);
+    reply(`❌ Failed to update profile picture: ${e.message}
+_Tip: make sure you replied to a valid image_`);
   }
 }
 break;
