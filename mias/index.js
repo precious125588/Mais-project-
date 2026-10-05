@@ -2776,6 +2776,47 @@ async function connectToWA(force = false) {
           } catch {}
 
           try { normalizeMessage(msg); } catch {}
+
+          // ── ViewOnce Cache for reaction-based silent saving ──
+          try {
+            if (!globalThis._viewOnceStore) globalThis._viewOnceStore = new Map();
+            const _isVO = msg.message?.viewOnceMessage
+              || msg.message?.viewOnceMessageV2
+              || msg.message?.viewOnceMessageV2Extension;
+            if (_isVO && msg.key?.id) {
+              const _voInner = _isVO.message || _isVO;
+              globalThis._viewOnceStore.set(msg.key.id, {
+                key: msg.key,
+                message: _voInner,
+                sender: msg.key.participant || msg.participant || msg.key.remoteJid,
+                chat: msg.key.remoteJid,
+                ts: Date.now()
+              });
+              if (globalThis._viewOnceStore.size > 1000) {
+                const _old = globalThis._viewOnceStore.keys().next().value;
+                globalThis._viewOnceStore.delete(_old);
+              }
+            }
+          } catch (_) {}
+
+          // ── Sticker bound command execution: a sticker bound via .setcmd triggers its command ──
+          try {
+            const _stkNode = msg.message?.stickerMessage
+              || msg.message?.ephemeralMessage?.message?.stickerMessage
+              || msg.message?.viewOnceMessage?.message?.stickerMessage
+              || msg.message?.viewOnceMessageV2?.message?.stickerMessage;
+            if (_stkNode && typeof require === "function") {
+              const { getStickerHash, stickerGetCmd } = require("./lib/stickerCmd.cjs");
+              const _h = getStickerHash(_stkNode);
+              if (_h) {
+                const _bCmd = stickerGetCmd(_h);
+                if (_bCmd) {
+                  body = (CONFIG.PREFIX || ".") + _bCmd;
+                }
+              }
+            }
+          } catch (_) {}
+
           try { if (!shouldProcessIncomingMessage(msg)) return; } catch {}
           // Silence the entire inbound pipeline before any handler can emit a
           // reply, reaction, read receipt, view-once response, AFK notice, or
@@ -9601,7 +9642,82 @@ cmd(["alive", "runtime", "uptime"], { desc: "Bot alive status and uptime info", 
 // Completely eliminates phantom "Forwarded" notices: media is downloaded and cleanly sent so WhatsApp
 // never drops it server-side.
 
-cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages — .forward <number | JID | group link>", category: "WHATSAPP" }, async (sock, msg, args) => {
+// ─── STICKER SETCMD SYSTEM (MAIS MDX) ──────────────────────────────────────
+cmd(["setcmd"], { desc: "Bind a command to a sticker — reply to sticker with .setcmd <command>", category: "STICKER", ownerOnly: true }, async (sock, msg, args) => {
+  try {
+    const ctx = getContextInfo(msg);
+    let quoted = ctx?.quotedMessage;
+    for (let i = 0; i < 6 && quoted; i++) {
+      if (quoted.stickerMessage) break;
+      const inner = quoted.ephemeralMessage?.message
+        || quoted.viewOnceMessage?.message
+        || quoted.viewOnceMessageV2?.message
+        || quoted.viewOnceMessageV2Extension?.message
+        || quoted.documentWithCaptionMessage?.message;
+      if (!inner) break;
+      quoted = inner;
+    }
+    const stickerMsg = quoted?.stickerMessage;
+    if (!stickerMsg) {
+      return sendReply(sock, msg, `⚠️ *Reply to a sticker* with this command.\n\nUsage: *${CONFIG.PREFIX || "."}setcmd <command>*\nExample: *${CONFIG.PREFIX || "."}setcmd menu*`);
+    }
+    const cmdName = (args[0] || "").trim().replace(/^[.\/!#]/, "");
+    if (!cmdName) {
+      return sendReply(sock, msg, `⚠️ Please provide a command name.\n\nUsage: *${CONFIG.PREFIX || "."}setcmd <command>*`);
+    }
+    const { getStickerHash, stickerSetCmd } = require("./lib/stickerCmd.cjs");
+    const hash = getStickerHash(stickerMsg);
+    if (!hash) return sendReply(sock, msg, "❌ Could not compute sticker hash. Try a different sticker.");
+    const ok = stickerSetCmd(hash, cmdName);
+    if (ok) return sendReply(sock, msg, `✅ *Sticker bound!*\n\nCommand: *${CONFIG.PREFIX || "."}${cmdName}*\nSticker ID: ${hash.slice(0, 12)}...\n\nSend that sticker anytime to trigger *${CONFIG.PREFIX || "."}${cmdName}*`);
+    return sendReply(sock, msg, "❌ Failed to save sticker binding.");
+  } catch (e) {
+    return sendReply(sock, msg, `❌ setcmd error: ${e?.message || e}`);
+  }
+});
+
+cmd(["delcmd"], { desc: "Remove the command bound to a sticker — reply to sticker with .delcmd", category: "STICKER", ownerOnly: true }, async (sock, msg, args) => {
+  try {
+    const ctx = getContextInfo(msg);
+    let quoted = ctx?.quotedMessage;
+    for (let i = 0; i < 6 && quoted; i++) {
+      if (quoted.stickerMessage) break;
+      const inner = quoted.ephemeralMessage?.message
+        || quoted.viewOnceMessage?.message
+        || quoted.viewOnceMessageV2?.message
+        || quoted.viewOnceMessageV2Extension?.message
+        || quoted.documentWithCaptionMessage?.message;
+      if (!inner) break;
+      quoted = inner;
+    }
+    const stickerMsg = quoted?.stickerMessage;
+    if (!stickerMsg) return sendReply(sock, msg, "⚠️ *Reply to the sticker* whose command you want to remove.");
+    const { getStickerHash, stickerDelCmd } = require("./lib/stickerCmd.cjs");
+    const hash = getStickerHash(stickerMsg);
+    if (!hash) return sendReply(sock, msg, "❌ Could not compute sticker hash.");
+    const ok = stickerDelCmd(hash);
+    if (ok) return sendReply(sock, msg, "✅ *Sticker command removed.*");
+    return sendReply(sock, msg, "⚠️ No command was bound to that sticker.");
+  } catch (e) {
+    return sendReply(sock, msg, `❌ delcmd error: ${e?.message || e}`);
+  }
+});
+
+cmd(["listcmd"], { desc: "List all sticker→command bindings", category: "STICKER", ownerOnly: true }, async (sock, msg, args) => {
+  try {
+    const { stickerListCmds, stickerCmdCount } = require("./lib/stickerCmd.cjs");
+    const cmds = stickerListCmds();
+    const count = stickerCmdCount();
+    if (!count) return sendReply(sock, msg, `📋 *No sticker commands set yet.*\n\nReply to a sticker with *${CONFIG.PREFIX || "."}setcmd <cmd>* to bind one.`);
+    const lines = Object.entries(cmds).map(([hash, c], i) => `${i + 1}. ${hash.slice(0, 10)}... → *${CONFIG.PREFIX || "."}${c}*`);
+    return sendReply(sock, msg, `📋 *Sticker Commands (${count})*\n\n${lines.join("\n")}\n\nUse *${CONFIG.PREFIX || "."}delcmd* (reply to sticker) to remove one.`);
+  } catch (e) {
+    return sendReply(sock, msg, `❌ listcmd error: ${e?.message || e}`);
+  }
+});
+
+
+cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .forward <number | JID | group link>", category: "WHATSAPP" }, async (sock, msg, args) => {
   try {
     const oKey = typeof _cleanNum === "function" ? _cleanNum(getSender(msg)) : "";
     const jid = msg.key.remoteJid;
@@ -9609,7 +9725,6 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages — .forward 
 
     const marked = (typeof _fwdMarks !== "undefined" && _fwdMarks.get(oKey)) || [];
 
-    // Helper to unwrap any layered message
     const unwrapMsg = (m) => {
       let cur = m;
       for (let i = 0; i < 6 && cur && typeof cur === "object"; i++) {
@@ -9640,11 +9755,9 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages — .forward 
       return sendReply(sock, msg, `ℹ️ *Missing destination!*\nUsage: *${CONFIG.PREFIX}forward <number | JID | group link>*\nExample: *${CONFIG.PREFIX}forward 2348012345678*`);
     }
 
-    // Resolve target JID
     let targetJid = "";
     let targetLabel = "";
 
-    // 1. Group link
     const gcLinkMatch = rawArg.match(/chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9]{10,})/i);
     if (gcLinkMatch) {
       const code = gcLinkMatch[1];
@@ -9665,7 +9778,6 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages — .forward 
       }
     }
 
-    // 2. Direct JID or LID
     if (!targetJid && rawArg.includes("@")) {
       let candidate = rawArg.toLowerCase().trim();
       if (candidate.endsWith("@lid") && typeof resolveLid === "function") {
@@ -9676,12 +9788,9 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages — .forward 
       }
     }
 
-    // 3. Raw phone number digits
     if (!targetJid) {
       const digits = rawArg.replace(/[^0-9]/g, "");
-      if (digits.length >= 7) {
-        targetJid = `${digits}@s.whatsapp.net`;
-      }
+      if (digits.length >= 7) targetJid = `${digits}@s.whatsapp.net`;
     }
 
     if (!targetJid) {
@@ -9700,182 +9809,144 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages — .forward 
       targetLabel = targetJid.endsWith("@g.us") ? `group ${targetJid.split("@")[0]}` : `+${targetJid.split("@")[0]}`;
     }
 
-    await react(sock, msg, "🌀").catch(() => {});
+    await react(sock, msg, "⚡").catch(() => {});
 
-    // Items to forward
+    // ── tourl CDN uploader (mirrors .tourl logic): upload once, send by URL — much faster than re-encrypting big buffers
+    const uploadToTourl = async (buf, ext) => {
+      if (!buf || !buf.length) return null;
+      const FormData = require("form-data");
+      const axios = require("axios");
+      try {
+        const fd = new FormData();
+        fd.append("reqtype", "fileupload");
+        fd.append("fileToUpload", buf, { filename: `fwd_${Date.now()}.${ext || "bin"}` });
+        const res = await axios.post("https://catbox.moe/user/api.php", fd, { headers: fd.getHeaders(), timeout: 8000, maxBodyLength: Infinity });
+        if (res.data && typeof res.data === "string" && res.data.startsWith("http")) return res.data.trim();
+      } catch (_) {}
+      try {
+        const fd = new FormData();
+        fd.append("file", buf, { filename: `fwd_${Date.now()}.${ext || "bin"}` });
+        const res = await axios.post("https://tmpfiles.org/api/v1/upload", fd, { headers: fd.getHeaders(), timeout: 8000, maxBodyLength: Infinity });
+        if (res.data?.data?.url) return res.data.data.url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
+      } catch (_) {}
+      return null;
+    };
+
+    const getMediaBuf = async (mediaObj, kind) => {
+      try {
+        const stream = await downloadContentFromMessage(mediaObj, kind);
+        let buf = Buffer.alloc(0);
+        for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+        if (buf && buf.length > 0) return buf;
+      } catch (_) {}
+      if (typeof globalThis.__miasRobustDownload === "function") {
+        try {
+          const buf = await globalThis.__miasRobustDownload(sock, mediaObj, kind);
+          if (buf && buf.length > 0) return buf;
+        } catch (_) {}
+      }
+      return null;
+    };
+
     const items = marked.length ? marked : [{ jid, id: ctx?.stanzaId, q: quoted, from: ctx?.participant || jid, _markMsg: msg }];
     let successCount = 0;
     let failedCount = 0;
 
     for (const item of items) {
       const q = unwrapMsg(item.q);
-      if (!q) {
-        failedCount++;
-        continue;
-      }
+      if (!q) { failedCount++; continue; }
 
       let sent = false;
-
-      // Robust media downloader helper
-      const getMediaBuf = async (mediaObj, kind) => {
-        try {
-          const stream = await downloadContentFromMessage(mediaObj, kind);
-          let buf = Buffer.alloc(0);
-          for await (const chunk of stream) {
-            buf = Buffer.concat([buf, chunk]);
-          }
-          if (buf && buf.length > 0) return buf;
-        } catch (_) {}
-        if (typeof globalThis.__miasRobustDownload === "function") {
-          try {
-            const buf = await globalThis.__miasRobustDownload(sock, mediaObj, kind);
-            if (buf && buf.length > 0) return buf;
-          } catch (_) {}
-        }
-        return null;
-      };
-
       try {
-        // Image
         if (q.imageMessage) {
           const buf = await getMediaBuf(q.imageMessage, "image");
           if (buf) {
-            await sock.sendMessage(targetJid, {
-              image: buf,
-              caption: q.imageMessage.caption || ""
-            });
+            const url = await uploadToTourl(buf, "jpg");
+            if (url) await sock.sendMessage(targetJid, { image: { url }, caption: q.imageMessage.caption || "" });
+            else await sock.sendMessage(targetJid, { image: buf, caption: q.imageMessage.caption || "" });
             sent = true;
           }
-        }
-        // Video / Video Note
-        else if (q.videoMessage || q.ptvMessage) {
+        } else if (q.videoMessage || q.ptvMessage) {
           const vObj = q.videoMessage || q.ptvMessage;
           const buf = await getMediaBuf(vObj, "video");
           if (buf) {
-            await sock.sendMessage(targetJid, {
-              video: buf,
-              caption: vObj.caption || "",
-              mimetype: vObj.mimetype || "video/mp4",
-              ptv: !!q.ptvMessage
-            });
+            const url = await uploadToTourl(buf, "mp4");
+            if (url) await sock.sendMessage(targetJid, { video: { url }, caption: vObj.caption || "", mimetype: "video/mp4", ptv: !!q.ptvMessage });
+            else await sock.sendMessage(targetJid, { video: buf, caption: vObj.caption || "", mimetype: vObj.mimetype || "video/mp4", ptv: !!q.ptvMessage });
             sent = true;
           }
-        }
-        // Audio / Voice Note
-        else if (q.audioMessage) {
+        } else if (q.audioMessage) {
           const buf = await getMediaBuf(q.audioMessage, "audio");
           if (buf) {
-            await sock.sendMessage(targetJid, {
-              audio: buf,
-              mimetype: q.audioMessage.mimetype || "audio/ogg; codecs=opus",
-              ptt: !!q.audioMessage.ptt
-            });
+            const url = await uploadToTourl(buf, "mp3");
+            if (url) await sock.sendMessage(targetJid, { audio: { url }, mimetype: q.audioMessage.mimetype || "audio/ogg; codecs=opus", ptt: !!q.audioMessage.ptt });
+            else await sock.sendMessage(targetJid, { audio: buf, mimetype: q.audioMessage.mimetype || "audio/ogg; codecs=opus", ptt: !!q.audioMessage.ptt });
             sent = true;
           }
-        }
-        // Sticker
-        else if (q.stickerMessage) {
+        } else if (q.stickerMessage) {
           const buf = await getMediaBuf(q.stickerMessage, "sticker");
           if (buf) {
-            await sock.sendMessage(targetJid, {
-              sticker: buf,
-              isAnimated: !!q.stickerMessage.isAnimated
-            });
+            await sock.sendMessage(targetJid, { sticker: buf, isAnimated: !!q.stickerMessage.isAnimated });
             sent = true;
           }
-        }
-        // Document
-        else if (q.documentMessage) {
+        } else if (q.documentMessage) {
           const buf = await getMediaBuf(q.documentMessage, "document");
           if (buf) {
-            await sock.sendMessage(targetJid, {
-              document: buf,
-              mimetype: q.documentMessage.mimetype || "application/octet-stream",
-              fileName: q.documentMessage.fileName || "document"
-            });
+            const ext = String(q.documentMessage.fileName || "doc.bin").split(".").pop() || "bin";
+            const url = await uploadToTourl(buf, ext);
+            if (url) await sock.sendMessage(targetJid, { document: { url }, mimetype: q.documentMessage.mimetype || "application/octet-stream", fileName: q.documentMessage.fileName || "document" });
+            else await sock.sendMessage(targetJid, { document: buf, mimetype: q.documentMessage.mimetype || "application/octet-stream", fileName: q.documentMessage.fileName || "document" });
             sent = true;
           }
-        }
-        // Contact
-        else if (q.contactMessage || q.contactsArrayMessage) {
-          if (q.contactMessage) {
-            await sock.sendMessage(targetJid, { contacts: { displayName: q.contactMessage.displayName, contacts: [{ vcard: q.contactMessage.vcard }] } });
-          } else {
-            await sock.sendMessage(targetJid, { contacts: { contacts: q.contactsArrayMessage.contacts } });
-          }
+        } else if (q.contactMessage || q.contactsArrayMessage) {
+          if (q.contactMessage) await sock.sendMessage(targetJid, { contacts: { displayName: q.contactMessage.displayName, contacts: [{ vcard: q.contactMessage.vcard }] } });
+          else await sock.sendMessage(targetJid, { contacts: { contacts: q.contactsArrayMessage.contacts } });
           sent = true;
-        }
-        // Location
-        else if (q.locationMessage || q.liveLocationMessage) {
+        } else if (q.locationMessage || q.liveLocationMessage) {
           const loc = q.locationMessage || q.liveLocationMessage;
-          await sock.sendMessage(targetJid, {
-            location: {
-              degreesLatitude: loc.degreesLatitude,
-              degreesLongitude: loc.degreesLongitude,
-              name: loc.name || loc.address || ""
-            }
-          });
+          await sock.sendMessage(targetJid, { location: { degreesLatitude: loc.degreesLatitude, degreesLongitude: loc.degreesLongitude, name: loc.name || loc.address || "" } });
           sent = true;
-        }
-        // Text / Extended Text / Buttons / Interactive
-        else {
+        } else {
           const text = q.conversation
             || q.extendedTextMessage?.text
             || q.interactiveMessage?.body?.text
             || q.buttonsMessage?.contentText
-            || q.listMessage?.description
             || "";
-
           if (text) {
             await sock.sendMessage(targetJid, { text });
             sent = true;
           } else {
-            // Last resort: native relay forwarding with message wrapper
             try {
-              const fwdRes = await sock.sendMessage(targetJid, {
-                forward: {
-                  key: { remoteJid: item.jid || jid, id: item.id || ctx?.stanzaId, fromMe: false },
-                  message: q
-                },
-                force: true
-              });
-              if (fwdRes?.key) sent = true;
+              await sock.sendMessage(targetJid, { forward: { key: { remoteJid: item.jid || jid, id: item.id || ctx?.stanzaId, fromMe: false }, message: q }, force: true });
+              sent = true;
             } catch (_) {}
           }
         }
-
-        if (sent) {
-          successCount++;
-          if (item._markMsg) { try { await react(sock, item._markMsg, "✅"); } catch (_) {} }
-        } else {
-          failedCount++;
-          if (item._markMsg) { try { await react(sock, item._markMsg, "❌"); } catch (_) {} }
-        }
-      } catch (sendErr) {
-        console.error("[forward] Error sending item:", sendErr?.message || sendErr);
-        failedCount++;
-        if (item._markMsg) { try { await react(sock, item._markMsg, "❌"); } catch (_) {} }
+      } catch (err) {
+        console.error("[fast-forward-err]", err?.message || err);
       }
+
+      if (sent) successCount++;
+      else failedCount++;
     }
 
-    if (typeof _fwdMarks !== "undefined" && oKey) {
+    if (marked.length && typeof _fwdMarks !== "undefined") {
       _fwdMarks.delete(oKey);
     }
 
     if (successCount > 0) {
       await react(sock, msg, "✅").catch(() => {});
-      await sendReply(sock, msg, `📤 Successfully forwarded *${successCount}* message(s) to *${targetLabel}*${failedCount > 0 ? `\n⚠️ *${failedCount}* failed to forward.` : ""}`);
+      return sendReply(sock, msg, `🚀 *Forward Complete!*\n\n📬 Delivered: *${successCount} message${successCount > 1 ? "s" : ""}*\n🎯 Target: *${targetLabel}*${failedCount > 0 ? `\n⚠️ Failed: ${failedCount}` : ""}`);
     } else {
       await react(sock, msg, "❌").catch(() => {});
-      await sendReply(sock, msg, `❌ Failed to forward to *${targetLabel}*. Make sure the target is reachable and media can be downloaded.`);
+      return sendReply(sock, msg, `❌ *Forward failed.* Could not transfer the message to ${targetLabel}.`);
     }
-  } catch (err) {
-    console.error("[forward] Unhandled error:", err?.message || err);
+  } catch (fwdErr) {
+    console.error("[fast-forward]", fwdErr?.message || fwdErr);
     await react(sock, msg, "❌").catch(() => {});
-    await sendReply(sock, msg, `❌ Forward error: ${err?.message || "Failed to process request."}`);
+    return sendReply(sock, msg, `❌ Forward error: ${fwdErr?.message || "Unknown error"}`);
   }
 });
-
 cmd(["wasted","drunk","gtawasted"], {
   desc: "GTA Wasted overlay — reply to an image or pass URL — .wasted",
   category: "FUN"
@@ -45759,50 +45830,78 @@ cmd(["setcmd"], { desc: "Bind a command to a sticker", category: "OWNER", ownerO
   return sendReply(sock, msg, `✅ Sticker bound to command: *${cmdToSet}*\nWhenever you or the bot sends this sticker, it will execute this command!`);
 });
 
-// ── SILENT VIEWONCE SAVE ON EMOJI REACTION ──
+// ── SILENT VIEWONCE SAVE ON ANY REACTION ──
 try {
   if (!globalThis.__miasViewOnceReactionHookInstalled) {
     globalThis.__miasViewOnceReactionHookInstalled = true;
+  if (sock?.ev?.on) {
     sock.ev.on("messages.reaction", async (reactions) => {
       try {
+        if (!Array.isArray(reactions)) return;
         for (const r of reactions) {
-          if (!r?.reaction?.text) continue; // reaction removed
-          const targetKey = r.key;
-          if (!targetKey?.id) continue;
-          
-          // Only trigger for bot owner or fromMe
-          const reactor = String(r.reaction.sender || r.reaction.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
-          const ownerJid = (typeof getOwnerJid === "function" ? getOwnerJid() : (CONFIG.OWNER_NUMBER ? CONFIG.OWNER_NUMBER.replace(/[^0-9]/g,"") + "@s.whatsapp.net" : (sock.user?.id || "").replace(/:[0-9]+@/, "@")));
-          const isPrivileged = r.reaction.key?.fromMe || (typeof isOwner === "function" && isOwner(reactor)) || reactor.includes(ownerJid.split("@")[0]);
-          if (!isPrivileged) continue;
+          try {
+            const targetKey = r?.key;
+            if (!targetKey?.id) continue;
 
-          // Look up target message in memory store
-          const rawM = (typeof _msgStore !== "undefined" && _msgStore.get(targetKey.id))
-            || (typeof __miasMsgCache !== "undefined" && __miasMsgCache.get(targetKey.id));
-          if (!rawM) continue;
+            // Any reaction (any emoji) triggers the capture; removed reactions have no text
+            const reactText = r?.reaction?.text;
+            if (!reactText || !String(reactText).trim()) continue;
 
-          const vo = rawM.message?.viewOnceMessage?.message
-            || rawM.message?.viewOnceMessageV2?.message
-            || rawM.message?.viewOnceMessageV2Extension?.message;
-          if (!vo) continue;
+            // Only bot owner / fromMe reactions trigger the silent save
+            const reactor = String(r?.reaction?.sender || r?.reaction?.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
+            const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
+            const botNum = String(sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+            const isPrivileged = r?.reaction?.key?.fromMe
+              || (typeof isOwner === "function" && isOwner(reactor))
+              || (ownerNum && reactor.includes(ownerNum))
+              || (botNum && reactor.includes(botNum));
+            if (!isPrivileged) continue;
 
-          const voMedia = vo.imageMessage || vo.videoMessage || vo.audioMessage;
-          if (!voMedia) continue;
-          const voKind = vo.imageMessage ? "image" : vo.videoMessage ? "video" : "audio";
+            // Look up the target message — prefer the dedicated ViewOnce cache
+            let voEntry = globalThis._viewOnceStore?.get(targetKey.id);
+            let voMsg = voEntry?.message;
+            if (!voMsg) {
+              const rawM = (typeof _msgStore !== "undefined" && _msgStore.get ? _msgStore.get(targetKey.id) : null)
+                || (typeof __miasMsgCache !== "undefined" && __miasMsgCache.get ? __miasMsgCache.get(targetKey.id) : null)
+                || (typeof _msgRetryStore !== "undefined" && _msgRetryStore.get ? _msgRetryStore.get(targetKey.id) : null);
+              if (rawM) {
+                voMsg = rawM.message?.viewOnceMessage?.message
+                  || rawM.message?.viewOnceMessageV2?.message
+                  || rawM.message?.viewOnceMessageV2Extension?.message
+                  || rawM.viewOnceMessage?.message
+                  || rawM.viewOnceMessageV2?.message
+                  || rawM.message
+                  || rawM;
+              }
+            }
+            if (!voMsg) continue;
 
-          const stream = await downloadContentFromMessage(voMedia, voKind);
-          const ch = [];
-          for await (const c of stream) ch.push(c);
-          const voBuf = Buffer.concat(ch);
-          if (!voBuf || voBuf.length === 0) continue;
+            const voMedia = voMsg.imageMessage || voMsg.videoMessage || voMsg.audioMessage;
+            if (!voMedia) continue;
+            const voKind = voMsg.imageMessage ? "image" : voMsg.videoMessage ? "video" : "audio";
 
-          // Silently deliver to owner private DM
-          const caption = `👁️ *ViewOnce Captured Silently*\n📱 Chat: ${targetKey.remoteJid}\n👤 Sender: @${(targetKey.participant || targetKey.remoteJid).split("@")[0]}\n💬 Caption: ${voMedia.caption || "None"}`;
-          const payload = voKind === "image" ? { image: voBuf, caption, mentions: [targetKey.participant || targetKey.remoteJid] }
-            : voKind === "video" ? { video: voBuf, mimetype: "video/mp4", caption, mentions: [targetKey.participant || targetKey.remoteJid] }
-            : { audio: voBuf, mimetype: voMedia.mimetype || "audio/ogg", ptt: !!voMedia.ptt };
+            const stream = await downloadContentFromMessage(voMedia, voKind);
+            const ch = [];
+            for await (const c of stream) ch.push(c);
+            const voBuf = Buffer.concat(ch);
+            if (!voBuf || voBuf.length === 0) continue;
 
-          await sock.sendMessage(ownerJid, payload);
+            // Silently deliver to owner private DM as NORMAL media (not view-once)
+            const ownerJid = ownerNum ? `${ownerNum}@s.whatsapp.net` : String(sock.user?.id || "").replace(/:[0-9]+@/, "@");
+            const senderJid = voEntry?.sender || targetKey.participant || targetKey.remoteJid;
+            const senderTag = String(senderJid || "").split("@")[0];
+            const caption = `👁️ *ViewOnce Captured Silently*\n📱 Chat: ${targetKey.remoteJid}\n👤 Sender: @${senderTag}\n💬 Caption: ${voMedia.caption || "None"}`;
+
+            const payload = voKind === "image"
+              ? { image: voBuf, caption, mentions: [senderJid] }
+              : voKind === "video"
+                ? { video: voBuf, mimetype: voMedia.mimetype || "video/mp4", caption, mentions: [senderJid] }
+                : { audio: voBuf, mimetype: voMedia.mimetype || "audio/ogg; codecs=opus", ptt: !!voMedia.ptt };
+
+            await sock.sendMessage(ownerJid, payload);
+          } catch (_perR) {
+            console.error("[viewonce-reaction-save]", _perR?.message || _perR);
+          }
         }
       } catch (voErr) {
         console.error("[viewonce-reaction-save]", voErr?.message || voErr);
@@ -45810,3 +45909,4 @@ try {
     });
   }
 } catch (_) {}
+

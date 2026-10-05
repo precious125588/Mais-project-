@@ -319,6 +319,26 @@ const parsedCommand = parseCommand(body, configuredPrefix);
 const isCmd = parsedCommand.isCommand;
 const args = parsedCommand.args;
 const command = parsedCommand.command;
+
+  // ── Sticker Command Trigger ──
+  try {
+    const _inSticker = m?.message?.stickerMessage
+      || m?.message?.ephemeralMessage?.message?.stickerMessage
+      || m?.message?.viewOnceMessage?.message?.stickerMessage;
+    if (_inSticker) {
+      const { getStickerHash, stickerGetCmd } = require('./mias/lib/stickerCmd.cjs');
+      const _sh = getStickerHash(_inSticker);
+      if (_sh) {
+        const _sc = stickerGetCmd(_sh);
+        if (_sc) {
+          command = _sc.toLowerCase();
+          body = prefix + command;
+          budy = body;
+        }
+      }
+    }
+  } catch (_stkErr) {}
+
 const text = parsedCommand.text;
 const botNumber = await devtrust.decodeJid(devtrust.user.id)
 const _mSenderNumStrict = String(m.sender||'').split('@')[0].split(':')[0].replace(/[^0-9]/g,'');
@@ -7868,11 +7888,19 @@ break;
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Sticker SetCmd System ─────────────────────────────────────────────────
-case '__dup_removed_setcmd__': {  // moved to mias/index.js
+case 'setcmd': {  // moved to mias/index.js
   if (!isCreator) return reply("🚫 Owner only command.");
   // Requires replying to a sticker
-  const quotedMsg = m?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-  const stickerMsg = quotedMsg?.stickerMessage;
+  const unwrapQuotedSticker = (q) => {
+    let cur = q;
+    for (let i = 0; i < 6 && cur; i++) {
+      if (cur.stickerMessage) return cur.stickerMessage;
+      cur = cur.ephemeralMessage?.message || cur.viewOnceMessage?.message || cur.viewOnceMessageV2?.message || cur.viewOnceMessageV2Extension?.message || cur.documentWithCaptionMessage?.message || cur.editedMessage?.message || null;
+    }
+    return cur?.stickerMessage || null;
+  };
+  const quotedRaw = m?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const stickerMsg = unwrapQuotedSticker(quotedRaw);
   if (!stickerMsg) {
     return reply("⚠️ *Reply to a sticker* with this command.\n\nUsage: *.setcmd <command>*\nExample: *.setcmd menu*");
   }
@@ -7895,8 +7923,15 @@ break;
 
 case 'delcmd': {
   if (!isCreator) return reply("🚫 Owner only command.");
-  const quotedMsg2 = m?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-  const stickerMsg2 = quotedMsg2?.stickerMessage;
+  const quotedRaw2 = m?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const stickerMsg2 = (function(q) {
+    let cur = q;
+    for (let i = 0; i < 6 && cur; i++) {
+      if (cur.stickerMessage) return cur.stickerMessage;
+      cur = cur.ephemeralMessage?.message || cur.viewOnceMessage?.message || cur.viewOnceMessageV2?.message || cur.viewOnceMessageV2Extension?.message || cur.documentWithCaptionMessage?.message || null;
+    }
+    return cur?.stickerMessage || null;
+  })(quotedRaw2);
   if (!stickerMsg2) {
     return reply("⚠️ *Reply to the sticker* whose command you want to remove.");
   }
