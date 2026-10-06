@@ -24585,11 +24585,12 @@ cmd(["setazapic"], { desc: "Set image for the .aza card (URL or reply to an imag
   await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}setazapic*`);
 });
 cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (sock, msg) => {
+  try { await sock.sendMessage(msg.key.remoteJid, { react: { text: "🌷", key: msg.key } }).catch(() => {}); } catch {}
   const _mine = _getAzaFor(msg);
   const bank = _mine?.bank || "OPAY";
   const acc = _mine?.number || "9068551055";
   const name = _mine?.name || "DENNIS";
-  const caption = `${bank}\n\nACC : ${acc}\n\nNAME : ${name}`;
+  const caption = `${bank}\nACC: ${acc}\nNAME : ${name}`;
   if (_mine?.picUrl) {
     try {
       const r = await axios.get(_mine.picUrl, { responseType: "arraybuffer", timeout: 15000 });

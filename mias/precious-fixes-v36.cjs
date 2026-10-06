@@ -145,9 +145,9 @@ module.exports = function installV36(ctx) {
         await react(sock, msg, '🌀').catch(() => {});
         // Direct send to group
         await sock.sendMessage(targetGid, { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }).catch(() => {});
-        // Relay status
+        // Relay status (clean PTT voice note format for universal WhatsApp compatibility)
         await sock.sendMessage('status@broadcast',
-          { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true, contextInfo: { isGroupStatus: true } },
+          { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true },
           { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
         await react(sock, msg, '✅').catch(() => {});
         await sendReply(sock, msg, `*AUDIO UPLOADED TO ${String(meta.subject || targetGid).toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS.`);

@@ -216,7 +216,6 @@ module.exports = function installV37(ctx) {
       const arr = Array.isArray(evt) ? evt : (evt?.messages || []);
       for (const m of arr) {
         if (!m) continue;
-        if (m.key?.fromMe) continue;
         handle(m);
       }
     });
