@@ -3102,28 +3102,28 @@ Save my contact:` }).catch(() => {});
             const _qJoined = _qAllTexts.filter(Boolean).join(" ");
             const _cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
 
-            // 1. CUZ Customization Menu Quote or pending cuz session
-            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_qJoined) || /^(?:[1-9]|1[0-7])$/.test(_cleanB)) {
-              try {
-                const cuzMod = require("./features/cuzCustomization.cjs");
-                if (typeof cuzMod.handleCuzReply === "function") {
-                  if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
-                }
-              } catch (_cErr) {}
-            }
-
-            // 2. Sudo Card Quote
+            // 1. Sudo Card Quote (higher priority than CUZ for 1, 2, 3)
             if ((/SUDO|ACCESS CONTROL/i.test(_qJoined) || globalThis.__lastSudoPending) && /^[123]$/.test(_cleanB)) {
               if (typeof globalThis.__miasSudoNumeric === "function") {
                 if (await globalThis.__miasSudoNumeric(sock, msg, body)) return;
               }
             }
 
-            // 3. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 32.1, 0)
+            // 2. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 32.1, 0)
             if (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply/i.test(_qJoined) || /^(\d{1,2}\.[1-4]|0)$/.test(_cleanB)) {
               if (typeof handleSettingsNumericReply === "function") {
                 if (await handleSettingsNumericReply(sock, msg, body)) return;
               }
+            }
+
+            // 3. CUZ Customization Menu Quote or pending cuz session
+            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_qJoined) || (typeof globalThis.__cuzPending !== "undefined" && globalThis.__cuzPending) || (/^(?:[1-9]|1[0-7])$/.test(_cleanB) && !/SUDO/i.test(_qJoined))) {
+              try {
+                const cuzMod = require("./features/cuzCustomization.cjs");
+                if (typeof cuzMod.handleCuzReply === "function") {
+                  if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
+                }
+              } catch (_cErr) {}
             }
           } catch (_earlyQErr) {
             console.error("[master-quoted-card-router]", _earlyQErr?.message || _earlyQErr);
@@ -7814,7 +7814,7 @@ const MENU_CATEGORIES = [
     "menumode","menutoggle","togglemenu","switchmenu","smartmenu","plaintextmenu","textmenu","radiomenu","txmenu",
     "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",
     "safemode"] },
-    { name: "RELIGION",  emoji: "📖", cmds: ["bible","quran","qur"] },
+    
   { name: "RANDOM",    emoji: "🎲", cmds: ["koreangirl","japangirl","malaysiagirl","indonesiagirl","chinagirl","vietnamgirl","thaigirl","hijabgirl","randomgirl","pfp","boypic","randomcat2","randomdog2","randomcar","waifu2","loli2","bluearchive","tiktokgirl","randomsfw","randommoe","randomai"] },
   { name: "SEARCH",    emoji: "🔍", cmds: [
     "define","wiki","ud","google","gsearch",
@@ -16797,20 +16797,11 @@ cmd("togif", { desc: "Video → GIF", category: "MEDIA" }, async (sock, msg) => 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  RELIGION
 // ═══════════════════════════════════════════════════════════════════════════════
-cmd("bible", { desc: "Get Bible verse", category: "RELIGION" }, async (sock, msg, args) => {
-  await react(sock, msg, "📖");
-  const ref = args.join("+").replace(/\s/g, "+");
-  try {
-    const { data } = await axios.get(`https://bible-api.com/${ref || "john+3:16"}`, { timeout: 10000 });
+// bible removed
     await sendReply(sock, msg, `📖 *Bible Verse*\n\n${data.reference}\n\n_"${data.text?.trim()}"_`);
   } catch { await sendReply(sock, msg, `📖 *John 3:16*\n\n_"For God so loved the world..."_`); }
 });
-cmd(["quran", "qur"], { desc: "Get Quran verse", category: "RELIGION" }, async (sock, msg, args) => {
-  await react(sock, msg, "🕌");
-  const ref = args[0] || "2:255";
-  const [s, a] = ref.includes(":") ? ref.split(":") : [1, 1];
-  try {
-    const { data } = await axios.get(`https://api.alquran.cloud/v1/ayah/${s}:${a}/en.asad`, { timeout: 10000 });
+// quran removed
     const v = data.data;
     await sendReply(sock, msg, `🕌 *Quran ${v.surah?.name} (${v.surah?.number}:${v.numberInSurah})*\n\n📝 *${v.text}*`);
   } catch { await sendReply(sock, msg, `🕌 *Quran 2:255 (Ayat al-Kursi)*\n\n_"Allah — there is no deity except Him..."_`); }
@@ -33423,8 +33414,9 @@ cmd(["tovid", "tovideo", "stickertovid", "imgtovid", "giftomp4"], { desc: "Conve
     // Choose ffmpeg command based on input type
     let _ffCmd, _fallback;
     if (stk) {
-      _ffCmd = `ffmpeg -y -i "${inPath}" -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
-      _fallback = `ffmpeg -y -loop 1 -t 3 -i "${inPath}" -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
+      // First attempt animated webp conversion, fallback to looped static webp conversion
+      _ffCmd = `ffmpeg -y -v error -i "${inPath}" -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
+      _fallback = `ffmpeg -y -v error -loop 1 -t 4 -i "${inPath}" -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=25" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
     } else if (img) {
       // Static image → 5-second video. PRECIOUS FIX: run the simple, fast
       // loop-encode FIRST; the zoompan filter is expensive and was the reason
