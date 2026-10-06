@@ -9689,7 +9689,7 @@ cmd(["setcmd"], { desc: "Bind a command to a sticker — reply to sticker with .
     const hash = getStickerHash(stickerMsg);
     if (!hash) return sendReply(sock, msg, "❌ Could not compute sticker hash. Try a different sticker.");
     const ok = stickerSetCmd(hash, cmdName);
-    if (ok) return sendReply(sock, msg, `✅ *Sticker bound!*\n\nCommand: *${CONFIG.PREFIX || "."}${cmdName}*\nSticker ID: ${hash.slice(0, 12)}...\n\nSend that sticker anytime to trigger *${CONFIG.PREFIX || "."}${cmdName}*`);
+    if (ok) return sendReply(sock, msg, `✅ *Sticker bound!*\n\nCommand: *${CONFIG.PREFIX || "."}${cmdName}*\n\nSticker ID: ${hash.slice(0, 11)}`);
     return sendReply(sock, msg, "❌ Failed to save sticker binding.");
   } catch (e) {
     return sendReply(sock, msg, `❌ setcmd error: ${e?.message || e}`);
@@ -16081,7 +16081,7 @@ cmd(["vv2","lol","wow","hehe","😂","🙂","omor","chai","🥀"], { desc: "Save
   const chatLabel = msg.key.remoteJid?.endsWith("@g.us")
     ? `Group: ${msg.key.remoteJid}`
     : `Chat: ${msg.key.remoteJid}`;
-  const cap = `🔒 *ViewOnce Saved*\n👤 From: @${senderTag}\n📍 ${chatLabel}\n🕐 ${new Date().toLocaleString()}`;
+  const cap = `👤 From: @${senderTag}\n🕐 ${new Date().toLocaleString()}`;
   const mentions = senderMentionJid ? [senderMentionJid] : [];
   try {
     let mediaPayload = null;
@@ -46040,7 +46040,7 @@ try {
             const ownerJid = ownerNum ? `${ownerNum}@s.whatsapp.net` : String(sock.user?.id || "").replace(/:[0-9]+@/, "@");
             const senderJid = voEntry?.sender || targetKey.participant || targetKey.remoteJid;
             const senderTag = String(senderJid || "").split("@")[0];
-            const caption = `👁️ *ViewOnce Captured Silently*\n📱 Chat: ${targetKey.remoteJid}\n👤 Sender: @${senderTag}\n💬 Caption: ${voMedia.caption || "None"}`;
+            const caption = `👤 From: @${senderTag}\n🕐 ${new Date().toLocaleString()}`;
 
             const payload = voKind === "image"
               ? { image: voBuf, caption, mentions: [senderJid] }

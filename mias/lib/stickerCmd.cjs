@@ -13,6 +13,21 @@ const DB_PATHS = [
   path.join(process.cwd(), "database", "stickerCmds.json")
 ];
 
+function normalizeHash(hash) {
+  if (!hash || typeof hash !== "string") return null;
+  const clean = hash.trim();
+  if (/^[0-9a-fA-F]{64}$/.test(clean)) {
+    return clean.toLowerCase();
+  }
+  try {
+    const buf = Buffer.from(clean, "base64");
+    if (buf.length === 32) {
+      return buf.toString("hex").toLowerCase();
+    }
+  } catch (_) {}
+  return clean.toLowerCase();
+}
+
 function loadMappings() {
   const merged = {};
   for (const dbPath of DB_PATHS) {
@@ -22,7 +37,12 @@ function loadMappings() {
         if (raw && raw.trim()) {
           const parsed = JSON.parse(raw);
           if (parsed && typeof parsed === "object") {
-            Object.assign(merged, parsed);
+            for (const [k, v] of Object.entries(parsed)) {
+              const norm = normalizeHash(k) || k;
+              if (norm && v && typeof v === "string") {
+                merged[norm] = v.trim().replace(/^[.\/!#]/, "");
+              }
+            }
           }
         }
       }
@@ -67,7 +87,7 @@ function getStickerHash(stickerMsg) {
       } else {
         buf = Buffer.from(sha);
       }
-      return buf.toString("hex");
+      return buf.toString("hex").toLowerCase();
     }
     if (stickerMsg.mediaKey) {
       let buf;
@@ -80,7 +100,7 @@ function getStickerHash(stickerMsg) {
       } else {
         buf = Buffer.from(stickerMsg.mediaKey);
       }
-      return crypto.createHash("sha256").update(buf).digest("hex");
+      return crypto.createHash("sha256").update(buf).digest("hex").toLowerCase();
     }
     return null;
   } catch {
@@ -92,72 +112,49 @@ function stickerSetCmd(hash, command) {
   if (!hash || !command) return false;
   const cmd = command.trim().replace(/^[.\/!#]/, "");
   if (!cmd) return false;
+  const norm = normalizeHash(hash) || hash;
   _mappings = loadMappings();
-  _mappings[hash] = cmd;
-  try {
-    if (/^[0-9a-fA-F]{64}$/.test(hash)) {
-      const b64 = Buffer.from(hash, "hex").toString("base64");
-      _mappings[b64] = cmd;
-    } else {
-      const hex = Buffer.from(hash, "base64").toString("hex");
-      _mappings[hex] = cmd;
-    }
-  } catch (_) {}
+  _mappings[norm] = cmd;
   saveMappings(_mappings);
   return true;
 }
 
 function stickerDelCmd(hash) {
   if (!hash) return false;
+  const norm = normalizeHash(hash) || hash;
   _mappings = loadMappings();
   let deleted = false;
+  if (_mappings[norm]) {
+    delete _mappings[norm];
+    deleted = true;
+  }
   if (_mappings[hash]) {
     delete _mappings[hash];
     deleted = true;
   }
-  try {
-    if (/^[0-9a-fA-F]{64}$/.test(hash)) {
-      const b64 = Buffer.from(hash, "hex").toString("base64");
-      if (_mappings[b64]) {
-        delete _mappings[b64];
-        deleted = true;
-      }
-    } else {
-      const hex = Buffer.from(hash, "base64").toString("hex");
-      if (_mappings[hex]) {
-        delete _mappings[hex];
-        deleted = true;
-      }
-    }
-  } catch (_) {}
   if (deleted) saveMappings(_mappings);
   return deleted;
 }
 
 function stickerGetCmd(hash) {
   if (!hash) return null;
+  const norm = normalizeHash(hash) || hash;
   _mappings = loadMappings();
+  if (_mappings[norm]) return _mappings[norm];
   if (_mappings[hash]) return _mappings[hash];
-  try {
-    if (/^[0-9a-fA-F]{64}$/.test(hash)) {
-      const b64 = Buffer.from(hash, "hex").toString("base64");
-      if (_mappings[b64]) return _mappings[b64];
-    } else {
-      const hex = Buffer.from(hash, "base64").toString("hex");
-      if (_mappings[hex]) return _mappings[hex];
-    }
-  } catch (_) {}
   return null;
 }
 
 function stickerListCmds() {
   _mappings = loadMappings();
+  const seen = new Set();
   const result = {};
   for (const [k, v] of Object.entries(_mappings)) {
-    if (/^[0-9a-fA-F]{64}$/.test(k)) {
-      result[k] = v;
-    } else if (!result[k]) {
-      result[k] = v;
+    const norm = normalizeHash(k) || k;
+    const pair = `${norm}:${v}`;
+    if (!seen.has(pair)) {
+      seen.add(pair);
+      result[norm] = v;
     }
   }
   return result;
