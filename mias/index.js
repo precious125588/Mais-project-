@@ -2019,7 +2019,7 @@ async function connectToWA(force = false) {
       logger,
       printQRInTerminal: false,
       auth: { creds: state.creds, keys: state.keys },
-      browser: ["Mac OS", "Chrome", "121.0.6167.85"],
+      browser: Browsers.ubuntu('Chrome'),
       // ── v4.9.4 FIX ──────────────────────────────────────────────────
       // Was `false` → linked-devices screen showed the bot as OFFLINE
       // even after a successful connect. Toggle to true so WhatsApp
@@ -36030,7 +36030,7 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
           logger: (typeof silentLog !== "undefined" ? silentLog : (typeof logger !== "undefined" ? logger : undefined)),
           printQRInTerminal: false,
           auth: { creds: state.creds, keys: state.keys },
-          browser: ["Mac OS", "Chrome", "121.0.6167.85"],
+          browser: Browsers.ubuntu('Chrome'),
           markOnlineOnConnect: false,
           generateHighQualityLinkPreview: false,
           defaultQueryTimeoutMs: 60000,

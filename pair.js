@@ -760,7 +760,7 @@ function ensureDirectoryExists(dirPath) {
 // (this is why the site "counted for 60 seconds"). We now cache the result
 // for 6 hours, cap the lookup at 6 seconds, and fall back to a known-good
 // version instead of failing the whole pairing.
-const FALLBACK_WA_VERSION = [2, 3000, 1015901307];
+const FALLBACK_WA_VERSION = [2, 3000, 1041589577];
 let _waVersionCache = { version: null, at: 0 };
 const WA_VERSION_TTL = 6 * 60 * 60 * 1000;
 
@@ -958,6 +958,7 @@ async function startpairing(nexusDevNumber, options = {}) {
     tracker.retryCount++;
     tracker.disconnected = false;
     tracker.lastActivity = Date.now();
+            tracker.isRestarting515 = false;
     tracker.pairingCode = null;
     tracker.pairingQr = null;
     tracker.pairingMode = pairingMode;
@@ -1020,7 +1021,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: ['Mac OS', 'Chrome', '121.0.6167.85'],
+        browser: Browsers ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
@@ -1087,7 +1088,7 @@ async function startpairing(nexusDevNumber, options = {}) {
                 tracker.pairingError = 'Could not reach WhatsApp servers. Please retry.';
                 throw new Error(tracker.pairingError);
             }
-            await sleep(500);
+            await sleep(2000);
 
             // Keep requesting until WhatsApp accepts the request or this
             // pairing socket actually closes. There is intentionally no
