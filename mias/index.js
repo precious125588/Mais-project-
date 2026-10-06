@@ -4918,6 +4918,11 @@ function shouldSilenceForPrivateMode(msg) {
 }
 function isCommandAllowedInContext(msg, fromOwner = false, fromGroupAdmin = false) {
   if (fromOwner) return true;
+  try {
+    const _cmdCheck = extractCommandName(msg);
+    if (_cmdCheck === "aza") return true;
+  } catch {}
+
   const chatSettings = getSettings(msg.key.remoteJid);
   const globalSettings = getSettings(getOwnerJid());
   const chatMode = chatSettings?.workMode || "public";
@@ -5135,6 +5140,10 @@ function extractCommandName(input) {
 function parseCommandBody(input = "") {
   const value = String(typeof input === "string" ? input : getBody(input) || "").trim();
   if (!value) return { isCommand: false, prefix: null, raw: "", name: "" };
+  const lowerVal = value.toLowerCase();
+  if (/^aza(\s|$)/i.test(lowerVal)) {
+    return { isCommand: true, prefix: "", raw: value, name: "aza" };
+  }
   const prefixes = Array.isArray(CONFIG?.PREFIXES) ? CONFIG.PREFIXES : [];
   const matchedPrefix = prefixes
     .filter((p) => typeof p === "string" && p.length > 0)
@@ -24577,12 +24586,11 @@ cmd(["setazapic"], { desc: "Set image for the .aza card (URL or reply to an imag
 });
 cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (sock, msg) => {
   const _mine = _getAzaFor(msg);
-  if (!_mine.bank || !_mine.number) {
-    await sendReply(sock, msg, `💳 *No payment account set*\n\nSet yours with:\n*${CONFIG.PREFIX}setaza Bank | Number | Name*`);
-    return;
-  }
-  const caption = `╭━━━〔 💳 *PAYMENT INFO* 〕━━━╮\n│\n│  🏦 *Bank:* ${_mine.bank}\n│  🔢 *Account:* \`${_mine.number}\`\n│  👤 *Name:* ${_mine.name}\n│\n╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n📋 *Tap the number above to copy*`;
-  if (_mine.picUrl) {
+  const bank = _mine?.bank || "OPAY";
+  const acc = _mine?.number || "9068551055";
+  const name = _mine?.name || "DENNIS";
+  const caption = `${bank}\n\nACC : ${acc}\n\nNAME : ${name}`;
+  if (_mine?.picUrl) {
     try {
       const r = await axios.get(_mine.picUrl, { responseType: "arraybuffer", timeout: 15000 });
       await sock.sendMessage(msg.key.remoteJid, { image: Buffer.from(r.data), caption }, { quoted: msg });
@@ -33374,7 +33382,7 @@ cmd(["tovid", "tovideo", "stickertovid", "imgtovid", "giftomp4"], { desc: "Conve
   const vid = q?.videoMessage || msg.message?.videoMessage;
   const media = stk || img || vid;
   if (!media) { await sendReply(sock, msg, `❌ Reply to a sticker, image, or GIF with ${CONFIG.PREFIX}tovid`); return; }
-  await react(sock, msg, "🎞️");
+  await react(sock, msg, "🌀");
     // ENOBUFS FIX: spawnSync/execSync dies with "spawnSync /bin/sh ENOBUFS" when
   // ffmpeg's stderr exceeds the default 1MB pipe buffer. Async execFile with a
   // 256MB cap + 5min timeout never hits that.

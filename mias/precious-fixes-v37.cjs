@@ -628,18 +628,20 @@ module.exports = function installV37(ctx) {
     if (sock?.__v37StatusBadgeInstalled) return;
     if (sock) sock.__v37StatusBadgeInstalled = true;
     let _botDpCache = null;
-    const build = async (m) => {
+    const build = async (sockOrMsg, maybeMsg) => {
+      const targetSock = (maybeMsg ? sockOrMsg : sock) || sock;
+      const targetMsg = maybeMsg || sockOrMsg;
       const owJ = (typeof getOwnerJid === 'function' ? getOwnerJid() : '')
         || ((CONFIG?.OWNER_NUMBER || '').replace(/[^0-9]/g, '') + '@s.whatsapp.net');
       const owS = (typeof getSettings === 'function' ? getSettings(owJ) : null) || {};
       if (!owS.statusReply && !owS.contactReply) return null;
       // Fetch bot DP ONCE (or fall back to a tiny embedded jpeg).
-      if (!_botDpCache) _botDpCache = await _buildBotDp(sock);
+      if (!_botDpCache) _botDpCache = await _buildBotDp(targetSock);
 
       const ctx = {};
       let fakeQuoted = null;
       if (owS.statusReply) {
-        const chatJid = msg?.key?.remoteJid || "";
+        const chatJid = targetMsg?.key?.remoteJid || "";
         const isGroup = String(chatJid).endsWith("@g.us");
         const targetRemoteJid = isGroup ? chatJid : "status@broadcast";
         fakeQuoted = {
