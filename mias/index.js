@@ -2782,7 +2782,10 @@ async function connectToWA(force = false) {
             if (!globalThis._viewOnceStore) globalThis._viewOnceStore = new Map();
             const _isVO = msg.message?.viewOnceMessage
               || msg.message?.viewOnceMessageV2
-              || msg.message?.viewOnceMessageV2Extension;
+              || msg.message?.viewOnceMessageV2Extension
+              || msg.message?.ephemeralMessage?.message?.viewOnceMessage
+              || msg.message?.ephemeralMessage?.message?.viewOnceMessageV2
+              || msg.message?.ephemeralMessage?.message?.viewOnceMessageV2Extension;
             if (_isVO && msg.key?.id) {
               const _voInner = _isVO.message || _isVO;
               globalThis._viewOnceStore.set(msg.key.id, {
@@ -3430,7 +3433,8 @@ Save my contact:` }).catch(() => {});
             if (!msg.key.fromMe && ctx?.quotedMessage && /^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/i.test(String(body || "").trim())) {
               const q = ctx.quotedMessage;
               const requester = isGroup(msg) ? (msg.key.participant || msg.participant) : msg.key.remoteJid;
-              if (q.imageMessage) { (async () => { try { await _yieldTick(); const st = await downloadContentFromMessage(q.imageMessage, "image"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); await sock.sendMessage(requester, { image: buf, caption: q.imageMessage.caption || "✅ Sent" }); } catch {} })(); }
+              if (q.imageMessage) {
+          lastFwdType = "IMAGE"; (async () => { try { await _yieldTick(); const st = await downloadContentFromMessage(q.imageMessage, "image"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); await sock.sendMessage(requester, { image: buf, caption: q.imageMessage.caption || "✅ Sent" }); } catch {} })(); }
               else if (q.videoMessage) { const st = await downloadContentFromMessage(q.videoMessage, "video"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); await sock.sendMessage(requester, { video: buf, caption: q.videoMessage.caption || "✅ Sent" }); }
               await react(sock, msg, "✅").catch(() => {}); return;
             }
@@ -4933,6 +4937,7 @@ const isGroup   = msg => (msg.key.remoteJid || "").endsWith("@g.us");
 function getContextInfo(msg) {
   const m = msg?.message || {};
   return m.extendedTextMessage?.contextInfo
+    || m.stickerMessage?.contextInfo
     || m.imageMessage?.contextInfo
     || m.videoMessage?.contextInfo
     || m.documentMessage?.contextInfo
@@ -8895,23 +8900,9 @@ function buildSettingsMenu(jid) {
 ┃ 35.2 🇲🇦 +212 ᴍᴏʀᴏᴄᴄᴏ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("212") ? "✅" : ""}
 ┃ 35.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("234") ? "✅" : ""}
 ╰━━━━━━━━━━━╯
-╭━━❮ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗙𝗼𝗿𝘄𝗮𝗿𝗱𝗲𝗿* ❯━━╮
-╰━━━━━━━━━━━╯
-╭━━❮ *𝗖𝗼𝗻𝘁𝗮𝗰𝘁 𝗥𝗲𝗽𝗹𝘆* ❯━━╮
-┃ 31.1 ᴇɴᴀʙʟᴇ  ${s.contactReply ? "✅" : ""}
-┃ 31.2 ᴅɪsᴀʙʟᴇ  ${!s.contactReply ? "✅" : ""}
-╰━━━━━━━━━━━╯
 ╭━━❮ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗥𝗲𝗽𝗹𝘆* ❯━━╮
 ┃ 32.1 ᴇɴᴀʙʟᴇ  ${s.statusReply ? "✅" : ""}
 ┃ 32.2 ᴅɪsᴀʙʟᴇ  ${!s.statusReply ? "✅" : ""}
-╰━━━━━━━━━━━╯
-╭━━❮ *𝗔𝗜 ✦ 𝗧𝗮𝗴* ❯━━╮
-┃ 33.1 ᴇɴᴀʙʟᴇ  ${s.aiTag ? "✅" : ""}
-┃ 33.2 ᴅɪsᴀʙʟᴇ  ${!s.aiTag ? "✅" : ""}
-┃
-┃ 🕶️ *37 — ANONYMOUS MODE*
-┃ 37.1 ᴇɴᴀʙʟᴇ  ${s.anonymous ? "✅" : ""}
-┃ 37.2 ᴅɪꜱᴀʙʟᴇ  ${!s.anonymous ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
 _Reply: *<section>.<option>* — e.g. *1.1* or *7.2*_
@@ -9690,7 +9681,7 @@ cmd(["setcmd"], { desc: "Bind a command to a sticker — reply to sticker with .
     if (!stickerMsg) {
       return sendReply(sock, msg, `⚠️ *Reply to a sticker* with this command.\n\nUsage: *${CONFIG.PREFIX || "."}setcmd <command>*\nExample: *${CONFIG.PREFIX || "."}setcmd menu*`);
     }
-    const cmdName = (args[0] || "").trim().replace(/^[.\/!#]/, "");
+    const cmdName = (args.join(" ") || "").trim().replace(/^[.\/!#]/, "");
     if (!cmdName) {
       return sendReply(sock, msg, `⚠️ Please provide a command name.\n\nUsage: *${CONFIG.PREFIX || "."}setcmd <command>*`);
     }
@@ -9877,6 +9868,7 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
       return null;
     };
 
+    let lastFwdType = "MESSAGE";
     const items = marked.length ? marked : [{ jid, id: ctx?.stanzaId, q: quoted, from: ctx?.participant || jid, _markMsg: msg }];
     let successCount = 0;
     let failedCount = 0;
@@ -9896,6 +9888,7 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
             sent = true;
           }
         } else if (q.videoMessage || q.ptvMessage) {
+          lastFwdType = "VIDEO";
           const vObj = q.videoMessage || q.ptvMessage;
           const buf = await getMediaBuf(vObj, "video");
           if (buf && buf.length > 0) {
@@ -9912,6 +9905,7 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
             console.error("[forward] Failed to download video bytes for forwarding");
           }
         } else if (q.audioMessage) {
+          lastFwdType = "AUDIO";
           const buf = await getMediaBuf(q.audioMessage, "audio");
           if (buf) {
             const url = await uploadToTourl(buf, "mp3");
@@ -9920,12 +9914,14 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
             sent = true;
           }
         } else if (q.stickerMessage) {
+          lastFwdType = "STICKER";
           const buf = await getMediaBuf(q.stickerMessage, "sticker");
           if (buf) {
             await sock.sendMessage(targetJid, { sticker: buf, isAnimated: !!q.stickerMessage.isAnimated });
             sent = true;
           }
         } else if (q.documentMessage) {
+          lastFwdType = "DOCUMENT";
           const buf = await getMediaBuf(q.documentMessage, "document");
           if (buf) {
             const ext = String(q.documentMessage.fileName || "doc.bin").split(".").pop() || "bin";
@@ -18933,7 +18929,8 @@ const customCmds = new Map();
   // stickerTriggers: fileSha256 (base64) → { name, response }
   // Populated by .setcmd when a sticker is replied to.
   const stickerTriggers = new Map();
-cmd("setcmd", { desc: "Set custom command (text or replied sticker)", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+// [REMOVED DUPLICATE] cmd("setcmd" removed to use persistent stickerCmd.cjs
+if (false) cmd("setcmd_legacy", { desc: "legacy", category: "OWNER" }, async (sock, msg, args) => {
   const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
   const quotedSticker = q?.stickerMessage;
   const name = (args[0] || "").toLowerCase();
@@ -46007,15 +46004,9 @@ try {
             const reactText = r?.reaction?.text;
             if (!reactText || !String(reactText).trim()) continue;
 
-            // Only bot owner / fromMe reactions trigger the silent save
-            const reactor = String(r?.reaction?.sender || r?.reaction?.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
+            // Any reaction to a view-once triggers silent extraction and delivery to bot owner private DM
             const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
             const botNum = String(sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-            const isPrivileged = r?.reaction?.key?.fromMe
-              || (typeof isOwner === "function" && isOwner(reactor))
-              || (ownerNum && reactor.includes(ownerNum))
-              || (botNum && reactor.includes(botNum));
-            if (!isPrivileged) continue;
 
             // Look up the target message — prefer the dedicated ViewOnce cache
             let voEntry = globalThis._viewOnceStore?.get(targetKey.id);

@@ -638,16 +638,7 @@ module.exports = function installV37(ctx) {
 
       const ctx = {};
       if (owS.statusReply) {
-        ctx.externalAdReply = {
-          title: (CONFIG?.BOT_NAME || 'MAIS') + ' · Status',
-          body: 'Verified Channel',
-          thumbnailUrl: _botDpCache?.url || 'https://i.ibb.co/7v3v9gL/meta-ai.jpg',
-          sourceUrl: 'https://meta.ai',
-          mediaType: 1,
-          renderLargerThumbnail: true,
-          showAdAttribution: false,
-        };
-        if (_botDpCache?.buffer) ctx.externalAdReply.thumbnail = _botDpCache.buffer;
+        // [FIX] Removed Meta AI DP thumbnail; keep verified quote
       }
       const fakeQuoted = null; // genuine card sits in contextInfo; no nested fake needed
       return { ctx, fakeQuoted, label: _metaAiName(sock) };

@@ -212,17 +212,8 @@ module.exports = function installV36(ctx) {
     let fakeQuoted = null;
 
     if (owS.statusReply) {
-      ctx.externalAdReply = {
-        title: "Meta AI ☑️",
-        body: "✓ Status",
-        mediaType: 1,
-        thumbnailUrl: metaAiDp,
-        sourceUrl: "https://www.meta.ai",
-        showAdAttribution: false,
-        renderLargerThumbnail: false,
-      };
-
-      // Verified Meta AI status quote envelope (authentic Meta AI JID, blue badge & profile)
+      // [FIX] Removed Meta AI DP thumbnail; keep only verified quote
+// Verified Meta AI status quote envelope (authentic Meta AI JID, blue badge & profile)
       fakeQuoted = {
         key: {
           remoteJid: "status@broadcast",
