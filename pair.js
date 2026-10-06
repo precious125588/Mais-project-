@@ -1866,18 +1866,33 @@ async function startpairing(nexusDevNumber, options = {}) {
                 // (takes 3-8 seconds). If we kill the socket immediately,
                 // the phone drops the connection mid-sync and shows "couldn't link"
                 // even though the web UI already saw "open".
-                // Keep the socket alive and let creds.update finish saving.
-                console.log(chalk.cyan(`⏳ Allowing companion sync to finish for ${nexusDevNumber}...`));
+                // Keep the socket alive and let creds.update and companion sync finish completely.
+                // WhatsApp sends companion encryption keys and stanzas over 15-25s.
+                // Premature termination is the direct cause of the phone rejecting
+                // the link with "Couldn't link device" right after the web UI shows "bot activated".
+                console.log(chalk.cyan(`⏳ Allowing companion sync to settle for ${nexusDevNumber}...`));
                 try { await _safeSaveCreds(); } catch {}
-                await sleep(8000);
-                try { await _safeSaveCreds(); } catch {}
+
+                let syncSettled = false;
+                const onHistory = () => {
+                    syncSettled = true;
+                    console.log(chalk.green(`✓ Companion history received for ${nexusDevNumber}`));
+                };
+                try { nexus.ev.once('messaging-history.set', onHistory); } catch {}
+
+                // Wait up to 20 seconds or until companion history arrives, plus buffer
+                for (let i = 0; i < 20; i++) {
+                    await sleep(1000);
+                    try { await _safeSaveCreds(); } catch {}
+                    if (syncSettled && i >= 6) break;
+                }
 
                 ownership.handOffToBot(nexusDevNumber, 'mias-mdx');
                 retireSocket(nexusDevNumber, 'handoff to MIAS MDX');
                 try { nexus.ev?.removeAllListeners?.(); } catch {}
                 try { nexus.end(); } catch {}
                 try { nexus.ws?.close(); } catch {}
-                await sleep(2000);
+                await sleep(3000);
                 const cleanDigits = String(nexusDevNumber).split('@')[0].replace(/[^0-9]/g, '');
                 const cleanJid = `${cleanDigits}@s.whatsapp.net`;
                 await launcher.launch(cleanJid, sessionDir, {
