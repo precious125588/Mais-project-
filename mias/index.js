@@ -16826,15 +16826,6 @@ cmd("togif", { desc: "Video → GIF", category: "MEDIA" }, async (sock, msg) => 
 //  RELIGION
 // ═══════════════════════════════════════════════════════════════════════════════
 // bible removed
-    await sendReply(sock, msg, `📖 *Bible Verse*\n\n${data.reference}\n\n_"${data.text?.trim()}"_`);
-  } catch { await sendReply(sock, msg, `📖 *John 3:16*\n\n_"For God so loved the world..."_`); }
-});
-// quran removed
-    const v = data.data;
-    await sendReply(sock, msg, `🕌 *Quran ${v.surah?.name} (${v.surah?.number}:${v.numberInSurah})*\n\n📝 *${v.text}*`);
-  } catch { await sendReply(sock, msg, `🕌 *Quran 2:255 (Ayat al-Kursi)*\n\n_"Allah — there is no deity except Him..."_`); }
-});
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //  LOGO COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
