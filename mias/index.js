@@ -3839,11 +3839,10 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
                 if (_stTrig) {
                   if (_stTrig.response) {
                     await sendReply(sock, msg, _stTrig.response);
-                  } else {
-                    const _stEntry = customCmds.get(_stTrig.name);
-                    if (_stEntry?.type === "sticker" && _stEntry?.data) {
-                      await sock.sendMessage(msg.key.remoteJid, { sticker: Buffer.from(_stEntry.data, "base64") }, { quoted: msg });
-                    }
+                    return;
+                  } else if (_stTrig.name) {
+                    // Trigger the bound command (e.g. .ping) instead of echoing the sticker!
+                    body = (CONFIG.PREFIX || ".") + _stTrig.name.trim().replace(/^[.\/!#]/, "");
                   }
                 }
               }
@@ -9899,11 +9898,18 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
         } else if (q.videoMessage || q.ptvMessage) {
           const vObj = q.videoMessage || q.ptvMessage;
           const buf = await getMediaBuf(vObj, "video");
-          if (buf) {
-            const url = await uploadToTourl(buf, "mp4");
-            if (url) await sock.sendMessage(targetJid, { video: { url }, caption: vObj.caption || "", mimetype: "video/mp4", ptv: !!q.ptvMessage });
-            else await sock.sendMessage(targetJid, { video: buf, caption: vObj.caption || "", mimetype: vObj.mimetype || "video/mp4", ptv: !!q.ptvMessage });
+          if (buf && buf.length > 0) {
+            // Forward directly using downloaded video buffer (supports large videos like 11MB+)
+            // Never upload to 3rd-party tourl with short timeouts which fails and corrupts video
+            await sock.sendMessage(targetJid, {
+              video: buf,
+              caption: vObj.caption || "",
+              mimetype: vObj.mimetype || "video/mp4",
+              ptv: !!q.ptvMessage
+            });
             sent = true;
+          } else {
+            console.error("[forward] Failed to download video bytes for forwarding");
           }
         } else if (q.audioMessage) {
           const buf = await getMediaBuf(q.audioMessage, "audio");
@@ -9946,10 +9952,17 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
             await sock.sendMessage(targetJid, { text });
             sent = true;
           } else {
-            try {
-              await sock.sendMessage(targetJid, { forward: { key: { remoteJid: item.jid || jid, id: item.id || ctx?.stanzaId, fromMe: false }, message: q }, force: true });
-              sent = true;
-            } catch (_) {}
+            // If message is media (video/image/audio/doc) but download failed, do NOT send empty forward stub
+            // because WhatsApp will show a 2.6KB unplayable corrupt file!
+            const isMediaMsg = !!(q.videoMessage || q.ptvMessage || q.imageMessage || q.audioMessage || q.documentMessage || q.stickerMessage);
+            if (!isMediaMsg) {
+              try {
+                await sock.sendMessage(targetJid, { forward: { key: { remoteJid: item.jid || jid, id: item.id || ctx?.stanzaId, fromMe: false }, message: q }, force: true });
+                sent = true;
+              } catch (_) {}
+            } else {
+              console.warn("[forward] Media download failed, skipping corrupt forward stub");
+            }
           }
         }
       } catch (err) {
@@ -43257,7 +43270,13 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
     } catch {}
     if (pickerPending && !sessLive && !quotedIsSettings) return false;
     const fn = SETTINGS_MAP[choice];
-    if (!fn) { await sendReply(sock, msg, `❌ Unknown settings option *${choice}*.`); return true; }
+    if (!fn) {
+      if (quotedIsSettings || sessLive) {
+        await sendReply(sock, msg, `❌ Unknown settings option *${choice}*. Please reply with an option number (e.g. *6.1* to enable Anti-Delete, or *0* to close).`);
+        return true;
+      }
+      return false;
+    }
     try {
       const out = fn(getSettings(jid));
       try {
@@ -45125,7 +45144,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     const isSudoCard = /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedText);
 
     if (!pend && isSudoCard) {
-      let tm = quotedText.match(/Target:s*@?(\d{7,15})/i) || quotedText.match(/@(\d{7,15})/) || quotedText.match(/\b(\d{7,15})\b/);
+      let tm = quotedText.match(/Target:\s*@?(\d{7,15})/i) || quotedText.match(/@(\d{7,15})/) || quotedText.match(/\b(\d{7,15})\b/);
       if (tm) {
         const tNum = tm[1];
         pend = { target: tNum + "@s.whatsapp.net", tNum, ts: Date.now(), recovered: true };
