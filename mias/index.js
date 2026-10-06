@@ -9980,7 +9980,15 @@ cmd(["forward", "fwd"], { desc: "Forward quoted or marked messages fast — .for
     if (successCount > 0) {
       await react(sock, msg, "✅").catch(() => {});
       const cleanTarget = String(targetLabel || "").replace(/^group\s+/i, "");
-      return sendReply(sock, msg, `Forwarded to ${cleanTarget}`);
+      const displayName = await (async () => {
+        try {
+          const n = await sock.getName(targetJid);
+          if (n && !n.includes("@") && !/^\d+$/.test(n)) return n.toUpperCase();
+        } catch (_) {}
+        return "TARGET USER";
+      })();
+      const fwdType = lastFwdType ? lastFwdType.toUpperCase() : "MESSAGE";
+      return sendReply(sock, msg, `${fwdType} FORWARDED TO ${displayName}`);
     } else {
       await react(sock, msg, "❌").catch(() => {});
       return sendReply(sock, msg, `❌ *Forward failed.* Could not transfer the message to ${targetLabel}.`);
@@ -14964,7 +14972,7 @@ cmd(["groupinfo", "ginfo", "gcinfo"], { desc: "Group info — works in group OR 
     return;
   }
   // Mode 2: current group
-  if (!requireGroup(msg)) { await sendReply(sock, msg, "❌ Use in a group, or pass a link: `.ginfo https://chat.whatsapp.com/XXXX`"); return; }
+  if (!requireGroup(msg)) { await sendReply(sock, msg, "❌ Use in a group, or pass a link: `.ginfo `"); return; }
   try {
     const meta = await sock.groupMetadata(msg.key.remoteJid);
     const admins = meta.participants.filter(p => p.admin);
@@ -16435,82 +16443,82 @@ cmd("price", { desc: "Check product price", category: "TOOLS" }, async (sock, ms
     await sendReply(sock, msg, txt + ``);
   } catch { await sendReply(sock, msg, `💰 Search Google Shopping for: ${args.join(" ")}`); }
 });
-cmd("fetch", { desc: "Fetch a URL — auto-detects text/JSON/binary (image/video/audio/document)", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}fetch <url>`); return; }
+cmd("fetch", { desc: "Fetch a URL — robust direct binary / Catbox download", category: "TOOLS" }, async (sock, msg, args) => {
+  if (!args.length) { await sendReply(sock, msg, "Usage: " + CONFIG.PREFIX + "fetch <url>"); return; }
   await react(sock, msg, "🌐");
   let url = args[0].trim();
   if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  if (/tmpfiles\.org/i.test(url) && !/\/dl\//i.test(url)) url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
 
-  // Resolve tmpfiles.org direct download links
-  if (/tmpfiles\.org/i.test(url) && !/\/dl\//i.test(url)) {
-    url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
+  console.log("[fetch] START url=" + url);
+  const https = require("https");
+  const http = require("http");
+  const agentOpts = { keepAlive: false, timeout: 30000 };
+  const httpsAgent = new https.Agent(agentOpts);
+  const httpAgent = new http.Agent(agentOpts);
+
+  let attempts = 0;
+  let resp = null;
+  while (attempts < 3) {
+    attempts++;
+    try {
+      resp = await axios.get(url, {
+        timeout: 45000,
+        maxRedirects: 8,
+        responseType: "arraybuffer",
+        maxContentLength: 70 * 1024 * 1024,
+        httpAgent,
+        httpsAgent,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept": "*/*",
+          "Connection": "close"
+        }
+      });
+      break;
+    } catch (err) {
+      console.warn(`[fetch] RETRY attempt=${attempts} reason=${err?.message || err}`);
+      if (attempts >= 3) {
+        await react(sock, msg, "❌");
+        return sendReply(sock, msg, `❌ Fetch failed: ${err?.code || err?.message || "connection failed"}`);
+      }
+      await new Promise(r => setTimeout(r, 1200 * attempts));
+    }
   }
+
+  if (!resp || !resp.data) {
+    await react(sock, msg, "❌");
+    return sendReply(sock, msg, "❌ Fetch failed: empty response");
+  }
+
+  const ctype = String(resp.headers["content-type"] || "").toLowerCase();
+  const buf = Buffer.from(resp.data);
+  console.log(`[fetch] SUCCESS bytes=${buf.length} ctype=${ctype}`);
 
   try {
-    let resp = await axios.get(url, {
-      timeout: 45000,
-      maxRedirects: 5,
-      responseType: "arraybuffer",
-      validateStatus: () => true,
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
-    });
-
-    let ct = String(resp.headers?.["content-type"] || "").toLowerCase();
-    let buf = Buffer.from(resp.data);
-
-    // If tmpfiles or another file host returned an HTML landing page, extract the real download link
-    if (ct.includes("text/html") && buf.length < 50000) {
-      const htmlText = buf.toString("utf-8");
-      const dlMatch = htmlText.match(/href=["'](https?:\/\/[^"']*(?:tmpfiles\.org\/dl|download)[^"']*)["']/i)
-        || htmlText.match(/<a[^>]+class=["'][^"']*download[^"']*["'][^>]+href=["']([^"']+)["']/i);
-      if (dlMatch && dlMatch[1]) {
-        let realUrl = dlMatch[1];
-        if (realUrl.startsWith("/")) realUrl = "https://tmpfiles.org" + realUrl;
-        resp = await axios.get(realUrl, {
-          timeout: 45000,
-          maxRedirects: 5,
-          responseType: "arraybuffer",
-          validateStatus: () => true,
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
-        });
-        ct = String(resp.headers?.["content-type"] || "").toLowerCase();
-        buf = Buffer.from(resp.data);
+    if (ctype.includes("image")) {
+      await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: `📥 Fetched from ${url}` }, { quoted: msg });
+    } else if (ctype.includes("video")) {
+      await sock.sendMessage(msg.key.remoteJid, { video: buf, mimetype: ctype, caption: `📥 Fetched from ${url}` }, { quoted: msg });
+    } else if (ctype.includes("audio")) {
+      await sock.sendMessage(msg.key.remoteJid, { audio: buf, mimetype: ctype }, { quoted: msg });
+    } else if (ctype.includes("application/json") || ctype.includes("text/")) {
+      const text = buf.toString("utf-8");
+      if (text.length <= 4000) {
+        await sendReply(sock, msg, text);
+      } else {
+        await sock.sendMessage(msg.key.remoteJid, { document: buf, mimetype: ctype, fileName: "fetched.txt" }, { quoted: msg });
       }
+    } else {
+      const filename = url.split("/").pop().split("?")[0] || "download.bin";
+      await sock.sendMessage(msg.key.remoteJid, { document: buf, mimetype: ctype || "application/octet-stream", fileName: filename }, { quoted: msg });
     }
-
-    const jid = msg.key.remoteJid;
-    const urlClean = url.split("?")[0];
-    const ext = path.extname(urlClean).toLowerCase();
-
-    // Check media delivery
-    if (ct.startsWith("image/") || [".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(ext)) {
-      await sock.sendMessage(jid, { image: buf, caption: `🌐 *Fetched Image*\n🔗 ${url}` }, { quoted: msg });
-      return;
-    }
-    if (ct.startsWith("video/") || [".mp4", ".mov", ".mkv", ".webm"].includes(ext)) {
-      await sock.sendMessage(jid, { video: buf, mimetype: ct.startsWith("video/") ? ct : "video/mp4", caption: `🌐 *Fetched Video*\n🔗 ${url}` }, { quoted: msg });
-      return;
-    }
-    if (ct.startsWith("audio/") || [".mp3", ".ogg", ".wav", ".m4a", ".aac"].includes(ext)) {
-      await sock.sendMessage(jid, { audio: buf, mimetype: ct.startsWith("audio/") ? ct : "audio/mpeg", ptt: false }, { quoted: msg });
-      return;
-    }
-    if (ct.includes("application/pdf") || ct.includes("zip") || ct.includes("octet-stream") || buf.length > 50000) {
-      const fn = path.basename(urlClean) || "file";
-      await sock.sendMessage(jid, { document: buf, mimetype: ct || "application/octet-stream", fileName: fn }, { quoted: msg });
-      return;
-    }
-
-    // Text / JSON output
-    const textData = buf.toString("utf-8");
-    const preview = textData.length > 3500 ? textData.slice(0, 3500) + "\n...[truncated]" : textData;
-    await sendReply(sock, msg, `🌐 *Fetch Result*\n🔗 ${url}\n🛰️ ${resp.status} ${resp.statusText || "OK"}\n📦 ${ct} • ${buf.length.toLocaleString()} bytes\n\n\`\`\`\n${preview}\n\`\`\``);
-  } catch (err) {
-    await react(sock, msg, "❌");
-    await sendReply(sock, msg, `❌ Fetch failed: ${err?.message || err}`);
+    await react(sock, msg, "✅");
+  } catch (deliveryErr) {
+    console.error("[fetch] delivery error:", deliveryErr?.message || deliveryErr);
+    await sendReply(sock, msg, `❌ Fetch failed: could not send file (${deliveryErr?.message})`);
   }
 });
-
 cmd(["sticker", "s"], { desc: "Image/video → sticker", category: "MEDIA" }, async (sock, msg, args) => {
   const unwrap = (node) => node?.ephemeralMessage?.message
     || node?.viewOnceMessage?.message
@@ -17312,9 +17320,9 @@ cmd("link", { desc: "Group invite link", category: "GROUP" }, async (sock, msg) 
   try {
     const c = await sock.groupInviteCode(msg.key.remoteJid);
     const inviteLink = `https://chat.whatsapp.com/${c}`;
-    globalThis.__miasLinkPending.set(msg.key.remoteJid, { link: inviteLink, ts: Date.now() });
-    const text = `🔗 *Group Invite Link*\n\n*1.* Join group\n*2.* Copy invite link\n\n_Reply to this message with 1 or 2_`;
-    await sendReply(sock, msg, text);
+    // Send actual link directly with WhatsApp link preview enabled
+    await sock.sendMessage(msg.key.remoteJid, { text: inviteLink }, { quoted: msg });
+    return;
   } catch { await sendReply(sock, msg, "❌ Need admin rights."); }
 });
 // numeric reply for the link card
@@ -29589,7 +29597,7 @@ cmd(["gst_legacy_disabled", "gstatus_legacy_disabled", "groupstatus_legacy_disab
     const textInput = text;
 
     if (!quotedMsg && !textInput) {
-      return reply(`🌀 *MIA'S MDX Group Status*\n\nReply to an image/video/audio or provide text to post as group status.\n\nExample: ${prefix}gstatus Hello group!`);
+      return reply("ℹ️ Usage: Use in a group or provide a group link/group JID.");
     }
 
     function generateMessageId() {
@@ -37290,7 +37298,7 @@ _This code expires in ~2 minutes._`);
           if (jidMatch) gid = jidMatch[0];
         }
         if (!gid || !gid.endsWith("@g.us")) {
-          return reply(`ℹ️ *Usage:* Use in a group, or pass a group link or group JID:\n* ${CONFIG.PREFIX}gst https://chat.whatsapp.com/XXXXX\n* ${CONFIG.PREFIX}gst 123456789@g.us`);
+          return reply(`ℹ️ *Usage:* Use in a group, or pass a group link or group JID:\n* ${CONFIG.PREFIX}gst \n* ${CONFIG.PREFIX}gst 123456789@g.us`);
         }
         const qMsg    = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
         const img     = msg.message?.imageMessage || qMsg?.imageMessage;
@@ -37543,7 +37551,7 @@ _This code expires in ~2 minutes._`);
 
         // Extract invite code from link
         const _code = (_link.split('/').pop() || '').replace(/[^a-zA-Z0-9]/g, '');
-        if (!_code) throw new Error('Invalid invite link — expected: https://chat.whatsapp.com/XXXXXX');
+        if (!_code) throw new Error('Invalid invite link — expected: ');
 
         // Resolve group info
         const _info = await _hSock.groupGetInviteInfo(_code).catch(() => null);
@@ -40395,7 +40403,7 @@ try {
         if (jidMatch) targetChat = jidMatch[0];
       }
       if (!String(targetChat || "").endsWith("@g.us")) {
-        return sendReply(sock, msg, "ℹ️ *Usage:* Use in a group, or pass a group link / JID:\n* " + CONFIG.PREFIX + "gst https://chat.whatsapp.com/XXXXX");
+        return sendReply(sock, msg, "ℹ️ *Usage:* Use in a group, or pass a group link / JID:\n* " + CONFIG.PREFIX + "gst ");
       }
       chat = targetChat;
 
@@ -45119,6 +45127,18 @@ cmd(["sudo"], { desc: "Grant sudo: .sudo in a DM or reply to a user", category: 
 globalThis.__miasSudoNumeric = async (sock, msg, body) => {
   try {
     const raw = String(body || "").trim();
+    // NEVER consume replies to .play menus!
+    const _ctxInfo = msg.message?.extendedTextMessage?.contextInfo || {};
+    const _qText = String(
+      _ctxInfo.quotedMessage?.conversation ||
+      _ctxInfo.quotedMessage?.extendedTextMessage?.text ||
+      _ctxInfo.quotedMessage?.imageMessage?.caption ||
+      ""
+    );
+    if (/JINX PLAYER|PLAY|MUSIC|SONG|SELECT A TRACK|AUDIO DOWNLOAD|VIDEO DOWNLOAD/i.test(_qText)) {
+      return false;
+    }
+
     const pickMatch = raw.match(/^[.!#/]?([123])$/);
     if (!pickMatch) return false;
     const pick = pickMatch[1];

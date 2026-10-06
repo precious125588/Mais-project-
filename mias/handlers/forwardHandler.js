@@ -2,12 +2,10 @@
  * MIAS — Forward Handler
  *
  * Centralizes all message forwarding logic.
- * Commands must never build forwarding logic manually.
- *
- * Architecture:  Commands → Handlers → Baileys Adapter → WhatsApp
+ * Supports reliable media download -> fresh Baileys media upload pipeline.
  */
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 
 function _deepClone(obj) {
   try {
@@ -30,54 +28,130 @@ function _injectForwardScore(content, score) {
   return cloned;
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+function _unwrapMedia(msg) {
+  let m = msg?.message || msg;
+  for (let i = 0; i < 6 && m && typeof m === "object"; i++) {
+    const next = m.ephemeralMessage?.message ||
+                 m.viewOnceMessage?.message ||
+                 m.viewOnceMessageV2?.message ||
+                 m.viewOnceMessageV2Extension?.message ||
+                 m.documentWithCaptionMessage?.message || null;
+    if (!next) break;
+    m = next;
+  }
+  return m;
+}
 
 /**
- * Forward a message to a JID.
- *
- * @param {object} sock
- * @param {string} toJid          - Destination JID
- * @param {object} msg            - WAMessage object
- * @param {object} [opts]
- * @param {number} [opts.score=1] - forwardingScore (1 = "Forwarded", 0 = none)
- * @param {boolean}[opts.force]   - Forward even if message has no content
- * @returns {Promise<object|null>}
+ * Forward a message to a JID with reliable media re-upload pipeline.
  */
 export async function forwardMessage(sock, toJid, msg, opts = {}) {
   try {
-    const content = msg?.message;
-    if (!content && !opts.force) return null;
+    const m = _unwrapMedia(msg);
+    if (!m) return null;
 
-    const score = opts.score ?? 1;
-    const patched = _injectForwardScore(content, score);
-    return await sock.sendMessage(toJid, patched);
+    // Detect media
+    if (m.videoMessage || m.ptvMessage) {
+      const v = m.videoMessage || m.ptvMessage;
+      const stream = await downloadContentFromMessage(v, "video");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      if (buf && buf.length > 100) {
+        console.log(`[forward] Delivered video bytes=${buf.length} to target=${toJid}`);
+        return await sock.sendMessage(toJid, {
+          video: buf,
+          caption: v.caption || "",
+          mimetype: v.mimetype || "video/mp4",
+          ptv: !!m.ptvMessage,
+          contextInfo: { forwardingScore: opts.score ?? 1, isForwarded: (opts.score ?? 1) > 0 }
+        });
+      }
+    }
+
+    if (m.imageMessage) {
+      const img = m.imageMessage;
+      const stream = await downloadContentFromMessage(img, "image");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      if (buf && buf.length > 100) {
+        console.log(`[forward] Delivered image bytes=${buf.length} to target=${toJid}`);
+        return await sock.sendMessage(toJid, {
+          image: buf,
+          caption: img.caption || "",
+          mimetype: img.mimetype || "image/jpeg",
+          contextInfo: { forwardingScore: opts.score ?? 1, isForwarded: (opts.score ?? 1) > 0 }
+        });
+      }
+    }
+
+    if (m.audioMessage) {
+      const a = m.audioMessage;
+      const stream = await downloadContentFromMessage(a, "audio");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      if (buf && buf.length > 100) {
+        console.log(`[forward] Delivered audio bytes=${buf.length} to target=${toJid}`);
+        return await sock.sendMessage(toJid, {
+          audio: buf,
+          mimetype: a.mimetype || "audio/ogg; codecs=opus",
+          ptt: !!a.ptt,
+          contextInfo: { forwardingScore: opts.score ?? 1, isForwarded: (opts.score ?? 1) > 0 }
+        });
+      }
+    }
+
+    if (m.documentMessage) {
+      const d = m.documentMessage;
+      const stream = await downloadContentFromMessage(d, "document");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      if (buf && buf.length > 100) {
+        console.log(`[forward] Delivered document bytes=${buf.length} to target=${toJid}`);
+        return await sock.sendMessage(toJid, {
+          document: buf,
+          mimetype: d.mimetype || "application/octet-stream",
+          fileName: d.fileName || "document",
+          contextInfo: { forwardingScore: opts.score ?? 1, isForwarded: (opts.score ?? 1) > 0 }
+        });
+      }
+    }
+
+    if (m.stickerMessage) {
+      const s = m.stickerMessage;
+      const stream = await downloadContentFromMessage(s, "sticker");
+      let buf = Buffer.alloc(0);
+      for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+      if (buf && buf.length > 100) {
+        console.log(`[forward] Delivered sticker bytes=${buf.length} to target=${toJid}`);
+        return await sock.sendMessage(toJid, {
+          sticker: buf,
+          isAnimated: !!s.isAnimated,
+          contextInfo: { forwardingScore: opts.score ?? 1, isForwarded: (opts.score ?? 1) > 0 }
+        });
+      }
+    }
+
+    // Text or other content
+    const text = m.conversation || m.extendedTextMessage?.text || "";
+    if (text) {
+      return await sock.sendMessage(toJid, {
+        text,
+        contextInfo: { forwardingScore: opts.score ?? 1, isForwarded: (opts.score ?? 1) > 0 }
+      });
+    }
+
+    // Fallback native Baileys forward
+    return await sock.sendMessage(toJid, { forward: msg, force: true });
   } catch (err) {
-    console.error("[forwardMessage] Error:", err?.message);
+    console.error("[forwardMessage] Error:", err?.message || err);
     return null;
   }
 }
 
-/**
- * Forward a message without the "Forwarded" label.
- *
- * @param {object} sock
- * @param {string} toJid
- * @param {object} msg
- * @returns {Promise<object|null>}
- */
 export async function forwardSilent(sock, toJid, msg) {
   return forwardMessage(sock, toJid, msg, { score: 0 });
 }
 
-/**
- * Forward a message to multiple JIDs.
- *
- * @param {object}   sock
- * @param {string[]} jids
- * @param {object}   msg
- * @param {object}   [opts]
- * @returns {Promise<(object|null)[]>}
- */
 export async function broadcastForward(sock, jids, msg, opts = {}) {
   const results = [];
   for (const jid of jids) {
@@ -90,20 +164,9 @@ export async function broadcastForward(sock, jids, msg, opts = {}) {
   return results;
 }
 
-/**
- * Re-send a message's raw content (no forward label, clean copy).
- *
- * @param {object} sock
- * @param {string} toJid
- * @param {object} msg       - WAMessage object
- * @param {object} [extra]   - Extra sendMessage options
- * @returns {Promise<object|null>}
- */
 export async function resendMessage(sock, toJid, msg, extra = {}) {
   try {
-    const content = msg?.message;
-    if (!content) return null;
-    return await sock.sendMessage(toJid, content, extra);
+    return await forwardMessage(sock, toJid, msg, { score: 0 });
   } catch (err) {
     console.error("[resendMessage] Error:", err?.message);
     return null;
