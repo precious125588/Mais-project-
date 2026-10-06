@@ -146,29 +146,43 @@ function resolveCustomizationPlaceholders(text, ctx = {}) {
   return out;
 }
 
+function toDopeFont(str) {
+  // Convert standard letters & numbers into aesthetic bold typography
+  const normal = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const dope   = "𝐀𝐁𝐂𝐃𝐄𝐅𝐆𝐇𝐈𝐉𝐊𝐋𝐌𝐍𝐎𝐏𝐐𝐑𝐒𝐓𝐔𝐕𝐖𝐗𝐘𝐙𝐚𝐛𝐜𝐝𝐞𝐟𝐠𝐡𝐢𝐣𝐤𝐥𝐦𝐧𝐨𝐩𝐪𝐫𝐬𝐭𝐮𝐯𝐰𝐱𝐲𝐳𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗";
+  let res = "";
+  for (const ch of str) {
+    const idx = normal.indexOf(ch);
+    res += idx !== -1 ? Array.from(dope)[idx] : ch;
+  }
+  return res;
+}
+
 function buildCustomizeMenuText() {
   let lines = [
-    "╭━━〔 CUSTOMIZE 〕━━╮",
+    "╭━━〔 𝐂𝐔𝐒𝐓𝐎𝐌𝐈𝐙𝐄 〕━━╮",
     "┃",
-    "┃ 1. Prefix",
-    "┃ 2. Bot Name",
-    "┃ 3. Bot Owner",
-    "┃ 4. Footer",
-    "┃ 5. Emoji",
-    "┃ 6. Status Emoji",
-    "┃ 7. Welcome Text",
-    "┃ 8. Goodbye Text",
-    "┃ 9. Menu Header",
-    "┃ 10. Menu Footer",
-    "┃ 11. Menu Emoji",
-    "┃ 12. Bot Profile",
-    "┃ 13. Pack Name",
-    "┃ 14. Author Name",
-    "┃ 15. Time Format",
-    "┃ 16. Date Format",
-    "┃ 17. Reset",
+    "┃ 𝟏. 𝐏𝐫𝐞𝐟𝐢𝐱",
+    "┃ 𝟐. 𝐁𝐨𝐭 𝐍𝐚𝐦𝐞",
+    "┃ 𝟑. 𝐁𝐨𝐭 𝐎𝐰𝐧𝐞𝐫",
+    "┃ 𝟒. 𝐅𝐨𝐨𝐭𝐞𝐫",
+    "┃ 𝟓. 𝐄𝐦𝐨𝐣𝐢",
+    "┃ 𝟔. 𝐒𝐭𝐚𝐭𝐮𝐬 𝐄𝐦𝐨𝐣𝐢",
+    "┃ 𝟕. 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐞𝐱𝐭",
+    "┃ 𝟖. 𝐆𝐨𝐨𝐝𝐛𝐲𝐞 𝐓𝐞𝐱𝐭",
+    "┃ 𝟗. 𝐌𝐞𝐧𝐮 𝐇𝐞𝐚𝐝𝐞𝐫",
+    "┃ 𝟏𝟎. 𝐌𝐞𝐧𝐮 𝐅𝐨𝐨𝐭𝐞𝐫",
+    "┃ 𝟏𝟏. 𝐌𝐞𝐧𝐮 𝐄𝐦𝐨𝐣𝐢",
+    "┃ 𝟏𝟐. 𝐁𝐨𝐭 𝐏𝐫𝐨𝐟𝐢𝐥𝐞",
+    "┃ 𝟏𝟑. 𝐏𝐚𝐜𝐤 𝐍𝐚𝐦𝐞",
+    "┃ 𝟏𝟒. 𝐀𝐮𝐭𝐡𝐨𝐫 𝐍𝐚𝐦𝐞",
+    "┃ 𝟏𝟓. 𝐓𝐢𝐦𝐞 𝐅𝐨𝐫𝐦𝐚𝐭",
+    "┃ 𝟏𝟔. 𝐃𝐚𝐭𝐞 𝐅𝐨𝐫𝐦𝐚𝐭",
+    "┃ 𝟏𝟕. 𝐑𝐞𝐬𝐞𝐭",
     "┃",
-    "╰━━━━━━━━━━━━━━━━━━╯"
+    "╰━━━━━━━━━━━━━━━━━━╯",
+    "",
+    "✨ " + toDopeFont("Reply with option number to edit or reset")
   ];
   return lines.join("\n");
 }

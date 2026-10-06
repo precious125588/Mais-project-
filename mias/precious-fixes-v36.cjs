@@ -78,7 +78,7 @@ module.exports = function installV36(ctx) {
     return buf;
   }
 
-  // ── 3. GST wrapper — quality pipeline + MP3 audio + 🌀→✅ reactions ──────
+    // ── 3. GST wrapper — quality pipeline + MP3 audio + 🌀→✅ reactions ──────
   const memberJids = (meta) => (meta.participants || [])
     .map(p => (typeof p.id === 'string' ? p.id : String(p.id || '')))
     .filter(j => j.endsWith('@s.whatsapp.net'));
@@ -88,31 +88,66 @@ module.exports = function installV36(ctx) {
     const q = ctx0?.quotedMessage;
     if (!q) return orig(sock, msg, args);
     const jid = msg.key.remoteJid;
-    let targetGid = jid.endsWith('@g.us') ? jid : '';
+    let targetGid = jid && jid.endsWith('@g.us') ? jid : '';
     const rawArgs = (args || []).map(a => String(a || '').trim()).filter(Boolean);
+    let targetArgIdx = -1;
+
+    // Detect target from args: JID or WhatsApp invite URL/code
     if (rawArgs.length > 0) {
       const first = rawArgs[0];
       if (first.endsWith('@g.us') || first.endsWith('@lid')) {
         targetGid = first;
+        targetArgIdx = 0;
       } else if (/^\d{10,}$/.test(first)) {
         targetGid = first + '@g.us';
+        targetArgIdx = 0;
+      } else {
+        const invMatch = first.match(/chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/i);
+        const invCode = invMatch ? invMatch[1] : (/^[A-Za-z0-9_-]{18,}$/.test(first) ? first : null);
+        if (invCode) {
+          try {
+            const info = await sock.groupGetInviteInfo(invCode).catch(() => null);
+            if (info?.id) {
+              targetGid = info.id.endsWith('@g.us') ? info.id : `${info.id}@g.us`;
+              targetArgIdx = 0;
+            }
+          } catch {}
+        }
       }
     }
     if (!targetGid) return orig(sock, msg, args);
 
+    // Compute clean caption: exclude command names, target JID, and invite URLs
+    const customWords = rawArgs.filter((a, idx) => {
+      if (idx === targetArgIdx) return false;
+      const s = String(a || '').toLowerCase().replace(/^[.!#/]/, '');
+      if (['gst', 'gstatus', 'groupstatus'].includes(s)) return false;
+      if (s.endsWith('@g.us') || s.endsWith('@lid') || /^\d{10,}$/.test(s)) return false;
+      if (/chat\.whatsapp\.com/i.test(s)) return false;
+      return true;
+    });
+    const customCap = customWords.join(' ').trim();
+    const quotedCap = q.imageMessage?.caption || q.videoMessage?.caption || q.documentMessage?.caption || '';
+    const finalCaption = customCap || quotedCap || '';
+
     try {
-      if (q.audioMessage) {
-        const st = await downloadContentFromMessage(q.audioMessage, 'audio');
+      const isAudio = q.audioMessage || (q.documentMessage && /audio/i.test(q.documentMessage?.mimetype || ''));
+      if (isAudio) {
+        const audioMsg = q.audioMessage || q.documentMessage;
+        const st = await downloadContentFromMessage(audioMsg, 'audio');
         const chunks = []; for await (const c of st) chunks.push(c);
-        const mp3 = await audioToOpus(Buffer.concat(chunks));
+        let audioBuf = Buffer.concat(chunks);
+        try {
+          audioBuf = await audioToOpus(audioBuf);
+        } catch (_) {}
         const meta = await sock.groupMetadata(targetGid).catch(() => ({ participants: [], subject: '' }));
         const members = memberJids(meta);
         await react(sock, msg, '🌀').catch(() => {});
         // Direct send to group
-        await sock.sendMessage(targetGid, { audio: mp3, mimetype: 'audio/ogg; codecs=opus', ptt: true }).catch(() => {});
+        await sock.sendMessage(targetGid, { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }).catch(() => {});
         // Relay status
         await sock.sendMessage('status@broadcast',
-          { audio: mp3, mimetype: 'audio/ogg; codecs=opus', ptt: true, contextInfo: { isGroupStatus: true } },
+          { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true, contextInfo: { isGroupStatus: true } },
           { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
         await react(sock, msg, '✅').catch(() => {});
         await sendReply(sock, msg, `*AUDIO UPLOADED TO ${String(meta.subject || targetGid).toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS.`);
@@ -125,16 +160,12 @@ module.exports = function installV36(ctx) {
         const better = kind === 'image' ? await enhanceImage(Buffer.concat(chunks)) : await enhanceVideo(Buffer.concat(chunks));
         const meta = await sock.groupMetadata(targetGid).catch(() => ({ participants: [], subject: '' }));
         const members = memberJids(meta);
-        const cap = args.filter(a => {
-          const s = String(a || '').toLowerCase().replace(/^[.!#/]/, '');
-          return !['gst','gstatus','groupstatus'].includes(s) && !s.endsWith('@g.us') && !s.endsWith('@lid') && !/^\d{10,}$/.test(s);
-        }).join(' ').trim();
         await react(sock, msg, '🌀').catch(() => {});
         const payload = kind === 'image'
-          ? { image: better, caption: cap, mimetype: 'image/jpeg', contextInfo: { isGroupStatus: true } }
-          : { video: better, caption: cap, mimetype: 'video/mp4', gifPlayback: false, contextInfo: { isGroupStatus: true } };
+          ? { image: better, caption: finalCaption, mimetype: 'image/jpeg', contextInfo: { isGroupStatus: true } }
+          : { video: better, caption: finalCaption, mimetype: 'video/mp4', gifPlayback: false, contextInfo: { isGroupStatus: true } };
         // Direct send to target group
-        await sock.sendMessage(targetGid, kind === 'image' ? { image: better, caption: cap } : { video: better, caption: cap, mimetype: 'video/mp4' }).catch(() => {});
+        await sock.sendMessage(targetGid, kind === 'image' ? { image: better, caption: finalCaption } : { video: better, caption: finalCaption, mimetype: 'video/mp4' }).catch(() => {});
         // Group status relay
         await sock.sendMessage('status@broadcast', payload,
           { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
