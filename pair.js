@@ -958,7 +958,8 @@ async function startpairing(nexusDevNumber, options = {}) {
     tracker.retryCount++;
     tracker.disconnected = false;
     tracker.lastActivity = Date.now();
-            tracker.isRestarting515 = false;
+    const isRestarting515 = Boolean(tracker.isRestarting515);
+    tracker.isRestarting515 = false;
     tracker.pairingCode = null;
     tracker.pairingQr = null;
     tracker.pairingMode = pairingMode;
@@ -976,11 +977,23 @@ async function startpairing(nexusDevNumber, options = {}) {
     
     const sessionPath = ensureSessionPath(nexusDevNumber);
 
+    // Check if creds.json already holds registered credentials
+    let hasRegisteredCreds = false;
+    try {
+        const credsFile = path.join(sessionPath, 'creds.json');
+        if (fs.existsSync(credsFile)) {
+            const parsed = JSON.parse(fs.readFileSync(credsFile, 'utf8'));
+            if (parsed && (parsed.registered === true || parsed.me?.id)) {
+                hasRegisteredCreds = true;
+            }
+        }
+    } catch {}
+
     // ── FIX ("couldn't link device" after the code is typed) ────────────────
-    // A pairing code is bound to the identity keys generated for it. Left-over
-    // half-written key files from an abandoned attempt make WhatsApp reject the
-    // link. Start every fresh code pairing from a clean key store.
-    if (pairingMode === 'code' && !tracker.isRestarting515) {
+    // A pairing code is bound to the identity keys generated for it. Only clean
+    // on a truly new pairing attempt, NEVER during a 515 restart required
+    // handshake and NEVER if the session already has registered creds.
+    if (pairingMode === 'code' && !isRestarting515 && !hasRegisteredCreds) {
         try {
             let wiped = 0;
             for (const f of fs.readdirSync(sessionPath)) {
