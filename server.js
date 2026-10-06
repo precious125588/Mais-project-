@@ -287,7 +287,11 @@ app.post('/api/pair', rateLimit(60000,10), async (req,res) => {
     // killed by a 401) is cleaned up automatically so it can pair again.
     if (_pair.hasPairedSession(jid)) {
         const live = _pair.isSessionLive ? _pair.isSessionLive(jid) : true;
-        const botRunning = _launcher ? _launcher.list().some(r => r.number === jid && r.alive) : false;
+        const cleanDigits = String(jid).split('@')[0].replace(/[^0-9]/g, '');
+        const botRunning = _launcher ? _launcher.list().some(r => {
+            const rDigits = String(r.number).split('@')[0].replace(/[^0-9]/g, '');
+            return rDigits === cleanDigits && r.alive;
+        }) : false;
 
         if (force || (!live && !botRunning)) {
             logger.log('pairing', `Re-pair requested for ${jid} (force=${force}, live=${live}, bot=${botRunning}) — clearing dead session`);

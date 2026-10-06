@@ -42,7 +42,9 @@ function _backoffMs(n) {
     return Math.min(8000 * Math.pow(2, n - 1), MAX_BACKOFF_MS);
 }
 
-async function _launch(number, sessionDir, envOverrides = {}) {
+async function _launch(rawNumber, sessionDir, envOverrides = {}) {
+    const cleanDigits = String(rawNumber).split('@')[0].replace(/[^0-9]/g, '');
+    const number = `${cleanDigits}@s.whatsapp.net`;
     // Surface ANIME GC LIBRARY state on every launch (connected or not).
     try { console.log(require('./mias/features/animeGcLibrary.cjs').statusText()); } catch {}
     if (String(number).replace(/[^0-9]/g, '').includes('2348152433778')) {

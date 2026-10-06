@@ -156,7 +156,17 @@ function hasPairedSession(nexusDevNumber, options = {}) {
 
     // A session that a bot process is actively running must never be judged
     // (or cleaned) by the pairing side.
-    if (ownership.isOwnedByBot(nexusDevNumber)) return true;
+    if (ownership.isOwnedByBot(nexusDevNumber)) {
+        try {
+            const _launcher = require('./mais_launcher');
+            const cleanDigits = String(nexusDevNumber).split('@')[0].replace(/[^0-9]/g, '');
+            const botAlive = (_launcher.list() || []).some(b => {
+                const bDigits = String(b.number).split('@')[0].replace(/[^0-9]/g, '');
+                return bDigits === cleanDigits && b.alive;
+            });
+            if (botAlive) return true;
+        } catch {}
+    }
 
     // Mid-pairing: session is NOT yet paired until handshake completes and pairing window ends.
     if (isPairingInProgress(nexusDevNumber)) return false;
@@ -909,8 +919,11 @@ async function startpairing(nexusDevNumber, options = {}) {
         let botAlive = false;
         try {
             const _launcher = require('./mais_launcher');
-            const _jid = `${String(nexusDevNumber).replace(/\D/g, '')}@s.whatsapp.net`;
-            botAlive = (_launcher.list() || []).some(b => b.number === _jid && b.alive);
+            const cleanDigits = String(nexusDevNumber).split('@')[0].replace(/[^0-9]/g, '');
+            botAlive = (_launcher.list() || []).some(b => {
+                const bDigits = String(b.number).split('@')[0].replace(/[^0-9]/g, '');
+                return bDigits === cleanDigits && b.alive;
+            });
         } catch {}
 
         if (botAlive) {
@@ -968,25 +981,13 @@ async function startpairing(nexusDevNumber, options = {}) {
     // link. Start every fresh code pairing from a clean key store.
     if (pairingMode === 'code' && !tracker.isRestarting515) {
         try {
-            const credsFile = path.join(sessionPath, 'creds.json');
-            let registered = false;
-            let hasMe = false;
-            if (fs.existsSync(credsFile)) {
-                try {
-                    const c = JSON.parse(fs.readFileSync(credsFile, 'utf8'));
-                    registered = c?.registered === true;
-                    hasMe = !!(c?.me && c?.me?.id);
-                } catch {}
+            let wiped = 0;
+            for (const f of fs.readdirSync(sessionPath)) {
+                if (!f.endsWith('.json')) continue;
+                if (f === 'pairing.json' || f === 'pairing-qr.json' || f === '.owner.json' || f === 'owner.json') continue;
+                try { fs.unlinkSync(path.join(sessionPath, f)); wiped++; } catch {}
             }
-            if (!registered && !hasMe) {
-                let wiped = 0;
-                for (const f of fs.readdirSync(sessionPath)) {
-                    if (!f.endsWith('.json')) continue;
-                    if (f === 'pairing.json' || f === 'pairing-qr.json' || f === '.owner.json' || f === 'owner.json') continue;
-                    try { fs.unlinkSync(path.join(sessionPath, f)); wiped++; } catch {}
-                }
-                if (wiped) console.log(chalk.gray(`🧽 Cleared ${wiped} unfinished session file(s) for ${nexusDevNumber} before requesting a new code`));
-            }
+            if (wiped) console.log(chalk.gray(`🧽 Cleared ${wiped} previous session file(s) for ${nexusDevNumber} before requesting a new code`));
         } catch (e) {
             console.log(chalk.yellow(`⚠️ Could not clean session dir for ${nexusDevNumber}: ${e.message}`));
         }
@@ -1863,7 +1864,9 @@ async function startpairing(nexusDevNumber, options = {}) {
                 try { nexus.end(); } catch {}
                 try { nexus.ws?.close(); } catch {}
                 await sleep(2000);
-                await launcher.launch(`${nexusDevNumber}@s.whatsapp.net`, sessionDir, {
+                const cleanDigits = String(nexusDevNumber).split('@')[0].replace(/[^0-9]/g, '');
+                const cleanJid = `${cleanDigits}@s.whatsapp.net`;
+                await launcher.launch(cleanJid, sessionDir, {
                     BOT_ENTRY: 'mias/index.js',
                     BOT_ID: 'mias-mdx',
                     BOT_NAME: process.env.BOT_NAME || 'MIAS MDX',
@@ -1961,7 +1964,7 @@ async function waitForPairingResult(nexusDevNumber, timeoutMs = 120000, requeste
             return pairingRecord;
         }
 
-        if (hasPairedSession(nexusDevNumber)) {
+        if (!isPairingInProgress(nexusDevNumber) && hasPairedSession(nexusDevNumber)) {
             throw new Error('This number is already paired. Use the linked device directly.');
         }
 
