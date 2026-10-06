@@ -754,53 +754,8 @@ function ensureDirectoryExists(dirPath) {
     }
 }
 
-// ── FAST / CACHED WHATSAPP VERSION ───────────────────────────────────
-// fetchLatestBaileysVersion() hits the network with no timeout. On a weak
-// connection it could hang 60s+ before a pairing code was even requested
-// (this is why the site "counted for 60 seconds"). We now cache the result
-// for 6 hours, cap the lookup at 6 seconds, and fall back to a known-good
-// version instead of failing the whole pairing.
-const https = require('https');
-
-function fetchLiveWaWebVersion(timeoutMs = 6000) {
-    return new Promise((resolve, reject) => {
-        const req = https.get('https://web.whatsapp.com/sw.js', {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Sec-Fetch-Dest': 'script',
-                'Sec-Fetch-Mode': 'no-cors',
-                'Sec-Fetch-Site': 'same-origin'
-            },
-            timeout: timeoutMs
-        }, res => {
-            if (res.statusCode !== 200) {
-                return reject(new Error('HTTP ' + res.statusCode));
-            }
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                const match = data.match(/(?:server_revision|client_revision)[^0-9]+(\d{9,11})/);
-                if (match && match[1]) {
-                    resolve([2, 3000, parseInt(match[1], 10)]);
-                } else {
-                    reject(new Error('Revision pattern not found in sw.js'));
-                }
-            });
-        });
-        req.on('error', reject);
-        req.on('timeout', () => {
-            req.destroy();
-            reject(new Error('Timeout'));
-        });
-    });
-}
-
-// Current live WhatsApp Web revision is 1049476576. Older revisions (e.g. 1041589577)
-// cause WhatsApp servers to reject the companion registration handshake after code entry,
-// leaving the mobile app hanging on "Logging in..." until timing out with "Couldn't link device".
-const FALLBACK_WA_VERSION = [2, 3000, 1049476576];
+// ── FAST / CACHED WHATSAPP VERSION (synced from full-dp-uploader) ───────
+const FALLBACK_WA_VERSION = [2, 3000, 1015901307];
 let _waVersionCache = { version: null, at: 0 };
 const WA_VERSION_TTL = 6 * 60 * 60 * 1000;
 
@@ -809,26 +764,18 @@ async function getWAVersion() {
         return _waVersionCache.version;
     }
     try {
-        const liveVersion = await fetchLiveWaWebVersion(6000);
-        if (Array.isArray(liveVersion) && liveVersion.length === 3) {
-            _waVersionCache = { version: liveVersion, at: Date.now() };
-            console.log(chalk.green(`🌐 Live WhatsApp Web version resolved: [${liveVersion.join(', ')}]`));
-            return liveVersion;
-        }
-    } catch (liveErr) {
-        console.log(chalk.yellow(`⚠️ Live WA Web version lookup failed (${liveErr.message}), trying Baileys helper...`));
-    }
-    try {
-        const result = await Promise.race([
-            fetchLatestBaileysVersion(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('version lookup timeout')), 6000))
-        ]);
-        if (result?.version) {
-            _waVersionCache = { version: result.version, at: Date.now() };
-            return result.version;
+        if (fetchLatestBaileysVersion) {
+            const result = await Promise.race([
+                fetchLatestBaileysVersion(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3500))
+            ]);
+            if (result?.version) {
+                _waVersionCache = { version: result.version, at: Date.now() };
+                return result.version;
+            }
         }
     } catch (err) {
-        console.log(chalk.yellow(`⚠️ WA version lookup failed (${err.message}) — using cached/fallback version`));
+        console.log(chalk.yellow(`[WA] Version fetch error (${err.message}) — using fallback`));
     }
     return _waVersionCache.version || FALLBACK_WA_VERSION;
 }
@@ -1084,7 +1031,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: Browsers ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'],
+        browser: ["Mac OS", "Chrome", "121.0.6167.85"],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
