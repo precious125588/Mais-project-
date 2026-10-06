@@ -211,16 +211,18 @@ module.exports = function installV36(ctx) {
     const ctx = {};
     let fakeQuoted = null;
 
-    if (owS.statusReply) {
-      // [FIX] Removed Meta AI DP thumbnail; keep only verified quote
-// Verified Meta AI status quote envelope (authentic Meta AI JID, blue badge & profile)
+        if (owS.statusReply) {
+      const chatJid = msg?.key?.remoteJid || "";
+      const isGroup = String(chatJid).endsWith("@g.us");
+      const targetRemoteJid = isGroup ? chatJid : "status@broadcast";
       fakeQuoted = {
         key: {
-          remoteJid: "status@broadcast",
+          remoteJid: targetRemoteJid,
           fromMe: false,
           participant: "13135550002@s.whatsapp.net",
           id: "META_AI_" + Math.random().toString(36).substring(2, 10).toUpperCase(),
         },
+        participant: "13135550002@s.whatsapp.net",
         message: {
           conversation: "Meta AI",
         },
@@ -231,9 +233,11 @@ module.exports = function installV36(ctx) {
       // Context info properties for Meta AI verified identity
       ctx.stanzaId = fakeQuoted.key.id;
       ctx.participant = "13135550002@s.whatsapp.net";
+      ctx.remoteJid = targetRemoteJid;
       ctx.quotedMessage = { conversation: "Meta AI" };
       ctx.verifiedProfile = true;
       ctx.pushName = "Meta AI";
+      ctx.isBotInvoke = true;
       ctx.botMessageInvokePayload = {};
     }
 

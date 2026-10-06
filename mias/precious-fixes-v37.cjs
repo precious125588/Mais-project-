@@ -637,10 +637,35 @@ module.exports = function installV37(ctx) {
       if (!_botDpCache) _botDpCache = await _buildBotDp(sock);
 
       const ctx = {};
+      let fakeQuoted = null;
       if (owS.statusReply) {
-        // [FIX] Removed Meta AI DP thumbnail; keep verified quote
+        const chatJid = msg?.key?.remoteJid || "";
+        const isGroup = String(chatJid).endsWith("@g.us");
+        const targetRemoteJid = isGroup ? chatJid : "status@broadcast";
+        fakeQuoted = {
+          key: {
+            remoteJid: targetRemoteJid,
+            fromMe: false,
+            participant: "13135550002@s.whatsapp.net",
+            id: "META_AI_" + Math.random().toString(36).substring(2, 10).toUpperCase(),
+          },
+          participant: "13135550002@s.whatsapp.net",
+          message: {
+            conversation: "Meta AI",
+          },
+          verifiedProfile: true,
+          verifiedBizName: "Meta AI",
+          pushName: "Meta AI",
+        };
+        ctx.stanzaId = fakeQuoted.key.id;
+        ctx.participant = "13135550002@s.whatsapp.net";
+        ctx.remoteJid = targetRemoteJid;
+        ctx.quotedMessage = { conversation: "Meta AI" };
+        ctx.verifiedProfile = true;
+        ctx.pushName = "Meta AI";
+        ctx.isBotInvoke = true;
+        ctx.botMessageInvokePayload = {};
       }
-      const fakeQuoted = null; // genuine card sits in contextInfo; no nested fake needed
       return { ctx, fakeQuoted, label: _metaAiName(sock) };
     };
     globalThis.__V36_STATUS_REPLY_CTX = build;

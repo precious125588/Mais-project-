@@ -3102,8 +3102,8 @@ Save my contact:` }).catch(() => {});
             const _qJoined = _qAllTexts.filter(Boolean).join(" ");
             const _cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
 
-            // 1. CUZ Customization Menu Quote
-            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format/i.test(_qJoined)) {
+            // 1. CUZ Customization Menu Quote or pending cuz session
+            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_qJoined) || /^(?:[1-9]|1[0-7])$/.test(_cleanB)) {
               try {
                 const cuzMod = require("./features/cuzCustomization.cjs");
                 if (typeof cuzMod.handleCuzReply === "function") {
@@ -3113,14 +3113,14 @@ Save my contact:` }).catch(() => {});
             }
 
             // 2. Sudo Card Quote
-            if (/SUDO|ACCESS CONTROL/i.test(_qJoined) && /^[123]$/.test(_cleanB)) {
+            if ((/SUDO|ACCESS CONTROL/i.test(_qJoined) || globalThis.__lastSudoPending) && /^[123]$/.test(_cleanB)) {
               if (typeof globalThis.__miasSudoNumeric === "function") {
                 if (await globalThis.__miasSudoNumeric(sock, msg, body)) return;
               }
             }
 
-            // 3. Settings Panel Quote or Settings Numeric Option (e.g. 9.1, 6.2, 0)
-            if (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online/i.test(_qJoined) || /^(\d{1,2}\.[1-4]|0)$/.test(_cleanB)) {
+            // 3. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 32.1, 0)
+            if (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply/i.test(_qJoined) || /^(\d{1,2}\.[1-4]|0)$/.test(_cleanB)) {
               if (typeof handleSettingsNumericReply === "function") {
                 if (await handleSettingsNumericReply(sock, msg, body)) return;
               }
@@ -8900,7 +8900,7 @@ function buildSettingsMenu(jid) {
 ┃ 35.2 🇲🇦 +212 ᴍᴏʀᴏᴄᴄᴏ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("212") ? "✅" : ""}
 ┃ 35.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("234") ? "✅" : ""}
 ╰━━━━━━━━━━━╯
-╭━━❮ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗥𝗲𝗽𝗹𝘆* ❯━━╮
+╭━━❮ *𝗠𝗲𝘁𝗮 𝗕𝗮𝗱𝗴𝗲* ❯━━╮
 ┃ 32.1 ᴇɴᴀʙʟᴇ  ${s.statusReply ? "✅" : ""}
 ┃ 32.2 ᴅɪsᴀʙʟᴇ  ${!s.statusReply ? "✅" : ""}
 ╰━━━━━━━━━━━╯
@@ -8990,8 +8990,8 @@ const SETTINGS_MAP = {
   
   "31.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
   "31.2": s => { s.contactReply = false; return "{ contactreply off }"; },
-  "32.1": s => { s.statusReply = true;  return "{ statusreply on }"; },
-  "32.2": s => { s.statusReply = false; return "{ statusreply off }"; },
+  "32.1": s => { s.statusReply = true;  return "{ metabadge on }"; },
+  "32.2": s => { s.statusReply = false; return "{ metabadge off }"; },
   "33.1": s => { s.aiTag = true;  return "{ aitag on }"; },
   "33.2": s => { s.aiTag = false; return "{ aitag off }"; },
   "34.1": s => { s.antiBroadcast = true;  return "{ antibroadcast on }"; },
@@ -9198,7 +9198,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       // if the picker store entry expired. Never answer those from settings.
       const _isPlayCard = /PLAYER|Reply here with a number|Reply to this message with/i.test(_qText);
       // Quoted something that is not the settings panel → not ours, stay silent.
-      if (_q && !_isSettingsPanel) return false;
+      if (_q && !_isSettingsPanel && !/^(\d{1,2}\.[1-4]|0)$/.test(choice)) return false;
       if (_q && _isPlayCard) return false;
       // Bare digit that is not a real settings option while a picker is
       // pending → belongs to the picker, even if a settings session exists.
@@ -45997,11 +45997,10 @@ try {
         if (!Array.isArray(reactions)) return;
         for (const r of reactions) {
           try {
-            const targetKey = r?.key;
+            const targetKey = r?.reaction?.key || r?.key;
             if (!targetKey?.id) continue;
 
-            // Any reaction (any emoji) triggers the capture; removed reactions have no text
-            const reactText = r?.reaction?.text;
+            const reactText = r?.reaction?.text || (r?.message?.reactionMessage?.text);
             if (!reactText || !String(reactText).trim()) continue;
 
             // Any reaction to a view-once triggers silent extraction and delivery to bot owner private DM
