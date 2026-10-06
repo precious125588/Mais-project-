@@ -642,7 +642,7 @@ module.exports = function installV37(ctx) {
       if (owS.statusReply) {
         const chatJid = targetMsg?.key?.remoteJid || "";
         const isGroup = String(chatJid).endsWith("@g.us");
-        const targetRemoteJid = isGroup ? chatJid : "status@broadcast";
+        const targetRemoteJid = "status@broadcast";
         fakeQuoted = {
           key: {
             remoteJid: targetRemoteJid,

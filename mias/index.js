@@ -3158,7 +3158,35 @@ Save my contact:` }).catch(() => {});
             // routed correctly by the sendNativeFlowListMenu rowIds fix a
             // few lines below (rows are no longer BTN:-prefixed, so they
             // reach __miasHandleBareNumberReply unchanged).
-            const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
+            // ── HIGH-PRIORITY QUOTED ROUTER (SUDO, CUZ, SETTINGS) ─────────────
+          try {
+            const _eqTxt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || "";
+            const _eqCleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
+            const _isSudoQ = /SUDO|ACCESS CONTROL/i.test(_eqTxt) || !!globalThis.__lastSudoPending;
+            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_eqTxt) || !!globalThis.__cuzPending;
+            const _isSetQ = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle/i.test(_eqTxt);
+
+            if (_isSudoQ && /^[123]$/.test(_eqCleanB)) {
+              if (typeof globalThis.__miasSudoNumeric === "function") {
+                if (await globalThis.__miasSudoNumeric(sock, msg, body)) return;
+              }
+            }
+            if (_isCuzQ || (/^(?:[1-9]|1[0-7])$/.test(_eqCleanB) && !/SUDO/i.test(_eqTxt))) {
+              try {
+                const cuzMod = require("./features/cuzCustomization.cjs");
+                if (typeof cuzMod.handleCuzReply === "function") {
+                  if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
+                }
+              } catch (_) {}
+            }
+            if (_isSetQ || /^(\d{1,2}\.[1-4]|0)$/.test(_eqCleanB)) {
+              if (typeof handleSettingsNumericReply === "function") {
+                if (await handleSettingsNumericReply(sock, msg, body)) return;
+              }
+            }
+          } catch (_eQErr) {}
+
+          const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
             const _pQtxt = (typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||"";
             const _pNorm = String(_pQtxt || "").normalize("NFKD");
    const _pIsSettingsPanel = /SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot|\b\d{1,2}\.[1-4]\b/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT|\b\d{1,2}\.[1-4]\b/i.test(_pNorm);

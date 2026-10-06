@@ -120,10 +120,10 @@ module.exports = function installV36(ctx) {
     // Compute clean caption: exclude command names, target JID, and invite URLs
     const customWords = rawArgs.filter((a, idx) => {
       if (idx === targetArgIdx) return false;
-      const s = String(a || '').toLowerCase().replace(/^[.!#/]/, '');
+      let s = String(a || '').trim().replace(/^[\(\[{<"']+|[\)\]}>"']+$/g, '').toLowerCase().replace(/^[.!#/]/, '');
       if (['gst', 'gstatus', 'groupstatus'].includes(s)) return false;
-      if (s.endsWith('@g.us') || s.endsWith('@lid') || /^\d{10,}$/.test(s)) return false;
-      if (/chat\.whatsapp\.com/i.test(s)) return false;
+      if (s.endsWith('@g.us') || s.endsWith('@lid') || /^[0-9\-]+@g\.us$/i.test(s) || /^\d{10,}$/.test(s)) return false;
+      if (/chat\.whatsapp\.com/i.test(s) || /^https?:\/\//i.test(s)) return false;
       return true;
     });
     const customCap = customWords.join(' ').trim();
@@ -145,10 +145,10 @@ module.exports = function installV36(ctx) {
         await react(sock, msg, '🌀').catch(() => {});
         // Direct send to group
         await sock.sendMessage(targetGid, { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }).catch(() => {});
-        // Relay status (clean PTT voice note format for universal WhatsApp compatibility)
+        // Relay status (clean voice note format with status background color & font)
         await sock.sendMessage('status@broadcast',
-          { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true },
-          { statusJidList: members, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
+          { audio: audioBuf, mimetype: 'audio/mp4', ptt: true },
+          { statusJidList: members, backgroundColor: '#242220', font: 1, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
         await react(sock, msg, '✅').catch(() => {});
         await sendReply(sock, msg, `*AUDIO UPLOADED TO ${String(meta.subject || targetGid).toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS.`);
         return;
