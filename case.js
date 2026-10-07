@@ -679,7 +679,7 @@ if (!global.banned) global.banned = {}
 // Sends a full info card to the bot's own WhatsApp number (self-chat).
 if (!global._maisMdxWelcomeSent) {
     global._maisMdxWelcomeSent = true;
-    const BOT_NM = (devtrust?.user?.name || devtrust?.user?.verifiedName || process.env.BOT_NAME || 'MAIS MDX');
+    const BOT_NM = 'MIAS MDX';
     const ownerNum = botNumber.replace('@s.whatsapp.net', '');
     const connUser = devtrust.user?.name || ownerNum;
     const connTime = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Lagos' });
@@ -693,48 +693,6 @@ if (!global._maisMdxWelcomeSent) {
 ║ 🤖 *Bot:*      ${BOT_NM}
 ║ 🕐 *Time:*     ${connTime}
 ║ 🟢 *Status:*   Online & Ready
-╠══════════════════════════════╣
-║   📌 *ALL COMMANDS*
-╠══════════════════════════════╣
-║ 🎨 *AI / FUN*
-║  .ai | .gpt | .chatai
-║  .roast | .compliment
-║  .storyai | .poemify
-║  .triviaai | .codeai
-║  .txt2img | .imagine
-╠══════════════════════════════╣
-║ 📥 *DOWNLOADER*
-║  .tiktok | .ig | .yt
-║  .twitter | .fb | .snap
-║  .reddit | .spotify
-║  .pin | .threads
-╠══════════════════════════════╣
-║ 📁 *FILE HOST*
-║  .mediafire | .gdrive
-║  .mega | .pixeldrain
-╠══════════════════════════════╣
-║ 🔍 *SEARCH*
-║  .movies | .anime
-║  .apk | .wiki | .weather
-║  .translate | .tts
-╠══════════════════════════════╣
-║ 👑 *ADULT* (private only)
-║  .adult | .rule34 | .neko
-╠══════════════════════════════╣
-║ 🛡️ *GROUP ADMIN*
-║  .kick | .ban | .promote
-║  .demote | .mute | .unmute
-║  .tagall | .hidetag
-║  .antilink | .antispam
-║  .antisticker | .antidelete
-║  .warn | .resetwarn
-║  .kickall | .close | .open
-║  .setname | .setdesc
-╠══════════════════════════════╣
-║ ⚙️ *SETTINGS*
-║  .autobio | .autoview
-║  .autoreact | .autotyping
-║  .setpp | .gst | .say
 ╠══════════════════════════════╣
 ║ ⚡ Powered by ${BOT_NM}
 ╚══════════════════════════════╝`;

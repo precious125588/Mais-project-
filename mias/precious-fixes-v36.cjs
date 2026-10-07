@@ -130,7 +130,7 @@ module.exports = function installV36(ctx) {
     });
     const customCap = customWords.join(' ').trim();
     const quotedCap = q.imageMessage?.caption || q.videoMessage?.caption || q.documentMessage?.caption || '';
-    const finalCaption = customCap || quotedCap || '';
+    const finalCaption = customCap || '';
 
     try {
       const isAudio = q.audioMessage || (q.documentMessage && /audio/i.test(q.documentMessage?.mimetype || ''));

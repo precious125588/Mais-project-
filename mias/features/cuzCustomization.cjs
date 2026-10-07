@@ -432,7 +432,7 @@ async function handleCuzReply(sock, msg, body, P) {
 
     // 2. Expecting option selection number (1 to 17)
     const norm = rawInput.replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
-    const numMatch = norm.match(/^(\d{1,2})$/);
+    const numMatch = norm.match(/^(?:cuz\s*)?(\d{1,2})$/i);
 
     if (numMatch) {
       const num = parseInt(numMatch[1], 10);

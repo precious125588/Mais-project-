@@ -3102,26 +3102,31 @@ Save my contact:` }).catch(() => {});
             const _qJoined = _qAllTexts.filter(Boolean).join(" ");
             const _cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
 
-            // 1. Sudo Card Quote (higher priority than CUZ for 1, 2, 3)
-            if ((/SUDO|ACCESS CONTROL/i.test(_qJoined) || globalThis.__lastSudoPending) && /^[123]$/.test(_cleanB)) {
+            // 1. Sudo Card Quote or sudo numeric command (1, 2, 3, sudo 1, .sudo 1)
+            const _sudoMatch = _cleanB.match(/^(?:sudo\s*)?([123])$/i);
+            if ((/SUDO|ACCESS CONTROL/i.test(_qJoined) || globalThis.__lastSudoPending) && _sudoMatch) {
               if (typeof globalThis.__miasSudoNumeric === "function") {
-                if (await globalThis.__miasSudoNumeric(sock, msg, body)) return;
+                if (await globalThis.__miasSudoNumeric(sock, msg, _sudoMatch[1])) return;
               }
             }
 
-            // 2. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 32.1, 0)
-            if (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply/i.test(_qJoined) || /^(\d{1,2}\.[1-4]|0)$/.test(_cleanB)) {
+            // 2. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 9.1, 9 1, 0)
+            const _setMatch = _cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i) || (_cleanB === "0" ? ["0", "0"] : null);
+            if (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply/i.test(_qJoined) || _setMatch) {
               if (typeof handleSettingsNumericReply === "function") {
-                if (await handleSettingsNumericReply(sock, msg, body)) return;
+                const _setChoice = _setMatch ? (_setMatch[0] === "0" ? "0" : `${_setMatch[1]}.${_setMatch[2]}`) : _cleanB;
+                if (await handleSettingsNumericReply(sock, msg, _setChoice)) return;
               }
             }
 
-            // 3. CUZ Customization Menu Quote or pending cuz session
-            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_qJoined) || (typeof globalThis.__cuzPending !== "undefined" && globalThis.__cuzPending) || (/^(?:[1-9]|1[0-7])$/.test(_cleanB) && !/SUDO/i.test(_qJoined))) {
+            // 3. CUZ Customization Menu Quote or cuz numeric command (cuz 1, cuz 2, 1..17)
+            const _cuzMatch = _cleanB.match(/^(?:cuz\s*)?([1-9]|1[0-7])$/i);
+            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_qJoined) || (typeof globalThis.__cuzPending !== "undefined" && globalThis.__cuzPending) || (_cuzMatch && !/SUDO/i.test(_qJoined))) {
               try {
                 const cuzMod = require("./features/cuzCustomization.cjs");
                 if (typeof cuzMod.handleCuzReply === "function") {
-                  if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
+                  const _cuzBody = _cuzMatch ? _cuzMatch[1] : body;
+                  if (await cuzMod.handleCuzReply(sock, msg, _cuzBody, { getSettings, saveNow, CONFIG })) return;
                 }
               } catch (_cErr) {}
             }
@@ -33443,9 +33448,25 @@ cmd(["tovid", "tovideo", "stickertovid", "imgtovid", "giftomp4"], { desc: "Conve
     // Choose ffmpeg command based on input type
     let _ffCmd, _fallback;
     if (stk) {
-      // First attempt animated webp conversion, fallback to looped static webp conversion
-      _ffCmd = `ffmpeg -y -v error -i "${inPath}" -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
-      _fallback = `ffmpeg -y -v error -loop 1 -t 4 -i "${inPath}" -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=25" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
+      // Verify WebP and distinguish animated vs static
+      const isW = buf.length > 16 && buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP";
+      let isAnim = false;
+      if (isW) {
+        for (let offset = 12; offset + 8 <= buf.length;) {
+          const type = buf.subarray(offset, offset + 4).toString("ascii");
+          const size = buf.readUInt32LE(offset + 4);
+          if (type === "ANIM" || type === "ANMF") { isAnim = true; break; }
+          offset += 8 + size + (size % 2);
+        }
+      }
+      if (!isAnim && isW) {
+        await sendReply(sock, msg, "❌ This is a *static sticker* and cannot be converted to video. Only *animated stickers* can be converted.");
+        try { await react(sock, msg, "❌"); } catch {}
+        try { fs.unlinkSync(inPath); } catch {}
+        return;
+      }
+      _ffCmd = `ffmpeg -y -v error -i "${inPath}" -map 0:v:0 -map 0:a:0? -movflags +faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
+      _fallback = `ffmpeg -y -v error -i "${inPath}" -map 0:v:0 -movflags +faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
     } else if (img) {
       // Static image → 5-second video. PRECIOUS FIX: run the simple, fast
       // loop-encode FIRST; the zoompan filter is expensive and was the reason
@@ -43271,12 +43292,12 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
   // ══ 9. SETTINGS NUMERIC REPLIES — hardened dispatch ═══════════════════
   handleSettingsNumericReply = async function (sock, msg, body) {
     const jid = msg.key.remoteJid;
-    const raw = String(body || "").trim().replace(/^[^\d]*/, "");
+    const cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
     let choice = "";
-    if (raw === "0") {
+    if (cleanB === "0" || /^(?:settings?\s*)?0$/i.test(cleanB)) {
       choice = "0";
     } else {
-      const mm = raw.match(/^(\d{1,2})\.(\d{1,2})$/);
+      const mm = cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i) || cleanB.match(/^(\d{1,2})[.\s](\d{1,2})$/);
       if (mm) choice = `${mm[1]}.${mm[2]}`;
     }
     if (!choice) return false;
@@ -45166,7 +45187,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       return false;
     }
 
-    const pickMatch = raw.match(/^[.!#/]?([123])$/);
+    const pickMatch = raw.match(/^(?:(?:[.!#/]?sudo)\s*)?([123])$/i);
     if (!pickMatch) return false;
     const pick = pickMatch[1];
     const jid = msg.key.remoteJid;
@@ -46101,13 +46122,14 @@ async function handleReaction(sock, r) {
     if (!reactText || !String(reactText).trim()) return;
 
     // Check reactor privilege - user reacting on phone or bot self
-    const reactor = String(r?.participant || r?.reaction?.sender || r?.reaction?.key?.participant || r?.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
+    const reactor = String(r?.participant || r?.reaction?.sender || r?.reaction?.key?.participant || r?.key?.participant || "").replace(/:[0-9]+@/, "@");
     const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
     const botNum = String(sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-    const isPrivileged = r?.fromMe === true || r?.reaction?.key?.fromMe === true
-      || (typeof isOwner === "function" && isOwner(reactor))
-      || (ownerNum && reactor.includes(ownerNum))
-      || (botNum && reactor.includes(botNum));
+    const isPrivileged = r?.fromMe === true || r?.key?.fromMe === true || r?.reaction?.key?.fromMe === true
+      || (typeof isOwner === "function" && reactor && isOwner(reactor))
+      || (ownerNum && reactor && reactor.includes(ownerNum))
+      || (botNum && reactor && reactor.includes(botNum))
+      || (r?.key?.fromMe && !reactor);
     if (!isPrivileged) return;
 
     // Look for target message in viewOnce store or message stores

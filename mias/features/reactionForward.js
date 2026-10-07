@@ -151,15 +151,35 @@ export function installReactionForwarder(sock, options = {}) {
         if (sourceJid === "status@broadcast") continue;
 
         let cached = cache.get(keyOf(reaction.key));
+        if (!cached && reaction.key?.id) {
+          for (const [k, v] of cache.entries()) {
+            if (k.includes(reaction.key.id) && v?.message) {
+              cached = v;
+              break;
+            }
+          }
+        }
         if (!cached || cached.expiresAt < Date.now()) {
           cache.delete(keyOf(reaction.key));
-          // Fallback: pull the original from the process-wide retry store when
-          // the reaction arrived after the 15-minute local cache expired.
           let fallbackMsg = null;
           try {
-            if (globalThis._msgRetryStore && reaction.key?.id) {
-              const st = globalThis._msgRetryStore.get(reaction.key.id);
-              if (st) fallbackMsg = { key: reaction.key, message: st };
+            if (reaction.key?.id) {
+              if (globalThis._viewOnceStore && globalThis._viewOnceStore.get) {
+                const vo = globalThis._viewOnceStore.get(reaction.key.id);
+                if (vo) fallbackMsg = { key: reaction.key, message: vo.message || vo };
+              }
+              if (!fallbackMsg && globalThis._msgStore && globalThis._msgStore.get) {
+                const st = globalThis._msgStore.get(reaction.key.id);
+                if (st) fallbackMsg = { key: reaction.key, message: st.message || st };
+              }
+              if (!fallbackMsg && globalThis.__miasMsgCache && globalThis.__miasMsgCache.get) {
+                const st = globalThis.__miasMsgCache.get(reaction.key.id);
+                if (st) fallbackMsg = { key: reaction.key, message: st.message || st };
+              }
+              if (!fallbackMsg && globalThis._msgRetryStore && globalThis._msgRetryStore.get) {
+                const st = globalThis._msgRetryStore.get(reaction.key.id);
+                if (st) fallbackMsg = { key: reaction.key, message: st };
+              }
             }
           } catch {}
           if (fallbackMsg) cached = { message: fallbackMsg };

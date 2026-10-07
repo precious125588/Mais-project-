@@ -213,7 +213,7 @@ module.exports = {
         return {
           kind: converted.kind,
           buf: converted.buf,
-          caption: converted.caption || inner.caption || text || undefined
+          caption: converted.caption || inner.caption || undefined
         };
       }
 
@@ -293,9 +293,7 @@ module.exports = {
             return sendReply(sock, msg, payload.error);
           }
 
-          if (customCaption) {
-            payload.caption = customCaption;
-          }
+          payload.caption = customCaption ? customCaption : "";
 
           // Attach group link if requested via gclink
           if (wantGcLink) {
