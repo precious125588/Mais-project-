@@ -322,6 +322,18 @@ module.exports = {
 
           payload.caption = customCaption ? customCaption : "";
 
+          // Caption leak fix: text-kind posts must never echo raw JIDs, invite
+          // links or command tokens. Prefer the typed caption; otherwise strip
+          // the leaky tokens from the quoted text before it is posted.
+          if (payload.text) {
+            if (customCaption) {
+              payload.text = customCaption;
+            } else {
+              const _cleanedText = cleanCaptionTokens(String(payload.text).split(/\s+/));
+              payload.text = _cleanedText || '';
+            }
+          }
+
           // Attach group link if requested via gclink
           if (wantGcLink) {
             let inviteLink = '';
