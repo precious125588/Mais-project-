@@ -236,10 +236,21 @@ module.exports = {
           }
         }
 
+        const cleanCaptionTokens = (tokens) => {
+          return tokens.filter(t => {
+            const raw = String(t || '').trim();
+            if (/chat\.whatsapp\.com/i.test(raw) || /^https?:\/\//i.test(raw)) return false;
+            if (/^[A-Za-z0-9_-]{20,}$/.test(raw)) return false;
+            const s = raw.toLowerCase().replace(/^[.!#/]/, '');
+            if (['gst', 'gstatus', 'groupstatus'].includes(s)) return false;
+            if (s.endsWith('@g.us') || s.endsWith('@lid') || s.endsWith('@s.whatsapp.net') || /^\d{10,}$/.test(s)) return false;
+            return true;
+          }).join(' ').trim();
+        };
+
         if (filteredArgs.length > 0) {
           const first = filteredArgs[0];
           if (first.includes('chat.whatsapp.com/')) {
-            // Accept a full group invite link and resolve it to the group JID
             const invCode = first.split('chat.whatsapp.com/')[1].split(/[?#\s]/)[0];
             try {
               const info = (typeof sock.groupGetInviteInfo === 'function')
@@ -250,16 +261,16 @@ module.exports = {
             } catch (linkErr) {
               return sendReply(sock, msg, '❌ Could not resolve that group invite link — make sure the bot is a member of the group, or paste the group JID instead.');
             }
-            customCaption = filteredArgs.slice(1).join(' ');
+            customCaption = cleanCaptionTokens(filteredArgs.slice(1));
           } else if (first.endsWith('@g.us') || first.endsWith('@lid')) {
             targetGid = first;
-            customCaption = filteredArgs.slice(1).join(' ');
+            customCaption = cleanCaptionTokens(filteredArgs.slice(1));
           } else if (/^\d{10,}$/.test(first)) {
             targetGid = first + '@g.us';
-            customCaption = filteredArgs.slice(1).join(' ');
+            customCaption = cleanCaptionTokens(filteredArgs.slice(1));
           } else if (isGroup) {
             targetGid = chat;
-            customCaption = filteredArgs.join(' ');
+            customCaption = cleanCaptionTokens(filteredArgs);
           }
         } else if (isGroup) {
           targetGid = chat;
