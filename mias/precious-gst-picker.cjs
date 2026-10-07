@@ -179,7 +179,24 @@ module.exports = {
           } else if (payload.kind === 'video') {
             inner = await g({ video: payload.buf, caption: payload.caption || '', mimetype: 'video/mp4' }, genOpts);
           } else if (payload.kind === 'audio') {
-            inner = await g({ audio: payload.buf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, genOpts);
+            // WhatsApp rejects groupStatusMessageV2 with raw audioMessage on modern clients.
+            // Convert audio to a status video or upload directly to status@broadcast
+            try {
+              const cp = require('child_process');
+              const os = require('os');
+              const path = require('path');
+              const tmpIn = path.join(os.tmpdir(), 'gst_a_' + Date.now() + '.ogg');
+              const tmpOut = path.join(os.tmpdir(), 'gst_v_' + Date.now() + '.mp4');
+              fs.writeFileSync(tmpIn, payload.buf);
+              let ff = 'ffmpeg';
+              try { const ffs = require('ffmpeg-static'); if (ffs && fs.existsSync(ffs)) ff = ffs; } catch {}
+              cp.execFileSync(ff, ['-y', '-f', 'lavfi', '-i', 'color=c=black:s=720x720:r=25', '-i', tmpIn, '-c:v', 'libx264', '-tune', 'stillimage', '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p', '-shortest', '-movflags', '+faststart', tmpOut], { timeout: 60000 });
+              const vBuf = fs.readFileSync(tmpOut);
+              try { fs.unlinkSync(tmpIn); fs.unlinkSync(tmpOut); } catch {}
+              inner = await g({ video: vBuf, caption: payload.caption || '', mimetype: 'video/mp4' }, genOpts);
+            } catch (_vErr) {
+              inner = await g({ audio: payload.buf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, genOpts);
+            }
           }
         } catch (e) {
           return { ok: false, error: 'media upload failed: ' + ((e && e.message) || e) };

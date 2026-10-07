@@ -33465,6 +33465,11 @@ cmd(["tovid", "tovideo", "stickertovid", "imgtovid", "giftomp4"], { desc: "Conve
         try { fs.unlinkSync(inPath); } catch {}
         return;
       }
+      try {
+        const sharp = require("sharp");
+        const cleanGif = await sharp(buf, { animated: true }).gif().toBuffer();
+        fs.writeFileSync(inPath, cleanGif);
+      } catch (_) {}
       _ffCmd = `ffmpeg -y -v error -i "${inPath}" -map 0:v:0 -map 0:a:0? -movflags +faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
       _fallback = `ffmpeg -y -v error -i "${inPath}" -map 0:v:0 -movflags +faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 23 "${outPath}"`;
     } else if (img) {
@@ -33824,11 +33829,20 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
         throw new Error("Output image is not a valid JPEG");
       }
 
-      await sock.query({
-        tag: "iq",
-        attrs: { to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
-        content: [{ tag: "picture", attrs: { type: "image" }, content: imgBuf }],
-      });
+      const me = (sock.user?.id || sock.user?.jid || "").split(":")[0] + "@s.whatsapp.net";
+      try {
+        if (typeof sock.updateProfilePicture === "function") {
+          await sock.updateProfilePicture(me, imgBuf);
+        } else {
+          throw new Error("fallback to query");
+        }
+      } catch (_upErr) {
+        await sock.query({
+          tag: "iq",
+          attrs: { target: me, to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
+          content: [{ tag: "picture", attrs: { type: "image" }, content: imgBuf }],
+        });
+      }
 
       try { await react(sock, msg, "✅"); } catch {}
       await sendReply(sock, msg, "*FULL DP UPDATED*");
@@ -43372,8 +43386,12 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       const num = __v26Num(jid);
       for (const k of __ttSelections.keys()) { if (__v26Num(k) === num) { pickerPending = true; break; } }
     } catch {}
-    if (pickerPending && !sessLive && !quotedIsSettings) return false;
     const fn = SETTINGS_MAP[choice];
+    if (choice === "0") {
+      try { settingsSession.delete(jid); } catch {}
+      await sendReply(sock, msg, "⚙️ Settings closed.");
+      return true;
+    }
     if (!fn) {
       if (quotedIsSettings || sessLive) {
         await sendReply(sock, msg, `❌ Unknown settings option *${choice}*. Please reply with an option number (e.g. *6.1* to enable Anti-Delete, or *0* to close).`);
