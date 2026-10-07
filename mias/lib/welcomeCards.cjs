@@ -116,16 +116,25 @@ function roundRect(c, x, y, w, h, r) {
   c.closePath();
 }
 function wrapText(c, text, x, y, maxW, lh, maxLines) {
-  const words = String(text).split(' ');
-  let line = '', yy = y, lines = 0;
-  for (const w of words) {
-    const t = line ? line + ' ' + w : w;
-    if (c.measureText(t).width > maxW && line) {
-      c.fillText(line, x, yy); yy += lh; line = w;
-      if (++lines >= maxLines - 1) break;
-    } else line = t;
+  const paragraphs = String(text).split('\n');
+  let yy = y, lines = 0;
+  for (const para of paragraphs) {
+    const words = para.split(' ');
+    let line = '';
+    for (const w of words) {
+      const t = line ? line + ' ' + w : w;
+      if (c.measureText(t).width > maxW && line) {
+        c.fillText(line, x, yy); yy += lh; line = w;
+        if (++lines >= maxLines - 1) break;
+      } else line = t;
+    }
+    if (line && lines < maxLines) {
+      c.fillText(line, x, yy);
+      yy += lh;
+      lines++;
+    }
+    if (lines >= maxLines) break;
   }
-  if (line && lines < maxLines) c.fillText(line, x, yy);
 }
 
 // ── canvas renderer (PRIMARY — full Unicode / emoji / styled names) ─────
