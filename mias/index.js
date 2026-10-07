@@ -8952,7 +8952,7 @@ _Reply *0* to close settings_`;
 }
 
 // Settings toggle map
-const SETTINGS_MAP = {
+const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "1.1": s => { s.blockCalls = true; return "✅ Block Calls: ENABLED"; },
   "1.2": s => { s.blockCalls = false; return "❌ Block Calls: DISABLED"; },
   "2.1": s => { s.linkGuard = "delete"; return "{ antilink on }"; },
@@ -9269,6 +9269,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
     }
   }
   if (!session && !/^(\d{1,2}(\.\d{1,2})?|0)$/.test(choice)) return false;
+  if (!session && SETTINGS_MAP[choice]) { session = { sender: getSender(msg), synthetic: true }; settingsSession.set(jid, session); }
   // FIX zinox-stale-session: re-read the Map right before the hard gate.
   // The previous `if (!session) return false` exited silently when the
   // captured variable was stale even though the Map was already updated.
@@ -24522,7 +24523,7 @@ cmd(["setbotpic", "botpic", "setpp"], { desc: "Set normal cropped bot profile pi
       const r = await axios.get(args[0], { responseType: "arraybuffer", timeout: 20000 });
       buf = Buffer.from(r.data);
     } else {
-      await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setbotpic <image_url>*\nOr reply to an image with *${CONFIG.PREFIX}setbotpic*`);
+        await sendReply(sock, msg, );
       return;
     }
     if (!buf || buf.length < 500) { await sendReply(sock, msg, "❌ Image is empty or invalid."); return; }
@@ -33770,78 +33771,48 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
     try {
       const buf = await __miasReadImageBuf(sock, msg, args);
       if (!buf || buf.length < 200) {
-        await sendReply(sock, msg, "Usage: *" + CONFIG.PREFIX + "fulldp <image_url>*\nOr reply to an image with *" + CONFIG.PREFIX + "fulldp*\n\n_Sets the full picture — no cropping, original quality & ratio preserved._");
+        await sendReply(sock, msg, "Usage: *" + CONFIG.PREFIX + "fulldp <image_url>*\nOr reply to an image with *" + CONFIG.PREFIX + "fulldp*\n\n_Sets the full picture using direct Sharp inside-fit — no cropping, original aspect ratio preserved._");
         return;
       }
 
-      let imgBuf = null;
+      // Exact Sharp-only logic from full-dp-uploader (No Jimp)
+      const sharp = require("sharp");
+      async function generateProfilePicture(buffer, size = 720) {
+        const j = sharp(buffer);
+        return {
+          img: await j.resize(size, size, { fit: "inside" })
+            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
+            .toBuffer()
+        };
+      }
 
-      // 1. Primary: Sharp (maximum quality: 1080 canvas, MozJPEG, 4:4:4 chroma, EXIF auto-rotate, no crop)
-      try {
-        const sharp = require("sharp");
-        const instance = sharp(buf).rotate();
-        const meta = await instance.metadata();
-        const inW = meta.width || 0;
-        const inH = meta.height || 0;
-
-        // Target canvas size: up to 1080x1080; preserve original size if smaller than 1080 (min 720 for WhatsApp IQ)
-        const targetSide = Math.max(Math.min(Math.max(inW, inH), 1080), 720);
-
-        imgBuf = await sharp(buf)
-          .rotate()
-          .resize(targetSide, targetSide, {
-            fit: "contain",
-            background: { r: 0, g: 0, b: 0, alpha: 1 },
-            withoutEnlargement: inW <= targetSide && inH <= targetSide
-          })
-          .jpeg({
-            quality: 95,
-            chromaSubsampling: "4:4:4",
-            mozjpeg: true
-          })
-          .toBuffer();
-      } catch (_sharpErr) {
-        // Fallback: Jimp with high quality and 1:1 containment (not 720px lossy default)
+      let success = false;
+      let lastErr = null;
+      for (const size of [720, 640, 500]) {
         try {
-          const Jimp = require("jimp");
-          const j = await Jimp.read(buf);
-          const inW = j.getWidth();
-          const inH = j.getHeight();
-          const maxDim = Math.max(inW, inH);
-          const targetSide = Math.max(Math.min(maxDim, 1080), 720);
-
-          const bg = new Jimp(targetSide, targetSide, 0x000000FF);
-          const scaled = j.clone().scaleToFit(targetSide, targetSide);
-          const x = Math.round((targetSide - scaled.getWidth()) / 2);
-          const y = Math.round((targetSide - scaled.getHeight()) / 2);
-          bg.composite(scaled, x, y);
-          imgBuf = await bg.quality(95).getBufferAsync(Jimp.MIME_JPEG);
-        } catch (_jimpErr) {
-          throw new Error("Image processing failed: " + (_sharpErr?.message || _jimpErr?.message || "unsupported image"));
+          const { img } = await generateProfilePicture(buf, size);
+          await sock.query({
+            tag: "iq",
+            attrs: {
+              to: "@s.whatsapp.net",
+              type: "set",
+              xmlns: "w:profile:picture"
+            },
+            content: [{
+              tag: "picture",
+              attrs: { type: "image" },
+              content: img
+            }]
+          });
+          success = true;
+          break;
+        } catch (e) {
+          lastErr = e;
         }
       }
 
-      // Verification before sending
-      if (!imgBuf || imgBuf.length < 500) {
-        throw new Error("Generated profile picture is empty or invalid");
-      }
-      if (imgBuf[0] !== 0xFF || imgBuf[1] !== 0xD8) {
-        throw new Error("Output image is not a valid JPEG");
-      }
-
-      const me = (sock.user?.id || sock.user?.jid || "").split(":")[0] + "@s.whatsapp.net";
-      try {
-        if (typeof sock.updateProfilePicture === "function") {
-          await sock.updateProfilePicture(me, imgBuf);
-        } else {
-          throw new Error("fallback to query");
-        }
-      } catch (_upErr) {
-        await sock.query({
-          tag: "iq",
-          attrs: { target: me, to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
-          content: [{ tag: "picture", attrs: { type: "image" }, content: imgBuf }],
-        });
+      if (!success) {
+        throw lastErr || new Error("WhatsApp rejected profile picture upload at all resolutions");
       }
 
       try { await react(sock, msg, "✅"); } catch {}
@@ -33852,7 +33823,6 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
       await sendReply(sock, msg, "❌ Failed to update full profile picture: " + (err?.message || err));
     }
   };
-
   for (const n of ["fulldp", "setfulldp", "setfullpp", "fullpp"]) {
     const ex = commands.get(n) || { desc: "Set full profile pic (no crop, original quality)", category: "SETTINGS", ownerOnly: true };
     ex.handler = __miasFullDpHandler;

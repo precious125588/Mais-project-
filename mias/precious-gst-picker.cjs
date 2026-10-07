@@ -1,3 +1,13 @@
+function cleanCaptionText(txt) {
+  if (!txt) return '';
+  return String(txt)
+    .replace(/[a-zA-Z0-9._%+-]+@s\.whatsapp\.net/g, '')
+    .replace(/[a-zA-Z0-9_-]+@g\.us/g, '')
+    .replace(/status@broadcast/g, '')
+    .replace(/https?:\/\/chat\.whatsapp\.com\/[a-zA-Z0-9]+/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
 /* ══════════════════════════════════════════════════════════════════════════
    precious-gst-picker.cjs · GST — GROUP STATUS POSTER
    ──────────────────────────────────────────────────────────────────────────
