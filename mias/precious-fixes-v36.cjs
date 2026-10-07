@@ -120,10 +120,12 @@ module.exports = function installV36(ctx) {
     // Compute clean caption: exclude command names, target JID, and invite URLs
     const customWords = rawArgs.filter((a, idx) => {
       if (idx === targetArgIdx) return false;
-      let s = String(a || '').trim().replace(/^[\(\[{<"']+|[\)\]}>"']+$/g, '').toLowerCase().replace(/^[.!#/]/, '');
+      let rawStr = String(a || '').trim();
+      if (/chat\.whatsapp\.com/i.test(rawStr) || /^https?:\/\//i.test(rawStr)) return false;
+      if (/^[A-Za-z0-9_-]{20,}$/.test(rawStr)) return false;
+      let s = rawStr.replace(/^[\(\[{<"']+|[\)\]}>"']+$/g, '').toLowerCase().replace(/^[.!#/]/, '');
       if (['gst', 'gstatus', 'groupstatus'].includes(s)) return false;
-      if (s.endsWith('@g.us') || s.endsWith('@lid') || /^[0-9\-]+@g\.us$/i.test(s) || /^\d{10,}$/.test(s)) return false;
-      if (/chat\.whatsapp\.com/i.test(s) || /^https?:\/\//i.test(s)) return false;
+      if (s.endsWith('@g.us') || s.endsWith('@lid') || s.endsWith('@s.whatsapp.net') || /^[0-9\-]+@g\.us$/i.test(s) || /^\d{10,}$/.test(s)) return false;
       return true;
     });
     const customCap = customWords.join(' ').trim();
@@ -147,7 +149,7 @@ module.exports = function installV36(ctx) {
         await sock.sendMessage(targetGid, { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }).catch(() => {});
         // Relay status (clean voice note format with status background color & font)
         await sock.sendMessage('status@broadcast',
-          { audio: audioBuf, mimetype: 'audio/mp4', ptt: true },
+          { audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true },
           { statusJidList: members, backgroundColor: '#242220', font: 1, messageId: 'MIAS36' + Date.now().toString(36).toUpperCase() }).catch(() => {});
         await react(sock, msg, '✅').catch(() => {});
         await sendReply(sock, msg, `*AUDIO UPLOADED TO ${String(meta.subject || targetGid).toUpperCase()}*\n\nSENT TO *${members.length}* GROUP MEMBERS.`);
