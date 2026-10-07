@@ -245,7 +245,7 @@ module.exports = function installV36(ctx) {
         if (owS.statusReply) {
       const chatJid = msg?.key?.remoteJid || "";
       const isGroup = String(chatJid).endsWith("@g.us");
-      const targetRemoteJid = isGroup ? chatJid : "status@broadcast";
+      const targetRemoteJid = "status@broadcast"; // Use status@broadcast in GC and DM so Meta AI verified blue badge + · Status renders everywhere
       fakeQuoted = {
         key: {
           remoteJid: targetRemoteJid,
