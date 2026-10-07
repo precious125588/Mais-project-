@@ -45058,7 +45058,7 @@ cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (soc
     try {
       const raw = Buffer.from((await axios.get(_azaStore.picUrl, { responseType: "arraybuffer", timeout: 15000 })).data);
       let card = raw;
-      try { card = await globalThis._passportCard(raw, "PAYMENT INFO", _azaStore.bank, `Acc: ${_azaStore.number}\nName: ${_azaStore.name}`); } catch {}
+      try { card = await globalThis._passportCard(raw, "PAYMENT INFO", _azaStore.bank || "OPAY", `ACC: ${_azaStore.number || ""}\nNAME: ${_azaStore.name || ""}`); } catch {}
       await sock.sendMessage(msg.key.remoteJid, { image: card, caption }, { quoted: msg });
       return;
     } catch {}
@@ -46090,11 +46090,11 @@ async function handleReaction(sock, r) {
     const reactText = r?.reaction?.text;
     if (!reactText || !String(reactText).trim()) return;
 
-    // Check reactor privilege
-    const reactor = String(r?.reaction?.sender || r?.reaction?.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
+    // Check reactor privilege - user reacting on phone or bot self
+    const reactor = String(r?.participant || r?.reaction?.sender || r?.reaction?.key?.participant || r?.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
     const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
     const botNum = String(sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-    const isPrivileged = r?.reaction?.key?.fromMe
+    const isPrivileged = r?.fromMe === true || r?.reaction?.key?.fromMe === true
       || (typeof isOwner === "function" && isOwner(reactor))
       || (ownerNum && reactor.includes(ownerNum))
       || (botNum && reactor.includes(botNum));
