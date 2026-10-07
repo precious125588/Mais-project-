@@ -33769,12 +33769,60 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
         return;
       }
 
-      const Jimp = require("jimp");
-      const jimpImage = await Jimp.read(buf);
-      const width = jimpImage.getWidth();
-      const height = jimpImage.getHeight();
-      const cropped = jimpImage.crop(0, 0, width, height);
-      const imgBuf = await cropped.scaleToFit(720, 720).getBufferAsync(Jimp.MIME_JPEG);
+      let imgBuf = null;
+
+      // 1. Primary: Sharp (maximum quality: 1080 canvas, MozJPEG, 4:4:4 chroma, EXIF auto-rotate, no crop)
+      try {
+        const sharp = require("sharp");
+        const instance = sharp(buf).rotate();
+        const meta = await instance.metadata();
+        const inW = meta.width || 0;
+        const inH = meta.height || 0;
+
+        // Target canvas size: up to 1080x1080; preserve original size if smaller than 1080 (min 720 for WhatsApp IQ)
+        const targetSide = Math.max(Math.min(Math.max(inW, inH), 1080), 720);
+
+        imgBuf = await sharp(buf)
+          .rotate()
+          .resize(targetSide, targetSide, {
+            fit: "contain",
+            background: { r: 0, g: 0, b: 0, alpha: 1 },
+            withoutEnlargement: inW <= targetSide && inH <= targetSide
+          })
+          .jpeg({
+            quality: 95,
+            chromaSubsampling: "4:4:4",
+            mozjpeg: true
+          })
+          .toBuffer();
+      } catch (_sharpErr) {
+        // Fallback: Jimp with high quality and 1:1 containment (not 720px lossy default)
+        try {
+          const Jimp = require("jimp");
+          const j = await Jimp.read(buf);
+          const inW = j.getWidth();
+          const inH = j.getHeight();
+          const maxDim = Math.max(inW, inH);
+          const targetSide = Math.max(Math.min(maxDim, 1080), 720);
+
+          const bg = new Jimp(targetSide, targetSide, 0x000000FF);
+          const scaled = j.clone().scaleToFit(targetSide, targetSide);
+          const x = Math.round((targetSide - scaled.getWidth()) / 2);
+          const y = Math.round((targetSide - scaled.getHeight()) / 2);
+          bg.composite(scaled, x, y);
+          imgBuf = await bg.quality(95).getBufferAsync(Jimp.MIME_JPEG);
+        } catch (_jimpErr) {
+          throw new Error("Image processing failed: " + (_sharpErr?.message || _jimpErr?.message || "unsupported image"));
+        }
+      }
+
+      // Verification before sending
+      if (!imgBuf || imgBuf.length < 500) {
+        throw new Error("Generated profile picture is empty or invalid");
+      }
+      if (imgBuf[0] !== 0xFF || imgBuf[1] !== 0xD8) {
+        throw new Error("Output image is not a valid JPEG");
+      }
 
       await sock.query({
         tag: "iq",
