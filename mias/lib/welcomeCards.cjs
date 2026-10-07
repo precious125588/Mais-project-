@@ -73,13 +73,11 @@ function _unfancy(str) {
 }
 
 function _sanitize(str) {
-  // v36b: KEEP styled Unicode as-is — 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺, ◉ ⦿ ⦾ ◍ ◌ ❂ ✺ ✹ ⊙ ◐ ◑ and
-  // emoji all render natively via the Noto/DejaVu font stack. Transliterating
-  // them to plain ASCII destroyed styled usernames, so _unfancy is no longer
-  // applied here (it remains exported for any legacy caller).
+  // Preserve \n so multi-line text (like ACC and NAME) renders on separate lines
   return String(str || '')
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/\r\n|\r/g, '\n')
+    .replace(/[^\S\r\n]+/g, ' ')
+    .replace(/[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F]/g, '')
     .trim();
 }
 
