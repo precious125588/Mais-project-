@@ -33658,26 +33658,12 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
       return Buffer.concat(chunks);
     };
 
-    const rawMsg = msg.message || {};
-    let ctx = rawMsg.extendedTextMessage?.contextInfo
-      || rawMsg.imageMessage?.contextInfo
-      || rawMsg.videoMessage?.contextInfo
-      || rawMsg.documentMessage?.contextInfo
-      || rawMsg.ephemeralMessage?.message?.extendedTextMessage?.contextInfo
-      || rawMsg.ephemeralMessage?.message?.imageMessage?.contextInfo
-      || null;
-    let quoted = ctx?.quotedMessage;
-    let qNode = quoted ? (__unwrapWaMsg(quoted) || quoted) : null;
-    if (qNode?.viewOnceMessage?.message) qNode = qNode.viewOnceMessage.message;
-    if (qNode?.viewOnceMessageV2?.message) qNode = qNode.viewOnceMessageV2.message;
-
-    const quotedImg = qNode?.imageMessage
-      || (qNode?.documentMessage && String(qNode.documentMessage.mimetype || "").startsWith("image/") ? qNode.documentMessage : null)
-      || (qNode?.stickerMessage ? qNode.stickerMessage : null);
-
-    const mNode = __unwrapWaMsg(rawMsg) || rawMsg;
-    const directImg = mNode?.imageMessage
-      || (mNode?.documentMessage && String(mNode.documentMessage.mimetype || "").startsWith("image/") ? mNode.documentMessage : null);
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    const quoted = ctx?.quotedMessage;
+    const qNode = __unwrapWaMsg(quoted) || quoted;
+    const quotedImg = qNode?.imageMessage || (qNode?.documentMessage && String(qNode.documentMessage.mimetype || "").startsWith("image/") ? qNode.documentMessage : null);
+    const mNode = __unwrapWaMsg(msg.message) || msg.message;
+    const directImg = mNode?.imageMessage || (mNode?.documentMessage && String(mNode.documentMessage.mimetype || "").startsWith("image/") ? mNode.documentMessage : null);
     let buf = null;
     if (quotedImg) {
       buf = await _dlStream(quotedImg, quotedImg.mimetype?.includes("document") ? "document" : "image").catch(() => null);
@@ -33769,16 +33755,11 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
       const cropped = jimpImage.crop(0, 0, width, height);
       const imgBuf = await cropped.scaleToFit(720, 720).getBufferAsync(Jimp.MIME_JPEG);
 
-      const targetUser = sock.user?.id ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : "@s.whatsapp.net";
-      try {
-        await sock.updateProfilePicture(targetUser, imgBuf);
-      } catch (_upErr) {
-        await sock.query({
-          tag: "iq",
-          attrs: { to: targetUser, type: "set", xmlns: "w:profile:picture" },
-          content: [{ tag: "picture", attrs: { type: "image" }, content: imgBuf }],
-        });
-      }
+      await sock.query({
+        tag: "iq",
+        attrs: { to: "@s.whatsapp.net", type: "set", xmlns: "w:profile:picture" },
+        content: [{ tag: "picture", attrs: { type: "image" }, content: imgBuf }],
+      });
 
       try { await react(sock, msg, "✅"); } catch {}
       await sendReply(sock, msg, "*FULL DP UPDATED*");
@@ -43315,8 +43296,7 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
         || msg.message?.videoMessage?.contextInfo?.quotedMessage
         || null;
       const t = String(q?.conversation || q?.extendedTextMessage?.text || q?.imageMessage?.caption || q?.videoMessage?.caption || q?.caption || "");
-      const tNorm = t.normalize("NFKD");
-      quotedIsSettings = /SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge/i.test(t) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE/i.test(tNorm);
+      quotedIsSettings = /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(t);
     } catch {}
     let pickerPending = false;
     try {
@@ -46121,14 +46101,10 @@ async function handleReaction(sock, r) {
     if (!reactText || !String(reactText).trim()) return;
 
     // Check reactor privilege - user reacting on phone or bot self
-    const isGroup = String(targetKey.remoteJid || "").endsWith("@g.us");
-    const reactor = String(r?.participant || r?.reaction?.sender || r?.reaction?.key?.participant || r?.key?.participant || (isGroup ? "" : targetKey.remoteJid) || "").replace(/:[0-9]+@/, "@");
+    const reactor = String(r?.participant || r?.reaction?.sender || r?.reaction?.key?.participant || r?.key?.participant || targetKey.remoteJid || "").replace(/:[0-9]+@/, "@");
     const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
     const botNum = String(sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-    // In DMs, reactions on received view-once messages are by the bot/owner on phone
-    const isPrivileged = !isGroup
-      || r?.fromMe === true
-      || r?.reaction?.key?.fromMe === true
+    const isPrivileged = r?.fromMe === true || r?.reaction?.key?.fromMe === true
       || (typeof isOwner === "function" && isOwner(reactor))
       || (ownerNum && reactor.includes(ownerNum))
       || (botNum && reactor.includes(botNum));
