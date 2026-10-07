@@ -29543,13 +29543,23 @@ cmd(["gst_legacy_disabled", "gstatus_legacy_disabled", "groupstatus_legacy_disab
     if (_parts[0]) {
       const _cand = _parts[0];
       const _isJid = _cand.includes("@g.us") || /vnd\.|lid:/i.test(_cand);
-      if (_isJid) { m_chat = _cand; _parts.shift(); }
-      else if (/^[\w .\-]{3,}$/.test(_cand)) {
+      const _isGcLink = /chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/i.test(_cand);
+      if (_isJid) {
+        m_chat = _cand;
+        _parts.shift();
+      } else if (_isGcLink) {
+        const _m = _cand.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/i);
+        try {
+          const _info = await sock.groupGetInviteInfo(_m[1]);
+          if (_info?.id) m_chat = _info.id.includes('@g.us') ? _info.id : `${_info.id}@g.us`;
+        } catch {}
+        _parts.shift();
+      } else if (/^[\w .\-]{3,}$/.test(_cand)) {
         const _res = await _gstResolveName(_cand);
         if (_res) { m_chat = _res; _parts.shift(); }
       }
     }
-    _textBody = _parts.join(" ").trim() || _gstRawArgs;
+    _textBody = _parts.join(" ").trim();
   }
   if (m_chat === m.key.remoteJid && (CONFIG && CONFIG.GST_DEST_JID || process.env && process.env.GST_DEST_JID)) {
     m_chat = (CONFIG && CONFIG.GST_DEST_JID) || process.env.GST_DEST_JID;
@@ -29723,7 +29733,7 @@ cmd(["gst_legacy_disabled", "gstatus_legacy_disabled", "groupstatus_legacy_disab
             else if (/audio/.test(mime)) {
                 let media = await _gstTimeout(quotedMsg.download(), 25000).catch(() => null);
                 if (!media || !media.length) { await devtrust.sendMessage(m.key.remoteJid, { react: { text: '❌', key: m.key } }); return reply('❌ Could not download audio.'); }
-                const _audMime = /ogg|opus/.test(mime) ? 'audio/ogg; codecs=opus' : 'audio/mpeg';
+                const _audMime = 'audio/ogg; codecs=opus';
                 let _audPosted = false;
                 // PRIMARY: generateWAMessageContent + relayMessage
                 try {
@@ -45058,7 +45068,7 @@ cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (soc
     try {
       const raw = Buffer.from((await axios.get(_azaStore.picUrl, { responseType: "arraybuffer", timeout: 15000 })).data);
       let card = raw;
-      try { card = await globalThis._passportCard(raw, "PAYMENT INFO", _azaStore.bank || "OPAY", `ACC: ${_azaStore.number || ""}\nNAME: ${_azaStore.name || ""}`); } catch {}
+      try { await react(sock, msg, "🌷").catch(() => {}); card = await globalThis._passportCard(raw, "PAYMENT INFO", _azaStore.bank || "OPAY", `ACC: ${_azaStore.number || ""}\nNAME: ${_azaStore.name || ""}`); } catch {}
       await sock.sendMessage(msg.key.remoteJid, { image: card, caption }, { quoted: msg });
       return;
     } catch {}
