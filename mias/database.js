@@ -22,6 +22,7 @@ const DB_FILES = {
   bans:         path.join(DB_DIR, "bans.json"),
   warns:        path.join(DB_DIR, "warns.json"),
   sudo:         path.join(DB_DIR, "sudo.json"),
+  sudoVip:      path.join(DB_DIR, "sudo_vip.json"),
   badwords:     path.join(DB_DIR, "badwords.json"),
   inventory:    path.join(DB_DIR, "inventory.json"),
   relationships:path.join(DB_DIR, "relationships.json"),
@@ -114,6 +115,7 @@ export function loadAllData() {
     bans:          loadMap(DB_FILES.bans),
     warns:         loadMap(DB_FILES.warns),
     sudo:          loadSet(DB_FILES.sudo),
+    sudoVip:       loadSet(DB_FILES.sudoVip),
     badwords:      loadMap(DB_FILES.badwords),
     inventory:     loadMap(DB_FILES.inventory),
     relationships: loadMap(DB_FILES.relationships),
@@ -138,6 +140,7 @@ export function saveAllData(stores) {
   saveMap(DB_FILES.bans,          stores.bans);
   saveMap(DB_FILES.warns,         stores.warns);
   saveSet(DB_FILES.sudo,          stores.sudo);
+  saveSet(DB_FILES.sudoVip,       stores.sudoVip);
   saveMap(DB_FILES.badwords,      stores.badwords);
   saveMap(DB_FILES.inventory,     stores.inventory);
   saveMap(DB_FILES.relationships, stores.relationships);
