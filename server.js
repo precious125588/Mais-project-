@@ -923,6 +923,35 @@ async function _autoLoadPairs() {
     } catch(e){ console.error('[AutoLoad]',e.message); }
 }
 
+// ── Scheduled restart: once every SCHEDULED_RESTART_HOURS (default 48) ───────
+// Long uptime slowly degrades the free tier. The restart waits for a quiet
+// window (no bot output for 15 minutes, no open pairing screen, no launch in
+// progress) so an active download is never cut off. If the window never opens,
+// it is forced 3 hours later. Exit code 1 makes Railway's ON_FAILURE policy
+// start the service again; the paired bots relaunch from disk on boot.
+const SCHEDULED_RESTART_HOURS = Number(process.env.SCHEDULED_RESTART_HOURS ?? 48);
+if (SCHEDULED_RESTART_HOURS > 0) {
+    const RESTART_AFTER_MS = SCHEDULED_RESTART_HOURS * 3600 * 1000;
+    const FORCE_AFTER_MS = RESTART_AFTER_MS + 3 * 3600 * 1000;
+    const QUIET_WINDOW_MS = 15 * 60 * 1000;
+    let _restartPending = false;
+    setInterval(() => {
+        if (_restartPending) return;
+        const uptimeMs = process.uptime() * 1000;
+        if (uptimeMs < RESTART_AFTER_MS) return;
+        const forced = uptimeMs >= FORCE_AFTER_MS;
+        const quiet = !_launcher || (Date.now() - _launcher.lastActivityAt()) >= QUIET_WINDOW_MS;
+        const busy = pairingSseMap.size > 0 || (_launcher ? _launcher.launchesInFlight() > 0 : false);
+        if (!forced && (!quiet || busy)) return;
+        _restartPending = true;
+        console.log(`🔁 Scheduled restart after ${SCHEDULED_RESTART_HOURS}h uptime (${forced ? 'forced' : 'quiet window'}).`);
+        try { logger.log('system', `Scheduled restart (${forced ? 'forced' : 'quiet window'}) after ${SCHEDULED_RESTART_HOURS}h`); } catch {}
+        try { registry.flush(); } catch {}
+        httpServer.close(() => process.exit(1));
+        setTimeout(() => process.exit(1), 5000);
+    }, 60 * 1000);
+}
+
 process.on('SIGTERM',()=>{ registry.flush();httpServer.close(()=>process.exit(0));setTimeout(()=>process.exit(0),5000); });
 process.on('uncaughtException',e=>{ const msg=safeErrorMessage(e); console.error('[uncaughtException]',msg);logger.error('system','Uncaught: '+msg); });
 process.on('unhandledRejection',r=>{ const msg=safeErrorMessage(r); console.error('[unhandledRejection]',msg);logger.error('system','Rejection: '+msg); });
