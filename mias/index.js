@@ -93,6 +93,7 @@ import { normalizeInviteCode, approvalPrompt, adminNumberList, parseAdminChoice 
 import { ensureDiskSpace, getMediaLimitBytes, isNoSpaceError } from "./lib/diskGuard.js";
 import { installSettingsCommand } from "./features/settingsCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
+import { runTikTokBulk, formatBulkSummary, bulkModeId } from "./features/ttBulk.js";
 import { installPlayCards, installPlayAudio, installPlayPickers, installPlaySearchPicker, installPlayOutputPicker, installPlayWrappers } from "./features/playCommands.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -19004,41 +19005,31 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
     // text can never fall into the direct-downloader (immediate media, no card).
     if (_ttUrls.length > 0) args = _ttUrls.slice();
     if (_ttUrls.length > 1) {
-      const _isAudioBatch = _ttMode === "audio";
-      const _isStickerBatch = ["sticker", "stickerize", "stik", "3.1", "3.2"].includes(_ttMode)
-        || parseTikTokMode(_ttMode)?.kind === "sticker";
-      // silent — no intermediate text
-      let _ttDone = 0, _ttFail = 0;
-      for (let _tti = 0; _tti < _ttUrls.length; _tti++) {
-        const _ttUrl = _ttUrls[_tti];
-        try {
-          let _ttDlUrl = null;
-          try { const _r = await prexzyGet("/download/tiktok", { url: _ttUrl }); const _d = _r.data; if (_r.ok && _d) _ttDlUrl = _isAudioBatch ? (_d?.data?.music||_d?.data?.wmplay||_d?.data?.play) : (_d?.data?.hdplay||_d?.data?.play||_d?.hdplay||_d?.play||_d?.video||_d?.url); } catch {}
-          if (!_ttDlUrl) { try { const _tw = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(_ttUrl)}&hd=1`, { timeout: 20000 }); if (_tw.data?.data?.play) _ttDlUrl = _isAudioBatch ? (_tw.data.data.music||_tw.data.data.play) : (_tw.data.data.hdplay||_tw.data.data.play); } catch {} }
-          if (!_ttDlUrl) { _ttFail++; continue; }
-          const _ttBuf = Buffer.from((await axios.get(_ttDlUrl, { responseType: "arraybuffer", timeout: 90000, headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" }, maxRedirects: 10 })).data);
-          if (_ttBuf.length < 4096) { _ttFail++; continue; }
-          const _ttCap = `🎵 *TikTok* (${_tti+1}/${_ttUrls.length})`;
-          if (_isStickerBatch) {
-            const _sticker = await createStickerFromBuffer(_ttBuf, {
+      // One provider request per link, the exact format asked for, MP4 checks
+      // before sending, and a clear reason for every failed link.
+      const _bulk = await runTikTokBulk({
+        urls: _ttUrls,
+        modeId: bulkModeId(_ttMode),
+        deps: { axiosImpl: axios },
+        send: async ({ buf, mode, index, total }) => {
+          const _cap = `🎵 *TikTok* (${index}/${total})`;
+          if (mode.kind === "sticker") {
+            const _sticker = await createStickerFromBuffer(buf, {
               mediaType: "video/mp4",
               pack: CONFIG.BOT_NAME || "MIAS",
               author: CONFIG.OWNER_NAME || "MIAS Bot",
             });
             await sock.sendMessage(jid, { sticker: _sticker, isAnimated: true }, { quoted: msg });
-          } else if (_isAudioBatch) {
-            await sock.sendMessage(jid, { audio: _ttBuf, mimetype: "audio/mpeg", ptt: false, fileName: `tiktok_${Date.now()}.mp3` }, { quoted: msg });
+          } else if (mode.kind === "audio") {
+            await sock.sendMessage(jid, { audio: buf, mimetype: "audio/mpeg", ptt: false, fileName: `tiktok_${Date.now()}.mp3` }, { quoted: msg });
           } else {
-            const _ttWm = await _addVideoWatermark(_ttBuf, "TT");
-            try { await sock.sendMessage(jid, { video: _ttWm, mimetype: "video/mp4", caption: _ttCap }, { quoted: msg }); }
-            catch { await sock.sendMessage(jid, { document: _ttWm, mimetype: "video/mp4", fileName: `tiktok_${Date.now()}.mp4`, caption: _ttCap }, { quoted: msg }); }
+            try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: _cap }, { quoted: msg }); }
+            catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `tiktok_${Date.now()}.mp4`, caption: _cap }, { quoted: msg }); }
           }
-          _ttDone++;
-        } catch { _ttFail++; }
-        if (_tti < _ttUrls.length - 1) await new Promise(r => setTimeout(r, 1200));
-      }
-      await react(sock, msg, _ttFail === _ttUrls.length ? "❌" : "✅");
-      await sendReply(sock, msg, `🎵 *Batch done!*  ✅ ${_ttDone} sent  ❌ ${_ttFail} failed`);
+        },
+      });
+      await react(sock, msg, _bulk.sent === 0 ? "❌" : "✅");
+      await sendReply(sock, msg, formatBulkSummary(_bulk));
       return;
     }
     // ── Single URL (original flow below) ────────────────────────────────────
@@ -44310,19 +44301,9 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     if (pick === "1" || pick === "2") {
       const isVip = pick === "2";
       if (typeof sudoUsers !== "undefined") sudoUsers.add(tNum);
-      try {
-        const fs = require("fs");
-        const sudoPath = "./database/sudo.json";
-        let sList = [];
-        if (fs.existsSync(sudoPath)) {
-          try { sList = JSON.parse(fs.readFileSync(sudoPath, "utf8")); } catch (_) { sList = []; }
-        }
-        const sJid = tNum + "@s.whatsapp.net";
-        if (!sList.includes(sJid)) {
-          sList.push(sJid);
-          fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
-        }
-      } catch {}
+      // Persist through the store the bot loads on boot (saveAllData -> sudo.json).
+      // The old code wrote a different file that was never read back.
+      try { if (typeof saveNow === "function") saveNow(); } catch {}
       _sudoPending.delete(key);
       _sudoPending.delete(jid);
       try { await react(sock, msg, "✅"); } catch {}
@@ -44330,15 +44311,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       return true;
     } else if (pick === "3") {
       if (typeof sudoUsers !== "undefined") sudoUsers.delete(tNum);
-      try {
-        const fs = require("fs");
-        const sudoPath = "./database/sudo.json";
-        if (fs.existsSync(sudoPath)) {
-          let sList = JSON.parse(fs.readFileSync(sudoPath, "utf8"));
-          sList = sList.filter(u => !u.includes(tNum));
-          fs.writeFileSync(sudoPath, JSON.stringify(sList, null, 2));
-        }
-      } catch {}
+      try { if (typeof saveNow === "function") saveNow(); } catch {}
       _sudoPending.delete(key);
       _sudoPending.delete(jid);
       try { await react(sock, msg, "✅"); } catch {}
