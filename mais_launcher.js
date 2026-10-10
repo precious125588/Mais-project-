@@ -4,6 +4,7 @@
 const { spawn } = require('child_process');
 const path  = require('path');
 const fs    = require('fs');
+const os    = require('os');
 const chalk = require('chalk');
 
 let registry;
@@ -12,7 +13,30 @@ try { registry = require('./nexstore/sessionRegistry'); } catch { registry = nul
 const ownership = require('./sessionOwnership');
 
 const MIAS_ENTRY    = path.join(__dirname, 'mias', 'index.js');
-const MAX_INSTANCES = parseInt(process.env.MAX_INSTANCES || '50', 10);
+// Each MIAS child can hold a large heap. On a small container (Railway free
+// tier) a dozen children plus one big download exceeds the memory limit, the
+// platform OOM-kills the whole container, and every user is restarted at once.
+// The instance cap is therefore derived from the container's real memory
+// limit (cgroup v2/v1 or total RAM), and MAX_INSTANCES can only lower it.
+const CHILD_BUDGET_MB = Math.max(150, parseInt(process.env.BOT_CHILD_BUDGET_MB || '250', 10));
+function _memoryLimitBytes() {
+    for (const f of ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']) {
+        try {
+            const v = fs.readFileSync(f, 'utf8').trim();
+            const n = Number(v);
+            if (v && v !== 'max' && n > 0 && n <= os.totalmem()) return n;
+        } catch {}
+    }
+    return os.totalmem();
+}
+function _instanceCap() {
+    const requested = Math.max(1, parseInt(process.env.MAX_INSTANCES || '50', 10));
+    const memMb = _memoryLimitBytes() / (1024 * 1024);
+    const memCap = Math.max(1, Math.floor((memMb * 0.8) / CHILD_BUDGET_MB));
+    return Math.min(requested, memCap);
+}
+const MAX_INSTANCES = _instanceCap();
+console.log(`🧮 Bot instance cap: ${MAX_INSTANCES} (memory-based, ${CHILD_BUDGET_MB}MB per bot)`);
 const MAX_BACKOFF_MS = 5 * 60 * 1000;
 
 const running = new Map(); // jid -> { proc, sessionDir, startedAt, restartCount }
@@ -54,7 +78,7 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
         console.log(chalk.gray(`↪ MAIS already running for ${number}`));
         return running.get(number);
     }
-    if (running.size >= MAX_INSTANCES) throw new Error(`MAX_INSTANCES (${MAX_INSTANCES}) reached`);
+    if (running.size >= MAX_INSTANCES) throw new Error(`Bot limit reached (${MAX_INSTANCES} on this server's memory). Other numbers stay paired; upgrade RAM or raise BOT_CHILD_BUDGET_MB to run more.`);
     if (!fs.existsSync(sessionDir))   throw new Error(`Session dir missing: ${sessionDir}`);
 
     const existing     = running.get(number);
@@ -113,8 +137,10 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
     );
 
     const tag = chalk.magenta(`[MAIS:${number.split('@')[0]}]`);
-    proc.stdout.on('data', d => process.stdout.write(`${tag} ${d}`));
-    proc.stderr.on('data', d => process.stderr.write(`${tag} ${d}`));
+    // Output timestamps tell the scheduled restart when a bot is busy.
+    const touch = () => { const e = running.get(number); if (e) e.lastOutputAt = Date.now(); };
+    proc.stdout.on('data', d => { touch(); process.stdout.write(`${tag} ${d}`); });
+    proc.stderr.on('data', d => { touch(); process.stderr.write(`${tag} ${d}`); });
 
     proc.on('exit', (code, sig) => {
         console.log(chalk.yellow(`${tag} exited (code=${code} sig=${sig})`));
@@ -122,13 +148,10 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
         running.delete(number);
         if (registry) { try { registry.updateStatus(number,'disconnected'); } catch {} }
 
-        // Full-server restart request from child
-        if (code === 76) {
-            console.log(chalk.red.bold(`🛑 ${tag} requested FULL-SERVER restart.`));
-            for (const [,rr] of running) { try { rr.proc.kill('SIGTERM'); } catch {} }
-            setTimeout(() => process.exit(0), 1500);
-            return;
-        }
+        // Exit 76 used to kill every bot and the whole server. One child asking
+        // for that took all users offline, so it is now an ordinary exit for
+        // that one bot. Whole-server restarts only happen in the quiet-window
+        // schedule in server.js.
 
         // A second MIAS child refused to open the same auth directory because
         // another live process owns its runtime lock. Restarting it would
@@ -182,7 +205,7 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
     // it or delete its creds while this process is alive.
     try { ownership.handOffToBot(number, safeEnvOverrides.BOT_ID || null); } catch {}
 
-    const entry = { proc, sessionDir, startedAt: Date.now(), restartCount, envOverrides };
+    const entry = { proc, sessionDir, startedAt: Date.now(), lastOutputAt: Date.now(), restartCount, envOverrides };
     running.set(number, entry);
     paused.delete(number); // clear paused flag on fresh launch
     if (registry) { try { registry.updateStatus(number,'connected'); } catch {} }
@@ -290,5 +313,14 @@ function launch(number, sessionDir, envOverrides = {}) {
     return p;
 }
 
+// Used by the scheduled restart: the newest output from any running bot, and
+// how many launches are still starting.
+function lastActivityAt() {
+    let last = 0;
+    for (const [, r] of running) last = Math.max(last, r.lastOutputAt || 0, r.startedAt || 0);
+    return last;
+}
+function launchesInFlight() { return _inFlight.size; }
+
 process.on('exit', () => { for (const [,r] of running) { try { r.proc.kill('SIGTERM'); } catch {} } });
-module.exports = { launch, stop, restart, pause, resume, isPaused, list, listAll };
+module.exports = { launch, stop, restart, pause, resume, isPaused, list, listAll, lastActivityAt, launchesInFlight };
