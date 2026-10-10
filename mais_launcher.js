@@ -350,5 +350,28 @@ function lastActivityAt() {
 }
 function launchesInFlight() { return _inFlight.size; }
 
+// ── .delpair support ────────────────────────────────────────────────────────
+// Removes one paired number completely: stops its bot (no auto-restart),
+// releases its session ownership, drops its registry and bot-selection rows,
+// and deletes its session folder. Runs when a bot child drops a .delpair request
+// (see nexstore/adminRequests.js).
+async function deletePairing(digits) {
+    const jid = `${digits}@s.whatsapp.net`;
+    const sessionDir = running.get(jid)?.sessionDir || path.join(__dirname, 'nexstore', 'pairing', digits);
+    if (!fs.existsSync(path.join(sessionDir, 'creds.json')) && !running.has(jid)) {
+        return { ok: false, message: `+${digits} is not paired.` };
+    }
+    pause(jid);                                     // stops the bot and blocks auto-restart
+    await new Promise(r => setTimeout(r, 3000));    // let the child exit and release its files
+    paused.delete(jid);
+    try { ownership.release(jid); } catch {}
+    try { if (registry) registry.unregister(jid); } catch {}
+    try { require('./deploy/botSelectionStore').clearSelection(jid); } catch {}
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); }
+    catch (e) { return { ok: false, message: `Stopped +${digits}, but could not delete its session: ${e.message}` }; }
+    return { ok: true, message: `Removed +${digits}. Its bot is stopped and its session is deleted.` };
+}
+require('./nexstore/adminRequests').createWatcher({ deletePairing });
+
 process.on('exit', () => { for (const [,r] of running) { try { r.proc.kill('SIGTERM'); } catch {} } });
 module.exports = { launch, stop, restart, pause, resume, isPaused, list, listAll, lastActivityAt, launchesInFlight };

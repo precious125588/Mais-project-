@@ -92,6 +92,7 @@ import { createStatusEditFlow } from "./lib/statusEditFlow.js";
 import { normalizeInviteCode, approvalPrompt, adminNumberList, parseAdminChoice } from "./features/joinApproval.js";
 import { ensureDiskSpace, getMediaLimitBytes, isNoSpaceError } from "./lib/diskGuard.js";
 import { installSettingsCommand } from "./features/settingsCommands.js";
+import { installPairCommands } from "./features/pairCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
 import { runTikTokBulk, formatBulkSummary, bulkModeId } from "./features/ttBulk.js";
 import { installPlayCards, installPlayAudio, installPlayPickers, installPlaySearchPicker, installPlayOutputPicker, installPlayWrappers } from "./features/playCommands.js";
@@ -44242,6 +44243,13 @@ installSudoCommand({
   _cleanNum: (...a) => _cleanNum(...a),
   getBotPic: (...a) => getBotPic(...a),
   getSender: (...a) => getSender(...a),
+});
+
+// .listpair / .delpair (creator only): now in features/pairCommands.js
+installPairCommands({
+  cmd: (...a) => cmd(...a),
+  sendReply: (...a) => sendReply(...a),
+  CONFIG,
 });
 
 // numeric reply handler for the sudo card
