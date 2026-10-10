@@ -1474,6 +1474,8 @@ const shopItems = new Map([
 ]);
 const bannedUsers = new Map();
 const sudoUsers = new Set();
+// VIP sudo = sudo that also works in groups. Sudo users not in this set are DM-only.
+const sudoVipUsers = new Set();
 const badWords = new Map();
 const groupActivity = new Map();
 // Per-group → per-user → array of message timestamps (ms) within last 24h
@@ -1598,6 +1600,7 @@ _mergeMap(userFaction, _dbData.userfaction);
 _mergeMap(cryptoPortfolios, _dbData.crypto);
 _mergeMap(groupRules, _dbData.grouprules);
 for (const u of _dbData.sudo) sudoUsers.add(u);
+for (const u of (_dbData.sudoVip || [])) sudoVipUsers.add(u);
 for (const [k, v] of _dbData.badwords) badWords.set(k, v instanceof Set ? v : new Set(v));
 console.log("✅ Persistent data merged into memory stores");
 
@@ -3289,7 +3292,7 @@ Save my contact:` }).catch(() => {});
           // 2) Auto-download / Status forward / Reply-to-link hook (only for non-cmd messages)
           try {
             const _kSender = getSender(msg);
-            const _kIsOwner = msg.key.fromMe || isOwner(_kSender) || isSudo(_kSender);
+            const _kIsOwner = msg.key.fromMe || isOwner(_kSender) || isSudoIn(_kSender, msg.key.remoteJid);
              const _kIsCmd = isCommandBody(body);
             if (!_kIsCmd) {
               // v14 FIX: also check matchedText — WhatsApp link-preview puts the URL there
@@ -3524,7 +3527,7 @@ Save my contact:` }).catch(() => {});
               const _gjid = msg.key.remoteJid;
               const _gset = getSettings(_gjid);
               const _author = getMessageParticipant(msg) || resolveLid(msg.key.participant || msg.participant || "") || getSender(msg);
-              const _isOwnerOrSudo = isOwner(_author) || (typeof isSudo === "function" && isSudo(_author));
+              const _isOwnerOrSudo = isOwner(_author) || (typeof isSudo === "function" && isSudoVip(_author));
               let _isAdmin = false;
               if (_gset?.antiLink || _gset?.antiSticker) {
                 try { _isAdmin = await isGroupAdmin(sock, _gjid, _author); } catch {}
@@ -3609,7 +3612,7 @@ ${_lmBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
               const _atset = getSettings(_atjid);
               if (_atset?.autoTag) {
                 const _atAuthor = getMessageParticipant(msg) || resolveLid(msg.key.participant || msg.participant || "") || getSender(msg);
-                const _atIsOwnerSudo = isOwner(_atAuthor) || (typeof isSudo === "function" && isSudo(_atAuthor));
+                const _atIsOwnerSudo = isOwner(_atAuthor) || (typeof isSudo === "function" && isSudoVip(_atAuthor));
                 // v4.9.9: Skip admins and owner so autotag doesn't fire on every admin message
                 let _atIsAdmin = false;
                 if (!_atIsOwnerSudo) {
@@ -3635,7 +3638,7 @@ ${_lmBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
               const _bgset = getSettings(_bgjid);
               if (_bgset?.antiBad) {
                 const _bgAuthor = resolveLid(msg.key.participant || msg.participant || "");
-                const _bgIsOwnerOrSudo = isOwner(_bgAuthor) || (typeof isSudo === "function" && isSudo(_bgAuthor));
+                const _bgIsOwnerOrSudo = isOwner(_bgAuthor) || (typeof isSudo === "function" && isSudoVip(_bgAuthor));
                 if (!_bgIsOwnerOrSudo) {
                   const _groupWords = badWords.get(_bgjid) || new Set();
                   const _bodyLower = body.toLowerCase();
@@ -3668,7 +3671,7 @@ ${_lmBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
               const _spSet = getSettings(_spJid);
               if (_spSet?.antiSpam) {
                 const _spAuthor = resolveLid(msg.key.participant || msg.participant || "");
-                const _spIsOwnerOrSudo = isOwner(_spAuthor) || (typeof isSudo === "function" && isSudo(_spAuthor));
+                const _spIsOwnerOrSudo = isOwner(_spAuthor) || (typeof isSudo === "function" && isSudoVip(_spAuthor));
                 if (!_spIsOwnerOrSudo) {
                   const _spKey = _spJid + "::" + _spAuthor;
                   const _spNow = Date.now();
@@ -3702,7 +3705,7 @@ ${_lmBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
               const _atSet = getSettings(_atJid);
               if (_atSet?.antiTag) {
                 const _atAuthor = resolveLid(msg.key.participant || msg.participant || "");
-                const _atIsOwnerOrSudo = isOwner(_atAuthor) || (typeof isSudo === "function" && isSudo(_atAuthor));
+                const _atIsOwnerOrSudo = isOwner(_atAuthor) || (typeof isSudo === "function" && isSudoVip(_atAuthor));
                 let _atIsAdmin = false;
                 try { _atIsAdmin = await isGroupAdmin(sock, _atJid, _atAuthor); } catch {}
                 if (!_atIsOwnerOrSudo && !_atIsAdmin) {
@@ -3895,7 +3898,7 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
           // those replies before the prefix check discards them.
           {
             const _lgSender = getSender(msg);
-            const _lgFromOwner = msg.key.fromMe || isOwner(_lgSender) || (typeof isSudo === "function" && isSudo(_lgSender));
+            const _lgFromOwner = msg.key.fromMe || isOwner(_lgSender) || (typeof isSudo === "function" && isSudoIn(_lgSender, msg.key.remoteJid));
             if (_lgFromOwner && typeof globalThis._handleLogoutReply === "function") {
               try {
                 const _logoutHandled = await globalThis._handleLogoutReply(sock, msg);
@@ -3994,7 +3997,7 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
           }
 
           const sender = getSender(msg);
-          const fromOwner = msg.key.fromMe || isOwner(sender) || (typeof isSudo === "function" && isSudo(sender));
+          const fromOwner = msg.key.fromMe || isOwner(sender) || (typeof isSudo === "function" && isSudoIn(sender, msg.key.remoteJid));
 
           // ── Force Private Mode gate for commands ──────────────────────────────
           // Mirrors the non-command gate in kevdraMessageHook. When forcePrivate is ON,
@@ -4907,6 +4910,9 @@ const isOwner = jid => {
   return false;
 };
 const isSudo      = jid => isOwner(jid) || sudoUsers.has(_cleanNum(resolveLid(jid)));
+// VIP sudo works in groups; plain sudo (DM only) works in DMs only.
+const isSudoVip   = jid => isOwner(jid) || sudoVipUsers.has(_cleanNum(resolveLid(jid)));
+const isSudoIn    = (jid, chatJid) => String(chatJid || "").endsWith("@g.us") ? isSudoVip(jid) : isSudo(jid);
 function getConfiguredOwnerNumber() {
   return (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") || _cleanNum(_botJid || "") || "";
 }
@@ -4931,7 +4937,7 @@ function shouldSilenceForPrivateMode(msg) {
   if (!msg?.key || msg.key.fromMe) return false;
   const sender = getSender(msg);
   const privileged = isOwner(sender)
-    || (typeof isSudo === "function" && isSudo(sender))
+    || (typeof isSudo === "function" && isSudoIn(sender, msg.key.remoteJid))
     || (typeof isCreator === "function" && isCreator(sender));
   if (privileged) return false;
   // ── ALWAYS-PUBLIC COMMANDS — work even in private mode ──
@@ -6467,7 +6473,7 @@ function saveNow() {
     _saveNowTimer = null;
     try {
       saveAllData({
-        economy, settings, warns, bans: bannedUsers, sudo: sudoUsers,
+        economy, settings, warns, bans: bannedUsers, sudo: sudoUsers, sudoVip: sudoVipUsers,
         badwords: badWords, inventory, relationships, factions,
         userfaction: userFaction, crypto: cryptoPortfolios, grouprules: groupRules,
       });
@@ -14932,29 +14938,40 @@ cmd("whois", { desc: "Full user info", category: "INFO" }, async (sock, msg, arg
 cmd(["getpp","getdp","dp","pfp2"], { desc: "Get profile picture — .getpp @mention | .getpp <number> | reply to message", category: "INFO" }, async (sock, msg, args) => {
   await react(sock, msg, "📷");
   const chatJid = msg.key.remoteJid || "";
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  const mentioned = ctx?.mentionedJid?.[0] || ctx?.participant;
-  let target;
+  // getContextInfo unwraps every wrapper (disappearing, view-once, captions), so quotes are still seen.
+  const ctx = getContextInfo(msg);
+  const quoted = !!ctx?.quotedMessage;
+  const digits = String(args[0] || "").replace(/[^0-9]/g, "");
+  let rawTarget = "";
 
-  // Priority 1: @mention or reply quote
-  if (mentioned) {
-    target = toStandardJid(resolveLid(mentioned));
+  if (digits.length >= 7) {                          // 1. explicit number
+    rawTarget = digits + "@s.whatsapp.net";
+  } else if (ctx?.mentionedJid?.[0]) {               // 2. @mention
+    rawTarget = ctx.mentionedJid[0];
+  } else if (quoted) {                               // 3. reply to someone
+    // Never fall back to the sender here: that is what showed your own DP.
+    rawTarget = ctx.participant || (!isGroup(msg) ? chatJid : "");
+    if (!rawTarget) {
+      await sendReply(sock, msg, `❌ I couldn't read who sent that message. Use *${CONFIG.PREFIX}getpp <number>* instead.`);
+      return;
+    }
+  } else if (!isGroup(msg) && !msg.key.fromMe) {    // 4. DM: the chat partner
+    rawTarget = chatJid;
   }
-  // Priority 2: phone number in args (e.g. .getpp 2349068551055)
-  else if (args[0] && /^[0-9]/.test(args[0].replace(/[^0-9]/g, ""))) {
-    const _n = args[0].replace(/[^0-9]/g, "");
-    if (_n.length >= 7) target = _n + "@s.whatsapp.net";
+
+  let target = rawTarget ? toStandardJid(resolveLid(rawTarget)) : "";
+  // Still a LID in a group: map it to the real number from group metadata.
+  if (target.endsWith("@lid") && isGroup(msg)) {
+    try {
+      const meta = await sock.groupMetadata(chatJid);
+      updateLidMappingsFromMeta(meta);
+      const p = (meta.participants || []).find(x => x.id === rawTarget || x.id === target);
+      const real = p?.pn || p?.phoneNumber;
+      if (real) target = toStandardJid(real.includes("@") ? real : real + "@s.whatsapp.net");
+    } catch {}
   }
-  // Priority 3: in DM — use the chat partner (not self)
-  else if (!isGroup(msg) && !msg.key.fromMe) {
-    target = toStandardJid(resolveLid(chatJid));
-  }
-  // Priority 4: self
-  else {
-    const resolved = await resolveCommandTarget(sock, msg, []);
-    const fallback = toStandardJid(resolveLid(getSender(msg) || ""));
-    target = toStandardJid(resolveLid(resolved?.targetJid || fallback || ""));
-  }
+  // 5. Nothing given (e.g. plain .getpp): your own picture.
+  if (!target) target = toStandardJid(resolveLid(getSender(msg) || ""));
 
   if (!target) { await sendReply(sock, msg, `❌ Could not resolve target.\n\nUsage: *${CONFIG.PREFIX}getpp @mention* | *${CONFIG.PREFIX}getpp <number>* | reply to a message`); return; }
 
@@ -17234,6 +17251,7 @@ installSetsudoCommand({
     _dt = toStandardJid(resolveLid(_dt));
     const _dNum = _dt.split("@")[0];
     sudoUsers.delete(_dNum);
+    sudoVipUsers.delete(_dNum);
     saveNow();
     const _mJid = mentions[0] || _dt;
     const _mNum = String(_mJid).split("@")[0];
@@ -44301,6 +44319,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     if (pick === "1" || pick === "2") {
       const isVip = pick === "2";
       if (typeof sudoUsers !== "undefined") sudoUsers.add(tNum);
+      if (typeof sudoVipUsers !== "undefined") { if (isVip) sudoVipUsers.add(tNum); else sudoVipUsers.delete(tNum); }
       // Persist through the store the bot loads on boot (saveAllData -> sudo.json).
       // The old code wrote a different file that was never read back.
       try { if (typeof saveNow === "function") saveNow(); } catch {}
@@ -44311,6 +44330,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       return true;
     } else if (pick === "3") {
       if (typeof sudoUsers !== "undefined") sudoUsers.delete(tNum);
+      if (typeof sudoVipUsers !== "undefined") sudoVipUsers.delete(tNum);
       try { if (typeof saveNow === "function") saveNow(); } catch {}
       _sudoPending.delete(key);
       _sudoPending.delete(jid);
