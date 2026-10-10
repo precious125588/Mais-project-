@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  fetchTikTokInfo,
   normalizeTikTokMode,
   parseTikTokMode,
   selectTikTokUrl,
@@ -30,6 +31,20 @@ test("TikTok picker chooses the requested media URL", () => {
   assert.equal(selectTikTokUrl(info, parseTikTokMode("1.1")), info.videoSd);
   assert.equal(selectTikTokUrl(info, parseTikTokMode("2.3")), info.audio);
   assert.equal(selectTikTokUrl(info, parseTikTokMode("3.1")), info.videoHd);
+});
+
+test("TikTok never substitutes another quality or watermark", () => {
+  const sdOnly = { videoSd: "https://cdn.example/sd.mp4", audio: "https://cdn.example/a.mp3" };
+  assert.equal(selectTikTokUrl(sdOnly, parseTikTokMode("1.3")), null);
+  assert.equal(selectTikTokUrl(sdOnly, parseTikTokMode("1.6")), null);
+  assert.equal(selectTikTokUrl(sdOnly, parseTikTokMode("1.1")), "https://cdn.example/sd.mp4");
+});
+
+test("TikTok info makes one provider request and no second link", async () => {
+  const calls = [];
+  const failing = async (url) => { calls.push(url); return { ok: false, status: 500, json: async () => ({}) }; };
+  await assert.rejects(fetchTikTokInfo("https://vm.tiktok.com/abc/", failing), /HTTP 500/);
+  assert.equal(calls.length, 1);
 });
 
 test("disk guard exposes usable space and classifies ENOSPC", () => {

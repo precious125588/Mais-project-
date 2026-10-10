@@ -19752,72 +19752,34 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
     }
     // no intermediate status message — just 🌀 → ✅ reactions
 
-    // Helper: validate downloaded buffer is a real MP4/audio file
-    const _isValidVideo = (buf) => {
-      if (!buf || buf.length < 4096) return false;
-      // MP4 / M4V: bytes 4-8 = "ftyp"
-      if (buf.slice(4, 8).toString("ascii") === "ftyp") return true;
-      // Some MP4 streams start with moov/mdat atoms
-      const hdr = buf.slice(0, 12).toString("ascii");
-      if (hdr.includes("ftyp") || hdr.includes("mdat") || hdr.includes("moov")) return true;
-      return false;
-    };
-    const _isValidAudio = (buf) => {
-      if (!buf || buf.length < 2048) return false;
-      if (buf.slice(0, 3).toString("utf8") === "ID3") return true;
-      if (buf[0] === 0xFF && (buf[1] & 0xE0) === 0xE0) return true;
-      if (buf.slice(0, 4).toString("ascii") === "OggS") return true;
-      if (buf.slice(4, 8).toString("ascii") === "ftyp") return true;
-      return false;
-    };
+    // The file must be a real MP4 or audio file. One link, one attempt, no retry.
+    const _isValidVideo = (buf) => !!buf && buf.length > 12 && buf.slice(4, 8).toString("ascii") === "ftyp";
+    const _isValidAudio = (buf) => !!buf && buf.length > 2048 && (
+      buf.slice(0, 3).toString("latin1") === "ID3" ||
+      (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) ||
+      buf.slice(0, 4).toString("ascii") === "OggS" ||
+      buf.slice(4, 8).toString("ascii") === "ftyp");
 
     try {
-      let dlUrl = null;
-
-      // 0) PRIMARY: DavidCyril
-      for (const _dcEp of ["/download/tiktok", "/download/tiktokv2", "/download/tiktokv3", "/download/tiktokv4"]) {
-        if (dlUrl) break;
-        try { const r = await dcGet(_dcEp, { url }, 20000); if (r.ok) dlUrl = extractDcTiktok(r.data, isAudio); } catch {}
+      // The format asked for; with no format given it is HD video.
+      const _ttDirectMode = parseTikTokMode(_ttMode || (isAudio ? "audio" : isSticker ? "sticker" : "1.3"));
+      const _ttInfo = await fetchTikTokInfo(url);
+      const _ttDirectUrl = _ttDirectMode ? selectTikTokUrl(_ttInfo, _ttDirectMode) : null;
+      if (!_ttDirectUrl) {
+        await sendReply(sock, msg, `❌ ${_ttDirectMode?.id || "This format"} is not available for this TikTok, so nothing was sent.`);
+        await react(sock, msg, "❌");
+        return;
       }
-
-      // 1) Prexzyvilla fallback
-      if (!dlUrl) {
-        const r = await prexzyGet("/download/tiktok", { url });
-        const d = r.data;
-        if (r.ok && d) dlUrl = isAudio ? (d?.data?.music || d?.data?.wmplay || d?.data?.play || d?.music || d?.audio) : (d?.data?.hdplay || d?.data?.play || d?.hdplay || d?.play || d?.video || d?.url);
+      let buf;
+      try {
+        const _res = await axios.get(_ttDirectUrl, { responseType: "arraybuffer", timeout: 90000, headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" }, maxRedirects: 10 });
+        buf = Buffer.from(_res.data);
+      } catch (_dlErr) {
+        throw new Error(`TikTok media download failed: ${_dlErr?.message || _dlErr}`);
       }
-
-      // 2) TikWM API
-      if (!dlUrl) { try { const { data } = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, { timeout: 20000 }); if (data?.data?.play) dlUrl = isAudio ? (data.data.music || data.data.play) : (data.data.hdplay || data.data.play); } catch {} }
-
-      // 3) DavidCyril TikTok downloaders (multiple fallbacks)
-      if (!dlUrl) { try { const r = await dcGet("/download/tiktok", { url }, 20000); if (r.ok) dlUrl = extractDcTiktok(r.data, isAudio); } catch {} }
-      if (!dlUrl) { try { const r = await dcGet("/download/tiktokv2", { url }, 20000); if (r.ok) dlUrl = extractDcTiktok(r.data, isAudio); } catch {} }
-      if (!dlUrl) { try { const r = await dcGet("/download/tiktokv3", { url }, 20000); if (r.ok) dlUrl = extractDcTiktok(r.data, isAudio); } catch {} }
-      if (!dlUrl) { try { const r = await dcGet("/download/tiktokv4", { url }, 20000); if (r.ok) dlUrl = extractDcTiktok(r.data, isAudio); } catch {} }
-      if (!dlUrl) { try { const r = await dcGet("/download/savetik", { url }, 20000); if (r.ok) { const d = r.data?.data || r.data; dlUrl = isAudio ? (d?.music || d?.audio) : (d?.video || d?.url); } } catch {} }
-      if (!dlUrl) { try { const r = await dcGet("/download/vibetik", { url }, 20000); if (r.ok) { const d = r.data?.data || r.data; dlUrl = isAudio ? (d?.music || d?.audio) : (d?.video || d?.url); } } catch {} }
-      if (!dlUrl) { try { const r = await dcGet("/download/tiktokdl-rapid", { url }, 20000); if (r.ok) dlUrl = extractDcTiktok(r.data, isAudio); } catch {} }
-
-      // 4) Cobalt
-      if (!dlUrl) dlUrl = await _cobaltDl(url, { downloadMode: isAudio ? "audio" : "auto" });
-
-      if (!dlUrl) { await sendReply(sock, msg, `❌ Could not download. Try a direct TikTok video URL.`); await react(sock, msg, "❌"); return; }
-
-
-      // Download with validation — retry a different URL if buffer is not valid media
-      let buf = null;
-      const _urlsToTry = [dlUrl];
-      for (const _tryUrl of _urlsToTry) {
-        try {
-          const _res = await axios.get(_tryUrl, { responseType: "arraybuffer", timeout: 90000, headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" }, maxRedirects: 10 });
-          const _b = Buffer.from(_res.data);
-          const _valid = isAudio ? _isValidAudio(_b) : _isValidVideo(_b);
-          // v-fix: require proper magic bytes OR very large buffer (>600KB) to avoid HTML error pages
-          if (_valid || _b.length > 600000) { buf = _b; break; }
-        } catch {}
+      if (!(isAudio ? _isValidAudio(buf) : _isValidVideo(buf))) {
+        throw new Error(`TikTok returned a file that is not a playable ${isAudio ? "audio" : "MP4 video"} (${buf.length} bytes). Nothing was sent.`);
       }
-      if (!buf) { await sendReply(sock, msg, `❌ Download returned invalid data. Try again.`); await react(sock, msg, "❌"); return; }
 
       const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
 
@@ -19833,9 +19795,7 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
         await sock.sendMessage(jid, { audio: buf, mimetype: _aMime, ptt: false, fileName: "tiktok_audio.mp3" }, { quoted: msg });
       } else {
         const cap = `🎵 *TikTok*${sz}`;
-        const _ttBufWm = await _addVideoWatermark(buf, "TT");
-        try { await sock.sendMessage(jid, { video: _ttBufWm, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-        catch { await sock.sendMessage(jid, { document: _ttBufWm, mimetype: "video/mp4", fileName: `tiktok_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+        await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg });
       }
 
       await react(sock, msg, "✅");
@@ -43996,24 +43956,18 @@ try {
   /* ── Direct TikTok Pipeline Downloader ────────────────────────────── */
   async function __v32ExecuteTikTokDownload(sock, msg, ttPick, ttMode) {
     const jid = msg.key.remoteJid;
-    let mediaUrl = selectTikTokUrl(ttPick.info, ttMode)
-      || (ttMode.kind === "audio" ? ttPick.info.audio : (ttPick.info.videoHd || ttPick.info.videoSd || ttPick.info.videoWatermark));
+    const _ttIsMp4 = (b) => !!b && b.length > 12 && b.slice(4, 8).toString("ascii") === "ftyp";
+    const _ttIsAudio = (b) => !!b && b.length > 2048 && (
+      b.slice(0, 3).toString("latin1") === "ID3" ||
+      (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) ||
+      b.slice(0, 4).toString("ascii") === "OggS" ||
+      b.slice(4, 8).toString("ascii") === "ftyp");
 
-    // Refresh if URL expired
-    if (!mediaUrl && ttPick.url) {
-      try {
-        const refreshedInfo = await fetchTikTokInfo(ttPick.url);
-        if (refreshedInfo) {
-          ttPick.info = refreshedInfo;
-          mediaUrl = selectTikTokUrl(refreshedInfo, ttMode)
-            || (ttMode.kind === "audio" ? refreshedInfo.audio : (refreshedInfo.videoHd || refreshedInfo.videoSd || refreshedInfo.videoWatermark));
-          if (mediaUrl) __ttRememberSelection(jid, ttPick);
-        }
-      } catch {}
-    }
-
+    // Exactly the format picked. No refresh, no quality or watermark swap.
+    const mediaUrl = selectTikTokUrl(ttPick.info, ttMode);
     if (!mediaUrl) {
-      await sendReply(sock, msg, "❌ That format is unavailable for this TikTok. Try *2.1* for audio or *1.1* for SD video.");
+      await sendReply(sock, msg, `❌ ${ttMode.id} is not available for this TikTok, so nothing was sent. Reply with another number.`);
+      await forceReaction(sock, msg, "❌");
       return true;
     }
 
@@ -44033,6 +43987,9 @@ Please wait.`);
       downloaded = await PIPE.fetchToDisk(mediaUrl, { timeout: 90000 });
       const fs = require('fs');
       const buf = fs.readFileSync(downloaded.path);
+      if (!(ttMode.kind === "audio" ? _ttIsAudio(buf) : _ttIsMp4(buf))) {
+        throw new Error(`TikTok returned a file that is not a playable ${ttMode.kind === "audio" ? "audio" : "MP4 video"} (${buf.length} bytes). Nothing was sent.`);
+      }
 
       if (statusMsg?.key) {
         await editMessage(sock, jid, statusMsg.key, `📤 *Uploading ${ttChoiceLabel}* (${ttMode.id})...`).catch(() => {});

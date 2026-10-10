@@ -3,10 +3,9 @@
  * Provider responses are normalized here so the command layer only deals with
  * stable fields and safe media modes.
  */
-const PROVIDERS = [
-  (url) => `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`,
-  (url) => `https://tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`,
-];
+// One provider, one request. The bot sends exactly the format asked for and
+// never switches to another link, quality or watermark when something is missing.
+const PROVIDER = (url) => `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`;
 
 const MODES = {
   "1.1": { kind: "video", quality: "sd", document: false, watermark: false },
@@ -139,25 +138,32 @@ export function buildTikTokPickerSections() {
 }
 
 export async function fetchTikTokInfo(url, fetchImpl = fetch) {
-  let lastError;
-  for (const endpoint of PROVIDERS) {
-    try {
-      const response = await fetchImpl(endpoint(url), { headers: { "User-Agent": "MIAS/1.0" } });
-      if (!response.ok) throw new Error(`TikTok provider returned ${response.status}`);
-      const json = await response.json();
-      const info = normalizeTikTokResponse(json);
-      if (info.videoHd || info.videoSd || info.audio) return info;
-    } catch (error) {
-      lastError = error;
-    }
+  let response;
+  try {
+    response = await fetchImpl(PROVIDER(url), { headers: { "User-Agent": "MIAS/1.0" } });
+  } catch (error) {
+    throw new Error(`TikTok provider is unreachable: ${error?.message || error}`);
   }
-  throw lastError || new Error("No TikTok provider returned media");
+  if (!response.ok) throw new Error(`TikTok provider returned HTTP ${response.status}`);
+  let json;
+  try {
+    json = await response.json();
+  } catch {
+    throw new Error("TikTok provider returned an invalid response");
+  }
+  const info = normalizeTikTokResponse(json);
+  if (!info.videoHd && !info.videoSd && !info.videoWatermark && !info.audio) {
+    throw new Error("TikTok provider returned no media for this link");
+  }
+  return info;
 }
 
+// Returns only the URL for the exact format requested, or null.
+// No quality or watermark substitution.
 export function selectTikTokUrl(info, mode) {
-  if (mode.kind === "audio") return info.audio;
-  if (mode.watermark) return info.videoWatermark;
-  return mode.quality === "hd" ? (info.videoHd || info.videoSd) : (info.videoSd || info.videoHd);
+  if (mode.kind === "audio") return info.audio || null;
+  if (mode.watermark) return info.videoWatermark || null;
+  return (mode.quality === "hd" ? info.videoHd : info.videoSd) || null;
 }
 
 export { MODES };
