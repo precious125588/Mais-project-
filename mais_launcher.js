@@ -42,6 +42,34 @@ const MAX_BACKOFF_MS = 5 * 60 * 1000;
 const running = new Map(); // jid -> { proc, sessionDir, startedAt, restartCount }
 const paused  = new Set(); // jids that are intentionally paused (no auto-restart)
 
+// ── Profiling: one [perf] line every PERF_LOG_MIN minutes (default 10). ──
+// Logs bot count, per-bot resident memory (no numbers), and system load, so
+// the real cost per linked bot can be read straight from the Railway logs.
+// Log-only: it never touches a bot's runtime or its files.
+function _rssMbOfPid(pid) {
+    try {
+        const m = fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/VmRSS:\s+(\d+)\s+kB/);
+        return m ? Math.round(Number(m[1]) / 1024) : null;
+    } catch { return null; }
+}
+const PERF_LOG_MS = Math.max(1, parseInt(process.env.PERF_LOG_MIN || '10', 10)) * 60 * 1000;
+const _perfTimer = setInterval(() => {
+    try {
+        let childTotal = 0;
+        const rows = [];
+        let i = 0;
+        for (const entry of running.values()) {
+            i += 1;
+            const mb = entry.proc?.pid ? _rssMbOfPid(entry.proc.pid) : null;
+            if (mb) childTotal += mb;
+            rows.push(`#${i}=${mb == null ? '?' : mb}MB`);
+        }
+        const host = process.memoryUsage().rss / 1048576;
+        console.log(`[perf] bots=${running.size}/${MAX_INSTANCES} children_rss=${childTotal}MB launcher_rss=${Math.round(host)}MB load1=${os.loadavg()[0].toFixed(2)} ${rows.join(' ')}`);
+    } catch {}
+}, PERF_LOG_MS);
+if (_perfTimer.unref) _perfTimer.unref();
+
 function selectedBotEnv(number, supplied = {}) {
     // A paired MD is always MIAS. Legacy bot-selection records are ignored so
     // stale Telegram/web choices can never boot a second runtime.
