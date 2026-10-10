@@ -7,6 +7,7 @@
  */
 
 import fs from "fs";
+import { createHash } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -56,11 +57,23 @@ function objToMap(obj) {
 function setToArr(set) { return [...set]; }
 function arrToSet(arr) { return new Set(arr); }
 
+// ── Write only when the content changed ─────────────────────
+// Every save used to rewrite all 12 stores, even when nothing changed. We keep
+// a digest of what this process last wrote per file and skip identical writes.
+// The bytes on disk are the same as before; there is just less I/O and CPU.
+const _lastWriteDigest = new Map();
+function writeIfChanged(filePath, data) {
+  const digest = createHash("sha1").update(data).digest("hex");
+  if (_lastWriteDigest.get(filePath) === digest && fs.existsSync(filePath)) return;
+  fs.writeFileSync(filePath, data, "utf8");
+  _lastWriteDigest.set(filePath, digest);
+}
+
 // ── Save a Map to a JSON file ───────────────────────────────
 function saveMap(filePath, map) {
   try {
-    const data = JSON.stringify(mapToObj(map), null, 2);
-    fs.writeFileSync(filePath, data, "utf8");
+    const data = JSON.stringify(mapToObj(map));
+    writeIfChanged(filePath, data);
   } catch (e) {
     console.error(`[DB] Failed to save ${path.basename(filePath)}:`, e.message);
   }
@@ -82,7 +95,7 @@ function loadMap(filePath) {
 // ── Save a Set to a JSON file ───────────────────────────────
 function saveSet(filePath, set) {
   try {
-    fs.writeFileSync(filePath, JSON.stringify(setToArr(set), null, 2), "utf8");
+    writeIfChanged(filePath, JSON.stringify(setToArr(set)));
   } catch (e) {
     console.error(`[DB] Failed to save ${path.basename(filePath)}:`, e.message);
   }
