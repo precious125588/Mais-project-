@@ -19223,7 +19223,8 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
       } else {
         const cap = `🎵 *TikTok*${sz}`;
         const _playBuf = await prepareTikTokVideo(buf);
-        await sock.sendMessage(jid, { video: _playBuf, mimetype: "video/mp4", caption: cap }, { quoted: msg });
+        try { await sock.sendMessage(jid, { video: _playBuf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
+        catch { await sock.sendMessage(jid, { document: _playBuf, mimetype: "video/mp4", fileName: `tiktok_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
       }
 
       await react(sock, msg, "✅");
