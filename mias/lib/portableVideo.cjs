@@ -28,9 +28,10 @@ async function normalizeVideoBuffer(input, opts = {}) {
       '-map', '0:v:0', '-map', '0:a:0?',
       '-c:v', 'libx264', '-preset', opts.preset || 'veryfast',
       '-crf', String(opts.crf || 23), '-pix_fmt', 'yuv420p',
+      ...(opts.maxrate ? ['-maxrate', String(opts.maxrate), '-bufsize', String(opts.bufsize || opts.maxrate)] : []),
       '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
       '-f', 'mp4', outPath,
-    ], { timeout: opts.timeoutMs || 120000, maxBuffer: 1024 * 1024 });
+    ], { timeout: opts.timeoutMs || 120000, maxBuffer: opts.maxBuffer || 1024 * 1024 });
     const output = await fsp.readFile(outPath);
     if (isMp4(output) && output.length > 10000) return output;
   } catch (err) {

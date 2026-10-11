@@ -95,6 +95,7 @@ import { installSettingsCommand } from "./features/settingsCommands.js";
 import { installPairCommands } from "./features/pairCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
 import { runTikTokBulk, formatBulkSummary, bulkModeId } from "./features/ttBulk.js";
+import { prepareTikTokVideo } from "./features/ttVideo.js";
 import { installPlayCards, installPlayAudio, installPlayPickers, installPlaySearchPicker, installPlayOutputPicker, installPlayWrappers } from "./features/playCommands.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3471,7 +3472,7 @@ Save my contact:` }).catch(() => {});
             if (globalThis.V36_STATUS_SEND && /^(send|send pls|send please|share|send boss|send abeg)\b/.test(_t)) {
               return globalThis.V36_STATUS_SEND(sock, msg, ctx?.quotedMessage);
             }
-            if (!msg.key.fromMe && ctx?.quotedMessage && /^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/i.test(String(body || "").trim())) {
+            if (!msg.key.fromMe && ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && /^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/i.test(String(body || "").trim())) {
               const q = ctx.quotedMessage;
               const requester = isGroup(msg) ? (msg.key.participant || msg.participant) : msg.key.remoteJid;
               if (q.imageMessage) {
@@ -19042,8 +19043,9 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
           } else if (mode.kind === "audio") {
             await sock.sendMessage(jid, { audio: buf, mimetype: "audio/mpeg", ptt: false, fileName: `tiktok_${Date.now()}.mp3` }, { quoted: msg });
           } else {
-            try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: _cap }, { quoted: msg }); }
-            catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `tiktok_${Date.now()}.mp4`, caption: _cap }, { quoted: msg }); }
+            const _playBuf = await prepareTikTokVideo(buf);
+            try { await sock.sendMessage(jid, { video: _playBuf, mimetype: "video/mp4", caption: _cap }, { quoted: msg }); }
+            catch { await sock.sendMessage(jid, { document: _playBuf, mimetype: "video/mp4", fileName: `tiktok_${Date.now()}.mp4`, caption: _cap }, { quoted: msg }); }
           }
         },
       });
@@ -19177,7 +19179,8 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
         await sock.sendMessage(jid, { audio: buf, mimetype: _aMime, ptt: false, fileName: "tiktok_audio.mp3" }, { quoted: msg });
       } else {
         const cap = `🎵 *TikTok*${sz}`;
-        await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg });
+        const _playBuf = await prepareTikTokVideo(buf);
+        await sock.sendMessage(jid, { video: _playBuf, mimetype: "video/mp4", caption: cap }, { quoted: msg });
       }
 
       await react(sock, msg, "✅");
@@ -23073,6 +23076,7 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         // oversized quoted payloads with NO catch in the previous version.
         // Picker stays alive, no ✅ reaction, user thinks bot is hung until
         // restart. Cascade: PTV → video → document and always free+react.
+        if (ttMode.kind === "video" && media) media = await prepareTikTokVideo(media);
         if (ttMode.kind === "video" && ttMode.videoNote) {
           let _ptvOk = false;
           try {
