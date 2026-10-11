@@ -2688,7 +2688,7 @@ async function connectToWA(force = false) {
         // exactly that symptom. We now process ONLY live "notify"
         // messages and ignore "append" / "prepend" replays.
         // ────────────────────────────────────────────────────────────────
-        if (ev.type && ev.type !== "notify") return;
+        if (ev.type && ev.type !== "notify") { __replyTrace({ key: { fromMe: (ev.messages || []).some((x) => x?.key?.fromMe) } }, "upsert-" + ev.type); return; }
 
         const msgs = ev.messages || [];
         const NOW_SECS = Math.floor(Date.now() / 1000);
@@ -2772,7 +2772,7 @@ async function connectToWA(force = false) {
           //    Baileys sometimes sends old stragglers right after connect.
           try {
             const _ts = Number(msg.messageTimestamp?.low || msg.messageTimestamp || 0);
-            if (_ts && (NOW_SECS - _ts) > 60) return;
+            if (_ts && (NOW_SECS - _ts) > 60) { __replyTrace(msg, "stale-replay"); return; }
           } catch {}
 
           // ── ⚡ Stub-type filter — security code / system notifications ─────────
@@ -2847,7 +2847,7 @@ async function connectToWA(force = false) {
             }
           } catch (_) {}
 
-          try { if (!shouldProcessIncomingMessage(msg)) return; } catch {}
+          try { if (!shouldProcessIncomingMessage(msg)) { __replyTrace(msg, "filtered"); return; } } catch {}
           // Silence the entire inbound pipeline before any handler can emit a
           // reply, reaction, read receipt, view-once response, AFK notice, or
           // automation. Owner/fromMe messages continue normally.
@@ -4059,7 +4059,8 @@ ${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
 
           // Honour global/chat work mode gates
           try {
-            if (!isCommandAllowedInContext(msg, fromOwner, false)) return;
+            if (!isCommandAllowedInContext(msg, fromOwner, false)) { __replyTrace(msg, "mode-gate"); return; }
+            try { if (msg.key.fromMe) __replyTrace(msg, "self-cmd-accepted", (String(_command?.raw || "").split(/\s+/)[0] || "").toLowerCase()); } catch {}
           } catch {}
 
           const raw = _command.raw;
@@ -4986,6 +4987,22 @@ function shouldSilenceForPrivateMode(msg) {
   } catch {
     return false;
   }
+}
+// [reply-trace] Diagnostic lines for why a message did not get a reply. Self (fromMe)
+// messages are always logged; other senders only when REPLY_TRACE=1. Rate-limited per reason.
+const __replyTraceLast = new Map();
+function __replyTrace(msg, reason, detail = "") {
+  try {
+    const fromMe = !!msg?.key?.fromMe;
+    if (!fromMe && process.env.REPLY_TRACE !== "1") return;
+    const k = reason + ":" + detail;
+    const now = Date.now();
+    if (now - (__replyTraceLast.get(k) || 0) < 10000) return;
+    __replyTraceLast.set(k, now);
+    const jid = String(msg?.key?.remoteJid || "");
+    const kind = jid.endsWith("@g.us") ? "group" : jid.endsWith("@lid") ? "lid" : "dm";
+    console.log(`[reply-trace] ${reason} fromMe=${fromMe} chat=${kind}${detail ? " cmd=" + detail : ""}`);
+  } catch {}
 }
 function isCommandAllowedInContext(msg, fromOwner = false, fromGroupAdmin = false) {
   if (fromOwner) return true;

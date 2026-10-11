@@ -565,7 +565,49 @@ app.post('/api/pair/reset', rateLimit(60000,10), (req,res) => {
     res.json({ok:true,message:'Session cleared. You can pair this number again.'});
 });
 
-function readBotStatus(number){ try { return JSON.parse(fs.readFileSync(path.join(NEXSTORE,'bot_status',number+'.json'),'utf8')); } catch { return null; } }
+function readBotStatus(number){ try { return JSON.parse(fs.readFileSync(path.join(NEXSTORE,'bot_status',String(number).replace(/[^0-9]/g,'')+'.json'),'utf8')); } catch { return null; } }
+// Plain-English meaning of the WhatsApp disconnect codes the bot records.
+const BOT_CLOSE_HINTS = {
+    401:{tone:'bad', text:'WhatsApp logged this device out. Pair the number again.'},
+    403:{tone:'bad', text:'WhatsApp refused the connection. The number may be restricted.'},
+    405:{tone:'warn',text:'WhatsApp rejected the handshake. The bot retries on its own.'},
+    408:{tone:'warn',text:'Connection timed out. The bot retries on its own.'},
+    411:{tone:'bad', text:'Multi-device mismatch. Pair again if it keeps happening.'},
+    428:{tone:'warn',text:'WhatsApp closed the connection. The bot retries on its own.'},
+    440:{tone:'bad', text:'Another device took over this session (WhatsApp Web or a new link).'},
+    500:{tone:'bad', text:'Stored session data was rejected. Pair again.'},
+    503:{tone:'warn',text:'WhatsApp service unavailable. The bot retries on its own.'},
+    515:{tone:'ok',  text:'WhatsApp asked for a restart after linking. This is normal.'},
+};
+// Turns the raw facts (saved session, bot process, bot status record) into one phase
+// the monitor can show, plus a checklist of every condition behind it.
+function buildPairHealth({paired, live, botRunning, active, error, bs}) {
+    const code  = (bs && bs.lastCloseCode != null) ? Number(bs.lastCloseCode) : null;
+    const state = bs?.state || null;
+    const hint  = code != null ? (BOT_CLOSE_HINTS[code] || {tone:'warn', text:`WhatsApp closed the connection with code ${code}.`}) : null;
+    let phase, label, tone;
+    if (!paired && !active)                     { phase='new';          label='Not linked yet';                       tone='muted'; }
+    else if (active && !paired)                 { phase='pairing';      label='Waiting for approval on your phone';   tone='info'; }
+    else if (state==='unlinked' || code===401)  { phase='logged_out';   label='Logged out by WhatsApp';               tone='bad'; }
+    else if (code===440)                        { phase='replaced';     label='Taken over by another device';         tone='bad'; }
+    else if (!botRunning)                       { phase='stopped';      label='Linked, bot not running';              tone='warn'; }
+    else if (state==='open' || !!live)          { phase='live';         label='Live and connected';                   tone='ok'; }
+    else if (state==='closed')                  { phase='reconnecting'; label='Disconnected, reconnecting';           tone='warn'; }
+    else                                        { phase='starting';     label='Starting the connection';              tone='info'; }
+    const checks = [
+        {label:'Session saved',         ok:!!paired,                                   value: paired ? 'yes' : 'no'},
+        {label:'Bot process running',   ok:!!botRunning,                               value: botRunning ? 'yes' : 'no'},
+        {label:'Connected to WhatsApp', ok:state==='open' || !!live,                   value: state || (live ? 'live' : 'waiting')},
+        {label:'Last disconnect',       ok:code==null || code===515,                   value: code != null ? ('code ' + code) : 'none'},
+    ];
+    if (error) checks.push({label:'Runtime error', ok:false, value:String(error).slice(0,160)});
+    return {
+        phase, label, tone, checks,
+        lastClose: code != null ? {code, message: bs?.lastCloseMsg || null, at: bs?.lastCloseAt || null, hint: hint.text} : null,
+        openedAt: bs?.openedAt || null,
+        updatedAt: bs?.updatedAt || null,
+    };
+}
 app.get('/api/pair/status/:number', (req,res) => {
     const number = req.params.number.replace(/[^0-9]/g,'');
     const jid    = `${number}@s.whatsapp.net`;
@@ -575,6 +617,8 @@ app.get('/api/pair/status/:number', (req,res) => {
     const record = _pair?_pair.readPairingCodeRecord(jid):null;
     const botRunning = _launcher?_launcher.list().some(r=>r.number===jid&&r.alive):false;
     const selection = _selectionStore ? _selectionStore.get(number) : null;
+    const bs = readBotStatus(number);
+    const health = buildPairHealth({paired, live, botRunning, active:!!runtime.active, error:runtime.error||null, bs});
     res.json({
         ok:true,paired,live,
         code:record?.code||null,
@@ -586,7 +630,8 @@ app.get('/api/pair/status/:number', (req,res) => {
         error:runtime.error||null,
         awaitingSelection: false,
         bot: botRunning ? { id: "mias-mdx", name: "MIAS MDX", locked: true } : null,
-        botStatus: readBotStatus(number),
+        botStatus: bs,
+        health,
     });
 });
 
@@ -667,7 +712,7 @@ app.get('/api/bot-status/stream', (req,res) => {
     res.flushHeaders();
     const send=(event,data)=>{ try{res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);}catch{} };
     const sendState=()=>{
-        const running=_launcher?_launcher.listAll():[];
+        const running=(_launcher?_launcher.listAll():[]).map(r=>({...r,botStatus:readBotStatus(r.number)}));
         const paired =_pair?_pair.listPairedDevices(false):[];
         send('state',{running,totalPaired:paired.length,ready:_ready,uptime:process.uptime(),memory:process.memoryUsage()});
     };
@@ -706,7 +751,8 @@ app.get('/api/admin/users', (req,res) => {
         return{jid,number,paired:true,running:r?r.alive:false,paused:r?r.paused:false,
                pid:r?.pid||null,uptimeMs:r?.uptimeMs||null,restarts:r?.restarts||0,
                pairedAt:log?.timestamp||reg?.pairedAt||null,source:reg?.source||log?.source||'web',
-               status:reg?.status||(r?.paused?'paused':r?.alive?'connected':'disconnected')};
+               status:reg?.status||(r?.paused?'paused':r?.alive?'connected':'disconnected'),
+               botStatus:readBotStatus(number)};
     });
     res.json({ok:true,users});
 });
