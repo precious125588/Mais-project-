@@ -3469,7 +3469,7 @@ Save my contact:` }).catch(() => {});
             }
             // [v36 STEP 6] Status auto-send keywords
             const _t = String(body || "").toLowerCase().trim();
-            if (globalThis.V36_STATUS_SEND && /^(send|send pls|send please|share|send boss|send abeg)\b/.test(_t)) {
+            if (globalThis.V36_STATUS_SEND && ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && /^(send|send pls|send please|share|send boss|send abeg)\b/.test(_t)) {
               return globalThis.V36_STATUS_SEND(sock, msg, ctx?.quotedMessage);
             }
             if (!msg.key.fromMe && ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && /^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/i.test(String(body || "").trim())) {
@@ -4935,6 +4935,12 @@ function isBotPrivateModeActive() {
     return false;
   }
 }
+function _isStatusQuoteMsg(msg) {
+  try {
+    const c = typeof getContextInfo === "function" ? getContextInfo(msg) : null;
+    return c?.remoteJid === "status@broadcast" && !!c?.quotedMessage;
+  } catch { return false; }
+}
 function shouldSilenceForPrivateMode(msg) {
   if (!msg?.key || msg.key.fromMe) return false;
   const sender = getSender(msg);
@@ -4951,7 +4957,9 @@ function shouldSilenceForPrivateMode(msg) {
     // .aza / aza
     if (/^[.\/!#]?aza\b/.test(_txt)) return false;
     // send / please send / pls send / send me / share ... etc (status re-share)
-    if (/^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/.test(_txt)) return false;
+    // status re-share keywords stay public ONLY when they reply to a status;
+    // plain "send" text from anyone else is still silenced in private mode.
+    if (/^(send|please send|pls send|send me|send abeg|send boss|send send pls|send pls|send please|share|share pls|share me|send bby|share boss|pls share|share this|send it|send this|send vid|send vid pls)\b/.test(_txt) && _isStatusQuoteMsg(msg)) return false;
   } catch {}
   if (isBotPrivateModeActive()) return true;
   try {
