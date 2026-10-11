@@ -912,6 +912,21 @@ function _resolveAuthDir() {
 
 const AUTH_DIR = _resolveAuthDir();
 
+// Bot status record read by the admin/pairing monitor (nexstore/bot_status/<number>.json).
+function _writeBotStatus(patch) {
+  try {
+    let root;
+    try { root = require('../sessionPaths').nexstoreRoot(); } catch { root = path.join(__dirname, '..', 'nexstore'); }
+    const dir = path.join(root, 'bot_status');
+    fs.mkdirSync(dir, { recursive: true });
+    const num = String(path.basename(AUTH_DIR) || '').split('@')[0].replace(/[^0-9]/g, '') || 'unknown';
+    const file = path.join(dir, num + '.json');
+    let prev = {};
+    try { prev = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch {}
+    fs.writeFileSync(file, JSON.stringify({ ...prev, ...patch, number: num, updatedAt: Date.now() }, null, 2));
+  } catch {}
+}
+
 // Move a legacy off-volume session onto the volume ONCE, so a link the user
 // already has survives this upgrade.
 try {
@@ -2356,6 +2371,7 @@ async function connectToWA(force = false) {
       if (qr) console.log("📱 QR received (not printed — use SESSION_ID instead).");
       if (connection === "connecting") console.log("⏳ Connecting to WhatsApp...");
       if (connection === "open") { try { __miasApplyDynamicOwnerName(sock); } catch {}
+        _writeBotStatus({ state: "open", openedAt: Date.now(), lastCloseCode: null });
         try {
           const gc = require('./features/animeGcLibrary.cjs');
           const _gcOwnerJ = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
@@ -2561,6 +2577,7 @@ async function connectToWA(force = false) {
         const code = extractDisconnectCode(lastDisconnect);
         const errMsg = String(lastDisconnect?.error?.message || lastDisconnect?.error?.data?.reason || "");
         console.log(`❌ Connection closed (code=${code}, msg=${errMsg || "n/a"}).`);
+        _writeBotStatus({ state: "closed", lastCloseCode: code ?? null, lastCloseMsg: errMsg.slice(0, 200), lastCloseAt: Date.now() });
         cleanupSocket(sock);
 
         // ─── CONFIRMED LOGOUT POLICY (v18) ──────────────────────────────
@@ -2606,6 +2623,7 @@ async function connectToWA(force = false) {
           if (isExplicitUnlink) {
             clearReconnectTimer();
             console.log("🚪 Device explicitly removed from WhatsApp. Quarantining session.");
+            _writeBotStatus({ state: "unlinked", lastCloseMsg: errMsg.slice(0, 200) });
             try {
               const _logoutNotiDir = path.join(__dirname, "..", "nexstore", "logout_notifications");
               if (!fs.existsSync(_logoutNotiDir)) fs.mkdirSync(_logoutNotiDir, { recursive: true });

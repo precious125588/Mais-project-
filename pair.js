@@ -116,6 +116,16 @@ function isPairingInProgress(nexusDevNumber) {
     return true;
 }
 
+// A session that still carries a paired identity (creds.me.id) must never be
+// wiped by a transient disconnect code. Only an unfinished pairing (no identity)
+// or an explicit user reset/unlink may remove files.
+function _sessionHasIdentity(nexusDevNumber) {
+    try {
+        const c = JSON.parse(fs.readFileSync(path.join(getSessionPath(nexusDevNumber), 'creds.json'), 'utf8'));
+        return !!(c && c.me && c.me.id);
+    } catch { return false; }
+}
+
 function markPurged(nexusDevNumber) {
     recentlyPurged.set(nexusDevNumber, Date.now());
 }
@@ -587,7 +597,7 @@ async function validateSession(nexusDevNumber) {
         return true;
     } catch (e) {
         console.log(chalk.red(`❌ Corrupt session for ${nexusDevNumber}: ${e.message}`));
-        require('./sessionPaths').quarantineDir(sessionPath, 'pair flow requested removal');
+        // Do not quarantine on a parse error: it can be a mid-write race. Keep files and retry.
         return false;
     }
 }
@@ -1759,7 +1769,7 @@ async function startpairing(nexusDevNumber, options = {}) {
                 console.log(chalk.yellow(`🗑️ Force cleaning session for ${nexusDevNumber}...`));
                 
                 endPairingWindow(nexusDevNumber);
-                forceCleanupSession(nexusDevNumber, { force: true });
+                if (!_sessionHasIdentity(nexusDevNumber)) forceCleanupSession(nexusDevNumber, { force: true });
                 
                 tracker.disconnected = true;
                 tracker.connection = null;
@@ -1774,7 +1784,7 @@ async function startpairing(nexusDevNumber, options = {}) {
                     queuePairing(nexusDevNumber);
                 } else {
                     console.error(chalk.red.bold(`❌ Failed after ${MAX_RETRIES_440} attempts for ${nexusDevNumber}`));
-                    forceCleanupSession(nexusDevNumber);
+                    if (!_sessionHasIdentity(nexusDevNumber)) forceCleanupSession(nexusDevNumber);
                     tracker.disconnected = true;
                     if (pairingStillPending) tracker.pairingError = 'Pairing request failed after multiple retries. Please try again.';
                 }
@@ -1787,10 +1797,11 @@ async function startpairing(nexusDevNumber, options = {}) {
                 // Real logout (device unlinked from the phone): mark it so the
                 // web UI stops claiming the number is still paired.
                 tracker.loggedOut = true;
-                markPurged(nexusDevNumber);
+                if (!_sessionHasIdentity(nexusDevNumber)) markPurged(nexusDevNumber);
                 endPairingWindow(nexusDevNumber);
                 ownership.release(nexusDevNumber);
-                forceCleanupSession(nexusDevNumber, { force: true });
+                if (!_sessionHasIdentity(nexusDevNumber)) forceCleanupSession(nexusDevNumber, { force: true });
+                else console.log(chalk.yellow(`🛡️ ${nexusDevNumber}: 401 on a paired session, keeping files. Only an explicit unlink removes them.`));
                 // Device unlinked from the phone == unpaired: release the lock.
                 try { require('./deploy/botSelectionStore').clearSelection(nexusDevNumber); } catch {}
                 tracker.disconnected = true;

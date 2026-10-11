@@ -565,6 +565,7 @@ app.post('/api/pair/reset', rateLimit(60000,10), (req,res) => {
     res.json({ok:true,message:'Session cleared. You can pair this number again.'});
 });
 
+function readBotStatus(number){ try { return JSON.parse(fs.readFileSync(path.join(NEXSTORE,'bot_status',number+'.json'),'utf8')); } catch { return null; } }
 app.get('/api/pair/status/:number', (req,res) => {
     const number = req.params.number.replace(/[^0-9]/g,'');
     const jid    = `${number}@s.whatsapp.net`;
@@ -585,6 +586,7 @@ app.get('/api/pair/status/:number', (req,res) => {
         error:runtime.error||null,
         awaitingSelection: false,
         bot: botRunning ? { id: "mias-mdx", name: "MIAS MDX", locked: true } : null,
+        botStatus: readBotStatus(number),
     });
 });
 
