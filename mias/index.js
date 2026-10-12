@@ -3098,7 +3098,13 @@ Save my contact:` }).catch(() => {});
           // Unwraps quoted cards (including images with captions) so numeric
           // replies never get swallowed by pickers or private mode.
           try {
-            const _mCtx = msg.message?.extendedTextMessage?.contextInfo
+            const _unwrappedIncoming = (typeof __v31Unwrap === "function" ? __v31Unwrap(msg?.message || {}) : (msg?.message || {}));
+            const _mCtx = _unwrappedIncoming.extendedTextMessage?.contextInfo
+              || _unwrappedIncoming.imageMessage?.contextInfo
+              || _unwrappedIncoming.videoMessage?.contextInfo
+              || _unwrappedIncoming.documentMessage?.contextInfo
+              || _unwrappedIncoming.interactiveResponseMessage?.contextInfo
+              || msg.message?.extendedTextMessage?.contextInfo
               || msg.message?.imageMessage?.contextInfo
               || msg.message?.videoMessage?.contextInfo
               || msg.message?.documentMessage?.contextInfo
@@ -3127,19 +3133,31 @@ Save my contact:` }).catch(() => {});
               );
             }
             const _qJoined = _qAllTexts.filter(Boolean).join(" ");
+            const _qNorm = _qJoined.normalize("NFKD");
             const _cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
+
+            const _isSudoQuoted = /SUDO|ACCESS CONTROL/i.test(_qJoined) || /SUDO|ACCESS CONTROL/i.test(_qNorm);
+            const _isSetQuoted = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qJoined)
+              || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qNorm)
+              || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_qJoined);
+            const _isCuzQuoted = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_qJoined)
+              || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_qNorm);
 
             // 1. Sudo Card Quote or sudo numeric command (1, 2, 3, sudo 1, .sudo 1)
             const _sudoMatch = _cleanB.match(/^(?:sudo\s*)?([123])$/i);
-            if ((/SUDO|ACCESS CONTROL/i.test(_qJoined) || globalThis.__lastSudoPending) && _sudoMatch) {
+            if ((_isSudoQuoted || globalThis.__lastSudoPending) && _sudoMatch) {
               if (typeof globalThis.__miasSudoNumeric === "function") {
                 if (await globalThis.__miasSudoNumeric(sock, msg, _sudoMatch[1])) return;
               }
+            } else if (_isSudoQuoted && _cleanB && !/^(?:\d{1,2}\.[1-4]|0)$/.test(_cleanB)) {
+              if (typeof globalThis.__miasSudoNumeric === "function") {
+                if (await globalThis.__miasSudoNumeric(sock, msg, _cleanB)) return;
+              }
             }
 
-            // 2. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 9.1, 9 1, 0)
+            // 2. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 9.1, 9 1, 0, or section number)
             const _setMatch = _cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i) || (_cleanB === "0" ? ["0", "0"] : null);
-            if (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply/i.test(_qJoined) || _setMatch) {
+            if (_isSetQuoted || _setMatch) {
               if (typeof handleSettingsNumericReply === "function") {
                 const _setChoice = _setMatch ? (_setMatch[0] === "0" ? "0" : `${_setMatch[1]}.${_setMatch[2]}`) : _cleanB;
                 if (await handleSettingsNumericReply(sock, msg, _setChoice)) return;
@@ -3148,7 +3166,7 @@ Save my contact:` }).catch(() => {});
 
             // 3. CUZ Customization Menu Quote or cuz numeric command (cuz 1, cuz 2, 1..17)
             const _cuzMatch = _cleanB.match(/^(?:cuz\s*)?([1-9]|1[0-7])$/i);
-            if (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_qJoined) || (typeof globalThis.__cuzPending !== "undefined" && globalThis.__cuzPending) || (_cuzMatch && !/SUDO/i.test(_qJoined))) {
+            if (_isCuzQuoted || (typeof globalThis.__cuzPending !== "undefined" && globalThis.__cuzPending) || (_cuzMatch && !_isSudoQuoted)) {
               try {
                 const cuzMod = require("./features/cuzCustomization.cjs");
                 if (typeof cuzMod.handleCuzReply === "function") {
@@ -3193,17 +3211,18 @@ Save my contact:` }).catch(() => {});
             // ── HIGH-PRIORITY QUOTED ROUTER (SUDO, CUZ, SETTINGS) ─────────────
           try {
             const _eqTxt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || "";
+            const _eqNorm = _eqTxt.normalize("NFKD");
             const _eqCleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
-            const _isSudoQ = /SUDO|ACCESS CONTROL/i.test(_eqTxt) || !!globalThis.__lastSudoPending;
-            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name/i.test(_eqTxt) || !!globalThis.__cuzPending;
-            const _isSetQ = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle/i.test(_eqTxt);
+            const _isSudoQ = /SUDO|ACCESS CONTROL/i.test(_eqTxt) || /SUDO|ACCESS CONTROL/i.test(_eqNorm) || !!globalThis.__lastSudoPending;
+            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_eqTxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_eqNorm) || !!globalThis.__cuzPending;
+            const _isSetQ = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqTxt) || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqNorm) || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_eqTxt);
 
             if (_isSudoQ && /^[123]$/.test(_eqCleanB)) {
               if (typeof globalThis.__miasSudoNumeric === "function") {
                 if (await globalThis.__miasSudoNumeric(sock, msg, body)) return;
               }
             }
-            if (_isCuzQ || (/^(?:[1-9]|1[0-7])$/.test(_eqCleanB) && !/SUDO/i.test(_eqTxt))) {
+            if (_isCuzQ || (/^(?:[1-9]|1[0-7])$/.test(_eqCleanB) && !_isSudoQ)) {
               try {
                 const cuzMod = require("./features/cuzCustomization.cjs");
                 if (typeof cuzMod.handleCuzReply === "function") {
@@ -23982,6 +24001,9 @@ function _saveAzaAll() {
     require("fs").writeFileSync(_AZA_FILE, JSON.stringify(_azaUsers, null, 2));
   } catch (_) {}
 }
+const _saveAza = _saveAzaAll;
+globalThis._saveAza = _saveAzaAll;
+globalThis._saveAzaAll = _saveAzaAll;
 function _azaKeyFor(msg) { return _cleanNum(getSender(msg)) || _cleanNum(msg?.key?.participant || msg?.key?.remoteJid || "") || "_default"; }
 function _getAzaFor(msg) { const k = _azaKeyFor(msg); return _azaUsers[k] || _azaUsers._default; }
 // Back-compat shim so older code referencing _azaStore still reads the DEFAULT slot
@@ -24678,7 +24700,7 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
     if (ru?.dl) { dlUrl = ru.dl; title = title || ru.title; }
   }
 
-  if (!dlUrl) {
+  if (!dlUrl && !_sliderImages?.length) {
     await editMessage(sock, jid, aioKey, `❌ ${_platformName}... no media found 😔\n\nMake sure the post is public.\n💡 Spotify: *${CONFIG.PREFIX}spotify <url>*\n💡 YouTube: *${CONFIG.PREFIX}ytmp4 <url>*`);
     return;
   }
@@ -24689,12 +24711,12 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
   let isVideo = false;
   let isAudio = false;
   let _hasM4A = false;
+  let _aioResp = null;
   if (_sliderImages?.length) {
     await editMessage(sock, jid, aioKey, `⏳ *${_platformName}*\n\nGenerating TikTok slider video (${_sliderImages.length} images)...`);
     buf = await createTikTokSliderVideo({ images: _sliderImages, audioUrl: _sliderAudio, durationPerSlide: 3 });
     isVideo = true;
   } else {
-    let _aioResp;
     try {
       ensureDiskSpace(getMediaLimitBytes());
       _aioResp = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000, maxContentLength: getMediaLimitBytes(), maxBodyLength: getMediaLimitBytes(), headers: { "User-Agent": "Mozilla/5.0" } });
@@ -24706,13 +24728,13 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
     }
     buf = Buffer.from(_aioResp.data);
   }
-  const _aioCt = ((_aioResp.headers?.["content-type"] || "")).toLowerCase();
+  const _aioCt = ((_aioResp?.headers?.["content-type"] || "")).toLowerCase();
   const _aioHead = buf.slice(0, 128).toString("utf8").trim().toLowerCase();
   if (!buf.length || _aioHead.startsWith("<!doctype") || _aioHead.startsWith("<html") || _aioHead.startsWith("{")) {
     throw new Error("provider returned an error page instead of media");
   }
-  const _urlLow = dlUrl.toLowerCase().split("?")[0];
-  if (!_sliderImages) {
+  const _urlLow = (dlUrl || "").toLowerCase().split("?")[0];
+  if (!_sliderImages?.length) {
     _hasM4A = buf.length >= 12 && buf.slice(4, 8).toString("ascii") === "ftyp";
     isVideo = _aioCt.includes("video") || _urlLow.match(/\.(mp4|webm|mov|mkv|avi|flv)$/) || (!_isSpotify && _hasM4A);
     isAudio = _aioCt.includes("audio") || _urlLow.match(/\.(mp3|ogg|m4a|opus|flac|wav)$/) || buf.slice(0, 3).toString("hex") === "494433" || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) || (_isSpotify && _hasM4A);
@@ -35499,22 +35521,37 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
       if (argNum && argNum.length < 7) argNum = "";
       const phone = argNum || senderNum;
       if (!phone || phone.length < 7) {
-        return sendReply(sock, msg, "❌ Could not detect a phone number.\nUsage: *.linkme 234XXXXXXXXXX*");
+        return sendReply(sock, msg, `❌ Could not detect a phone number.\nUsage: *${CONFIG.PREFIX}pair 234XXXXXXXXXX*`);
       }
       try { await react(sock, msg, "🖇️"); } catch {}
 
-      // ── Persistent auth dir, keyed by phone — no SESSION_ID is ever DMed. ──
-      // Same nexstore/pairing/<phone>/ store used by .pair2 and .reportv2, so
-      // this linked session survives restarts/redeploys with zero manual steps.
+      // Persistent auth dir, keyed by phone
       const tmpDir = _pathV11.join(__dirname, "..", "nexstore", "pairing", phone);
       try { _fsV11.mkdirSync(tmpDir, { recursive: true }); } catch {}
+
+      // If an existing un-registered pairing attempt was left behind, clean it to avoid "Incorrect code" error
+      try {
+        const credsFile = _pathV11.join(tmpDir, "creds.json");
+        if (_fsV11.existsSync(credsFile)) {
+          const rawCreds = JSON.parse(_fsV11.readFileSync(credsFile, "utf8"));
+          if (!rawCreds?.registered) {
+            _fsV11.rmSync(tmpDir, { recursive: true, force: true });
+            _fsV11.mkdirSync(tmpDir, { recursive: true });
+          }
+        }
+      } catch {}
+
       let sub = null;
       let _linkmeRegistered = false;
+      let cleanedUp = false;
       const cleanup = (wipe = false) => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         try { sub?.ws?.close?.(); } catch {}
         try { sub?.end?.(undefined); } catch {}
         if (wipe) { try { _fsV11.rmSync(tmpDir, { recursive: true, force: true }); } catch {} }
       };
+
       try {
         const { state, saveCreds } = await useMultiFileAuthState(tmpDir);
         let version;
@@ -35531,44 +35568,55 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
           connectTimeoutMs: 60000,
           keepAliveIntervalMs: 30000,
         });
-        sub = build();
-        sub.ev.on("creds.update", saveCreds);
 
         let restarts = 0;
-        sub.ev.on("connection.update", async (u) => {
-          try {
-            if (u.connection === "open") {
-              _linkmeRegistered = true;
-              try {
-                // Creds are already being written to tmpDir (nexstore/pairing/<phone>/)
-                // by sub.ev.on("creds.update", saveCreds) above — nothing more to do.
-                // No SESSION_ID string is ever sent anywhere, by chat or otherwise.
-                await new Promise(r => setTimeout(r, 1500));
-                await sock.sendMessage(msg.key.remoteJid, {
-                  text: `✅ *LinkMe success!*\n\n📱 Linked: *+${phone}*\n💾 Session saved automatically — it restores itself after every restart. Nothing was sent to their chat.`
-                }, { quoted: msg }).catch(() => {});
-              } catch (e) {
-                await sock.sendMessage(msg.key.remoteJid, { text: `⚠️ LinkMe connected but confirming the save failed: ${e.message}` }, { quoted: msg }).catch(() => {});
-              } finally {
-                await new Promise(r => setTimeout(r, 1500));
-                cleanup(false); // keep the saved creds — do not wipe tmpDir
+        const setupSocketEvents = (s) => {
+          s.ev.on("creds.update", saveCreds);
+          s.ev.on("connection.update", async (u) => {
+            try {
+              if (u.connection === "open") {
+                _linkmeRegistered = true;
+                try {
+                  await new Promise(r => setTimeout(r, 1500));
+                  await sock.sendMessage(msg.key.remoteJid, {
+                    text: `✅ *Pairing success!*\n\n📱 Linked: *+${phone}*\n💾 Session saved automatically in nexstore/pairing/${phone}. It restores itself automatically after bot restarts.`
+                  }, { quoted: msg }).catch(() => {});
+                } catch (e) {
+                  await sock.sendMessage(msg.key.remoteJid, { text: `⚠️ Linked but confirming save failed: ${e.message}` }, { quoted: msg }).catch(() => {});
+                } finally {
+                  await new Promise(r => setTimeout(r, 1500));
+                  cleanup(false);
+                }
+              } else if (u.connection === "close") {
+                const sc = u.lastDisconnect?.error?.output?.statusCode;
+                if ((sc === 515 || sc === (typeof DisconnectReason !== "undefined" && DisconnectReason?.restartRequired)) && restarts < 3) {
+                  restarts++;
+                  setTimeout(() => {
+                    try {
+                      cleanedUp = false;
+                      sub = build();
+                      setupSocketEvents(sub);
+                    } catch {}
+                  }, 1500);
+                } else if (sc === 401 && !_linkmeRegistered) {
+                  cleanup(true);
+                } else if (sc && sc !== 401 && sc !== 408) {
+                  cleanup(false);
+                }
               }
-            } else if (u.connection === "close") {
-              const sc = u.lastDisconnect?.error?.output?.statusCode;
-              if ((sc === 515 || sc === (typeof DisconnectReason !== "undefined" && DisconnectReason?.restartRequired)) && restarts < 3) {
-                restarts++;
-                setTimeout(() => { try { sub = build(); sub.ev.on("creds.update", saveCreds); } catch {} }, 1500);
-              } else if (sc === 401 && !_linkmeRegistered) {
-                cleanup(true); // never successfully paired — safe to wipe
-              } else if (sc && sc !== 401 && sc !== 408) {
-                cleanup(false);
-              }
-            }
-          } catch {}
-        });
+            } catch {}
+          });
+        };
 
-        // Wait briefly for ws ready, then request pairing code
-        await new Promise(r => setTimeout(r, 2500));
+        sub = build();
+        setupSocketEvents(sub);
+
+        // Wait up to 6 seconds for websocket connection to be ready
+        for (let i = 0; i < 24; i++) {
+          if (sub?.ws?.readyState === 1) break;
+          await new Promise(r => setTimeout(r, 250));
+        }
+
         if (!sub.authState.creds.registered) {
           let code;
           if (process.env.USE_CUSTOM_PAIRING_CODE === 'true' && process.env.PAIRING_CODE) {
@@ -35580,7 +35628,8 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
           if (!code) {
             code = await sub.requestPairingCode(phone);
           }
-          const fmt = code?.match(/.{1,4}/g)?.join("-") || code;
+          const rawCode = String(code || "").replace(/[^A-Za-z0-9]/g, "");
+          const fmt = rawCode.match(/.{1,4}/g)?.join("-") || rawCode;
           await sendReply(sock, msg,
 `🔑 *Pairing Code for +${phone}*
 
@@ -35588,19 +35637,21 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
 │   ${fmt}   │
 └─────────────────────┘
 
-📌 *Steps:*
-1. Open WhatsApp
-2. Settings → *Linked Devices*
+📌 *Easy Steps to Link:*
+1. Open WhatsApp on phone *+${phone}*
+2. Go to: *Settings* ➔ *Linked Devices*
 3. Tap *Link a Device*
 4. Tap *Link with phone number instead*
-5. Enter the code above ☝️
+5. Copy the 8-character code sent below and paste it ☝️
 
-_Session saves itself automatically once you link — nothing is ever sent as a WhatsApp message._
-_This code expires in ~2 minutes._`);
+_Session saves automatically upon connection. Code expires in ~2 minutes._`);
+
+          // Send raw code as its own message for easy one-tap copy on WhatsApp!
+          await sock.sendMessage(msg.key.remoteJid, { text: rawCode }, { quoted: msg }).catch(() => {});
           try { await react(sock, msg, "✅"); } catch {}
         } else {
-          await sendReply(sock, msg, "ℹ️ This number is already registered on the temporary socket — try again.");
-          cleanup();
+          await sendReply(sock, msg, `ℹ️ Number +${phone} is already linked. To re-link, use *.delpair ${phone}* first.`);
+          cleanup(false);
         }
 
         // Hard timeout — clean up after 3 minutes regardless
@@ -35608,12 +35659,12 @@ _This code expires in ~2 minutes._`);
       } catch (e) {
         cleanup();
         try { await react(sock, msg, "❌"); } catch {}
-        await sendReply(sock, msg, `❌ LinkMe failed: ${e?.message || e}`);
+        await sendReply(sock, msg, `❌ Pairing failed: ${e?.message || e}`);
       }
     }
 
-    for (const n of ["linkme", "selfpair", "ownpair"]) {
-      const ex = commands.get(n) || { desc: "Generate a pairing code (.linkme <number>)", category: "SESSION" };
+    for (const n of ["linkme", "selfpair", "ownpair", "pair"]) {
+      const ex = commands.get(n) || { desc: "Generate a pairing code (.pair <number>)", category: "SESSION" };
       ex.handler = _v11LinkMe;
       commands.set(n, ex);
     }
@@ -42484,41 +42535,63 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       choice = "0";
     } else {
       const mm = cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i) || cleanB.match(/^(\d{1,2})[.\s](\d{1,2})$/);
-      if (mm) choice = `${mm[1]}.${mm[2]}`;
+      if (mm) {
+        choice = `${mm[1]}.${mm[2]}`;
+      } else {
+        const singleM = cleanB.match(/^(?:settings?\s*)?(\d{1,2})$/i);
+        if (singleM) choice = singleM[1];
+      }
     }
-    if (!choice) return false;
-    // TT/media picker rows use ids like 1.1–2.3 as well. If a picker is
-    // pending for this chat and there's no live settings session and the
-    // quoted card isn't the settings panel, leave the digit to the picker.
+
     let sessLive = false;
     try {
       const se = settingsSession.get(jid);
       const ts = typeof se === "number" ? se : (se?.ts || se?.time || 0);
       sessLive = !!se && (Date.now() - ts < 30 * 60 * 1000);
     } catch {}
+
     let quotedIsSettings = false;
     try {
-      const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
-        || msg.message?.imageMessage?.contextInfo?.quotedMessage
-        || msg.message?.videoMessage?.contextInfo?.quotedMessage
-        || null;
+      const unwrapped = typeof __v31Unwrap === "function" ? __v31Unwrap(msg?.message || {}) : (msg?.message || {});
+      const qCtx = unwrapped.extendedTextMessage?.contextInfo
+        || unwrapped.imageMessage?.contextInfo
+        || unwrapped.videoMessage?.contextInfo
+        || unwrapped.documentMessage?.contextInfo
+        || unwrapped.interactiveResponseMessage?.contextInfo
+        || msg.message?.extendedTextMessage?.contextInfo;
+      const q = typeof __v31Unwrap === "function" ? __v31Unwrap(qCtx?.quotedMessage || {}) : (qCtx?.quotedMessage || {});
       const t = String(q?.conversation || q?.extendedTextMessage?.text || q?.imageMessage?.caption || q?.videoMessage?.caption || q?.caption || "");
-      quotedIsSettings = /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(t);
+      const tNorm = t.normalize("NFKD");
+      quotedIsSettings = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(tNorm)
+        || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(t);
     } catch {}
-    let pickerPending = false;
-    try {
-      const num = __v26Num(jid);
-      for (const k of __ttSelections.keys()) { if (__v26Num(k) === num) { pickerPending = true; break; } }
-    } catch {}
-    const fn = SETTINGS_MAP[choice];
+
+    if (!choice && !quotedIsSettings) return false;
+
     if (choice === "0") {
       try { settingsSession.delete(jid); } catch {}
       await sendReply(sock, msg, "⚙️ Settings closed.");
       return true;
     }
+
+    // If user replied with a single section number (e.g. "6" or "1"), show choices for that section
+    if (choice && !choice.includes(".")) {
+      const opt1 = SETTINGS_MAP[`${choice}.1`];
+      const opt2 = SETTINGS_MAP[`${choice}.2`];
+      if (opt1 || opt2) {
+        await sendReply(sock, msg, `⚙️ *Section ${choice} Options:*
+
+• Reply *${choice}.1* to Enable (ON)
+• Reply *${choice}.2* to Disable (OFF)
+• Reply *0* to Close settings`);
+        return true;
+      }
+    }
+
+    const fn = SETTINGS_MAP[choice];
     if (!fn) {
       if (quotedIsSettings || sessLive) {
-        await sendReply(sock, msg, `❌ Unknown settings option *${choice}*. Please reply with an option number (e.g. *6.1* to enable Anti-Delete, or *0* to close).`);
+        await sendReply(sock, msg, `❌ Unknown settings option *${cleanB || choice}*. Please reply with an option number (e.g. *6.1* to enable Anti-Delete, *6.2* to disable, or *0* to close).`);
         return true;
       }
       return false;
@@ -44267,32 +44340,40 @@ for (const dead of ["setwelcomemsg", "setgoodbyemsg"]) {
 
 // ── AZA: payment info + passport-style picture card ──
 cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (sock, msg) => {
-  if (!_azaStore.bank || !_azaStore.number) {
-    await sendReply(sock, msg, `💳 *No payment account set*\n\nOwner: ${CONFIG.PREFIX}setaza Bank | Number | Name`);
-    return;
-  }
-  const caption = `💳 *PAYMENT INFO*\n\n🏦 *Bank:* ${_azaStore.bank}\n🔢 *Account:* \`${_azaStore.number}\`\n👤 *Name:* ${_azaStore.name}\n\n📋 _Tap the number to copy_`;
-  if (_azaStore.picUrl) {
+  const _mine = _getAzaFor(msg) || _azaUsers._default || {};
+  const bank = _mine.bank || _azaStore.bank || "OPAY";
+  const number = _mine.number || _azaStore.number || "9068551055";
+  const name = _mine.name || _azaStore.name || "DENNIS";
+  const picUrl = _mine.picUrl || _azaStore.picUrl || "https://files.catbox.moe/4bonns.jpg";
+  const caption = `💳 *PAYMENT INFO*\n\n🏦 *Bank:* ${bank}\n🔢 *Account:* \`${number}\`\n👤 *Name:* ${name}\n\n📋 _Tap the number to copy_`;
+  if (picUrl) {
     try {
-      const raw = Buffer.from((await axios.get(_azaStore.picUrl, { responseType: "arraybuffer", timeout: 15000 })).data);
+      const raw = Buffer.from((await axios.get(picUrl, { responseType: "arraybuffer", timeout: 15000 })).data);
       let card = raw;
-      try { await react(sock, msg, "🌷").catch(() => {}); card = await globalThis._passportCard(raw, "PAYMENT INFO", _azaStore.bank || "OPAY", `ACC: ${_azaStore.number || ""}\nNAME: ${_azaStore.name || ""}`); } catch {}
+      try { await react(sock, msg, "🌷").catch(() => {}); card = await globalThis._passportCard(raw, "PAYMENT INFO", bank, `ACC: ${number}\nNAME: ${name}`); } catch {}
       await sock.sendMessage(msg.key.remoteJid, { image: card, caption }, { quoted: msg });
       return;
     } catch {}
   }
   await sendReply(sock, msg, caption);
 });
-cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <no> | <name>", category: "INFO" }, async (sock, msg, args) => {
   const parts = args.join(" ").split("|").map(v => v.trim()).filter(Boolean);
-  if (parts.length < 3) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank | Number | Name*`); return; }
-  _azaStore.bank = parts[0]; _azaStore.number = parts[1].replace(/\D/g, ""); _azaStore.name = parts[2]; _saveAza();
-  await sendReply(sock, msg, `✅ *Saved:* ${_azaStore.bank} • ${_azaStore.number} • ${_azaStore.name}`);
+  if (parts.length < 3) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank | Number | Name*\n\nExample: *${CONFIG.PREFIX}setaza Opay | 8012345678 | Dennis*`); return; }
+  const k = _azaKeyFor(msg);
+  const updated = { bank: parts[0], number: parts[1].replace(/\D/g, ""), name: parts[2] };
+  _azaUsers[k] = Object.assign({}, _azaUsers[k] || {}, updated);
+  _azaUsers._default = Object.assign({}, _azaUsers._default || {}, updated);
+  _saveAzaAll();
+  await sendReply(sock, msg, `✅ *Payment Account Saved Successfully*\n\n🏦 Bank: *${updated.bank}*\n🔢 Number: *${updated.number}*\n👤 Name: *${updated.name}*\n\n_(Saved persistently across restarts)_`);
 });
-cmd(["setazapic"], { desc: "Set the .aza card picture (URL)", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["setazapic"], { desc: "Set the .aza card picture (URL)", category: "INFO" }, async (sock, msg, args) => {
   if (!args[0] || !/^https?:\/\//.test(args[0])) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setazapic <image_url>*`); return; }
-  _azaStore.picUrl = args[0]; _saveAza();
-  await sendReply(sock, msg, `✅ Aza picture set.`);
+  const k = _azaKeyFor(msg);
+  _azaUsers[k] = Object.assign({}, _azaUsers[k] || _getAzaFor(msg), { picUrl: args[0] });
+  _azaUsers._default = Object.assign({}, _azaUsers._default || {}, { picUrl: args[0] });
+  _saveAzaAll();
+  await sendReply(sock, msg, `✅ Aza picture saved persistently.`);
 });
 
 console.log("[PRECIOUS-MASTER-FIX] convert menu, play visibility, tkick persistence, add queue, renamegc/desc/setgcpp, welcome/goodbye passport, aza pic — all loaded.");
@@ -44346,41 +44427,52 @@ installPairCommands({
 globalThis.__miasSudoNumeric = async (sock, msg, body) => {
   try {
     const raw = String(body || "").trim();
-    // NEVER consume replies to .play menus!
-    const _ctxInfo = msg.message?.extendedTextMessage?.contextInfo || {};
-    const _qText = String(
-      _ctxInfo.quotedMessage?.conversation ||
-      _ctxInfo.quotedMessage?.extendedTextMessage?.text ||
-      _ctxInfo.quotedMessage?.imageMessage?.caption ||
-      ""
-    );
-    if (/JINX PLAYER|PLAY|MUSIC|SONG|SELECT A TRACK|AUDIO DOWNLOAD|VIDEO DOWNLOAD/i.test(_qText)) {
-      return false;
-    }
+    const unwrapped = typeof __v31Unwrap === "function" ? __v31Unwrap(msg?.message || {}) : (msg?.message || {});
+    const _ctxInfo = unwrapped.extendedTextMessage?.contextInfo
+      || unwrapped.imageMessage?.contextInfo
+      || unwrapped.videoMessage?.contextInfo
+      || unwrapped.documentMessage?.contextInfo
+      || unwrapped.interactiveResponseMessage?.contextInfo
+      || msg.message?.extendedTextMessage?.contextInfo || {};
+    const quotedMsg = typeof __v31Unwrap === "function" ? __v31Unwrap(_ctxInfo.quotedMessage || {}) : (_ctxInfo.quotedMessage || {});
 
-    const pickMatch = raw.match(/^(?:(?:[.!#/]?sudo)\s*)?([123])$/i);
-    if (!pickMatch) return false;
-    const pick = pickMatch[1];
-    const jid = msg.key.remoteJid;
-    const sNum = _cleanNum(getSender(msg));
-    const key = sNum + "|" + jid;
-
-    // Check context info and quoted message thoroughly
-    const ctx = msg.message?.extendedTextMessage?.contextInfo || {};
-    const quotedMsg = ctx.quotedMessage || {};
     let quotedText = String(
       quotedMsg.conversation ||
       quotedMsg.extendedTextMessage?.text ||
       quotedMsg.imageMessage?.caption ||
       quotedMsg.videoMessage?.caption ||
+      quotedMsg.documentMessage?.caption ||
       quotedMsg.buttonsMessage?.contentText ||
       quotedMsg.listMessage?.description ||
       quotedMsg.interactiveMessage?.body?.text ||
       ""
     );
+    const quotedNorm = quotedText.normalize("NFKD");
+    if (/JINX PLAYER|PLAY|MUSIC|SONG|SELECT A TRACK|AUDIO DOWNLOAD|VIDEO DOWNLOAD/i.test(quotedText) || /JINX PLAYER|PLAY|MUSIC|SONG|SELECT A TRACK|AUDIO DOWNLOAD|VIDEO DOWNLOAD/i.test(quotedNorm)) {
+      return false;
+    }
+
+    const isSudoCard = /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedText) || /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedNorm);
+
+    const pickMatch = raw.match(/^(?:(?:[.!#/]?sudo)\s*)?([123])$/i);
+    if (!pickMatch) {
+      if (isSudoCard) {
+        await sendReply(sock, msg, `ℹ️ *Sudo Access Menu*
+
+Please reply with:
+• *1* - Grant Sudo
+• *2* - Remove Sudo
+• *3* - Check Status`);
+        return true;
+      }
+      return false;
+    }
+    const pick = pickMatch[1];
+    const jid = msg.key.remoteJid;
+    const sNum = _cleanNum(getSender(msg));
+    const key = sNum + "|" + jid;
 
     let pend = _sudoPending.get(key) || _sudoPending.get(jid) || globalThis.__lastSudoPending;
-    const isSudoCard = /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedText);
 
     if (!pend && isSudoCard) {
       let tm = quotedText.match(/Target:\s*@?(\d{7,15})/i) || quotedText.match(/@(\d{7,15})/) || quotedText.match(/\b(\d{7,15})\b/);

@@ -2016,13 +2016,14 @@ case '__dup_removed_ownpair__': {  // moved to mias/index.js
 }
 break;
 case 'pair':
-  if (!isCreator) return m.reply("```𝗙𝗢𝗥 𝗕𝗢𝗧 𝗢𝗪𝗡𝗘𝗥𝗦 𝗢𝗡𝗟𝗬```.");
 await devtrust.sendMessage(m.chat, {react: {text: '🖇️', key: m.key}})  
-  if (!q) return reply(`*Please enter a valid number to request the pairing code.
-Format: .pair 234xxxxxxx*`);
+  target = (q || "").split("|")[0].trim();
+  if (!target && !m.quoted && !m.mentionedJid?.length) {
+    target = String(sender || "").replace(/[^0-9]/g, "");
+  }
+  if (!target) return reply(`*Please enter a valid number to request the pairing code.\nFormat: .pair 234xxxxxxx*`);
 
-  target = text.split("|")[0];
-  sjid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : target.replace(/[^0-9]/g,'') + "@s.whatsapp.net";
+  sjid = m.mentionedJid?.[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : target.replace(/[^0-9]/g,'') + "@s.whatsapp.net";
 
   var contactInfo = await devtrust.onWhatsApp(sjid);
   if (contactInfo.length === 0) {
@@ -2040,8 +2041,9 @@ Format: .pair 234xxxxxxx*`);
   await startpairing(sjid);
   const cuObj = await waitForPairingResult(sjid, 120000);
 
-  // Send just the code first
-  await devtrust.sendMessage(from, { text: `${cuObj.code}` }, { quoted: m });
+  const cleanCode = String(cuObj.code || "").replace(/[^A-Za-z0-9]/g, "");
+  // Send clean code for one-tap copy
+  await devtrust.sendMessage(from, { text: `${cleanCode}` }, { quoted: m });
 
   // Send the instructions next
   const instructions = `

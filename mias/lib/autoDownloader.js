@@ -1470,7 +1470,7 @@ async function nexrayFallback(url, platform) {
     try {
       const { data } = await axios.get(`${NEX}${p}?url=${encodeURIComponent(url)}`, { timeout: 25000, headers: { "User-Agent": UA } });
       const got = pickMedia(data);
-      if (got?.url) return got;
+      if (got?.url || got?.type === "slider" || (Array.isArray(got?.images) && got.images.length > 0)) return got;
     } catch {}
   }
   return null;

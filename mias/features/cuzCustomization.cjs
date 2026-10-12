@@ -380,17 +380,21 @@ async function handleCuzReply(sock, msg, body, P) {
     const userId = String(sender || "").replace(/:[0-9]+@/, "@");
     const sessionKey = `${jid}:${userId}`;
 
-    const rawCtx = msg.message?.extendedTextMessage?.contextInfo
-      || msg.message?.imageMessage?.contextInfo
-      || msg.message?.videoMessage?.contextInfo
-      || msg.message?.documentMessage?.contextInfo
-      || msg.message?.interactiveResponseMessage?.contextInfo;
+    const unwrappedMsg = unwrapAny(msg?.message) || msg?.message || {};
+    const rawCtx = unwrappedMsg?.extendedTextMessage?.contextInfo
+      || unwrappedMsg?.imageMessage?.contextInfo
+      || unwrappedMsg?.videoMessage?.contextInfo
+      || unwrappedMsg?.documentMessage?.contextInfo
+      || unwrappedMsg?.interactiveResponseMessage?.contextInfo
+      || msg?.message?.extendedTextMessage?.contextInfo;
 
     const rawQ = unwrapAny(rawCtx?.quotedMessage);
     const qTexts = rawQ ? collectAllText(rawQ) : [];
     const quotedText = qTexts.join(" ");
+    const quotedNorm = quotedText.normalize("NFKD");
 
-    const isCuzQuoted = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i.test(quotedText);
+    const cuzPattern = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i;
+    const isCuzQuoted = cuzPattern.test(quotedText) || cuzPattern.test(quotedNorm);
 
     let sess = pendingSessions.get(sessionKey);
     if (!sess && isCuzQuoted) {

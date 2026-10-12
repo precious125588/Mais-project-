@@ -878,10 +878,11 @@ async function startpairing(nexusDevNumber, options = {}) {
     //   open a fresh one so the wallet does not flap between states.
     if (isPairingActive(nexusDevNumber)) {
         const _existing = rentbotTracker.get(nexusDevNumber)?.connection;
+        const _trk = rentbotTracker.get(nexusDevNumber);
         const _live = !!_existing
           && typeof _existing.ws?.readyState === "number"
           && _existing.ws.readyState === 1
-          && _existing.authState?.creds?.registered === true;
+          && (!_trk || !_trk.disconnected);
         if (_live) {
             console.log(chalk.gray(`⏳ Pairing already active for ${nexusDevNumber} — keeping the existing socket.`));
             pairingInFlight.delete(nexusDevNumber);
