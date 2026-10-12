@@ -3149,10 +3149,6 @@ Save my contact:` }).catch(() => {});
               if (typeof globalThis.__miasSudoNumeric === "function") {
                 if (await globalThis.__miasSudoNumeric(sock, msg, _sudoMatch[1])) return;
               }
-            } else if (_isSudoQuoted && _cleanB && !/^(?:\d{1,2}\.[1-4]|0)$/.test(_cleanB)) {
-              if (typeof globalThis.__miasSudoNumeric === "function") {
-                if (await globalThis.__miasSudoNumeric(sock, msg, _cleanB)) return;
-              }
             }
 
             // 2. Settings Panel Quote or Settings Numeric Option (never steal TikTok/picker replies)
@@ -44464,18 +44460,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     const isSudoCard = /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedText) || /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedNorm);
 
     const pickMatch = raw.match(/^(?:(?:[.!#/]?sudo)\s*)?([123])$/i);
-    if (!pickMatch) {
-      if (isSudoCard) {
-        await sendReply(sock, msg, `ℹ️ *Sudo Access Menu*
-
-Please reply with:
-• *1* - Grant Sudo
-• *2* - Remove Sudo
-• *3* - Check Status`);
-        return true;
-      }
-      return false;
-    }
+    if (!pickMatch) return false;
     const pick = pickMatch[1];
     const jid = msg.key.remoteJid;
     const sNum = _cleanNum(getSender(msg));
