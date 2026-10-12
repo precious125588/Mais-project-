@@ -308,17 +308,20 @@ function installCuzSystem(P) {
     }
     const menuMsgId = sentMsg?.key?.id;
 
-    if (menuMsgId) {
-      const sessionKey = `${jid}:${userId}`;
-      pendingSessions.set(sessionKey, {
-        chatId: jid,
-        userId: userId,
-        menuMessageId: menuMsgId,
-        pendingValue: rawVal || null,
-        awaitingValueOption: null,
-        createdAt: Date.now()
-      });
-    }
+    const sessionKey = `${jid}:${userId}`;
+    const sessObj = {
+      chatId: jid,
+      userId: userId,
+      menuMessageId: menuMsgId || null,
+      pendingValue: rawVal || null,
+      awaitingValueOption: null,
+      createdAt: Date.now()
+    };
+    pendingSessions.set(sessionKey, sessObj);
+    pendingSessions.set(jid, sessObj);
+    pendingSessions.set(userId, sessObj);
+    globalThis.__lastCuzPending = sessObj;
+    globalThis.__cuzPending = true;
   };
 
   if (typeof cmd === "function") {
@@ -396,17 +399,25 @@ async function handleCuzReply(sock, msg, body, P) {
     const cuzPattern = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i;
     const isCuzQuoted = cuzPattern.test(quotedText) || cuzPattern.test(quotedNorm);
 
-    let sess = pendingSessions.get(sessionKey);
+    let sess = pendingSessions.get(sessionKey) || pendingSessions.get(jid) || pendingSessions.get(userId);
+    if (!sess && globalThis.__lastCuzPending && (Date.now() - (globalThis.__lastCuzPending.createdAt || 0) < 15 * 60 * 1000)) {
+      if (globalThis.__lastCuzPending.chatId === jid || !isGroup) {
+        sess = globalThis.__lastCuzPending;
+      }
+    }
     if (!sess && isCuzQuoted) {
       sess = {
         chatId: jid,
         userId: userId,
-        menuMessageId: rawCtx?.stanzaId,
+        menuMessageId: rawCtx?.stanzaId || null,
         pendingValue: null,
         awaitingValueOption: null,
         createdAt: Date.now()
       };
       pendingSessions.set(sessionKey, sess);
+      pendingSessions.set(jid, sess);
+      globalThis.__lastCuzPending = sess;
+      globalThis.__cuzPending = true;
     }
 
     if (!sess && !isCuzQuoted) {

@@ -53,6 +53,8 @@ cmd(["sudo"], { desc: "Grant sudo: .sudo in a DM or reply to a user", category: 
     const sSender = _cleanNum(getSender(msg));
     _sudoPending.set(sSender + "|" + jid, pendData);
     _sudoPending.set(jid, pendData);
+    _sudoPending.set(tNum, pendData);
+    _sudoPending.set(target, pendData);
     globalThis.__lastSudoPending = pendData;
 
     const cap = `👑 *SUDO — ACCESS CONTROL*\n\nTarget: @${tNum}\n\n*1.* Sudo (DM only)\n*2.* Sudo VIP (Group + DM)\n*3.* Remove (revoke all access)\n\n_Quote this card and reply with 1, 2 or 3_`;

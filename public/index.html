@@ -8,9 +8,9 @@
 <style>
   :root{--text:#f5f7fa;--muted:#9ba3b0;--line:rgba(255,50,70,.18);--card-bg:rgba(12,4,8,.82);--green:#25d366;--mint:#3ef2c4;--red:#ff2a44;--chakra:#ff0033;--amber:#ffc24d;--blue:#5ab0ff}
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{min-height:100%;background:#070204 url('/itachi-wallpaper.jpg') no-repeat center center fixed;background-size:cover;color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  html,body{min-height:100%;background:#08090c;color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
   body{position:relative;overflow-x:hidden;padding:22px 16px 48px}
-  .itachi-overlay{position:fixed;inset:0;pointer-events:none;z-index:0;background:radial-gradient(circle at 65% 35%,rgba(255,0,40,.24),transparent 65%),radial-gradient(circle at 20% 75%,rgba(180,0,30,.2),transparent 55%),linear-gradient(180deg,rgba(7,2,4,.76) 0%,rgba(10,2,6,.9) 100%);backdrop-filter:blur(1px)}
+  
   .aurora{position:fixed;inset:-25%;pointer-events:none;z-index:0;background:radial-gradient(38% 32% at 18% 8%,rgba(255,0,40,.28),transparent 70%),radial-gradient(32% 28% at 88% 4%,rgba(255,40,70,.18),transparent 70%),radial-gradient(40% 36% at 62% 100%,rgba(255,0,30,.14),transparent 70%);filter:blur(32px);animation:drift 20s ease-in-out infinite alternate}
   @keyframes drift{from{transform:translate3d(-2%,-1%,0) scale(1)}to{transform:translate3d(2%,2%,0) scale(1.06)}}
   .gridbg{position:fixed;inset:0;pointer-events:none;z-index:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:46px 46px;-webkit-mask-image:radial-gradient(ellipse at 50% 0%,#000 20%,transparent 70%);mask-image:radial-gradient(ellipse at 50% 0%,#000 20%,transparent 70%)}
@@ -117,16 +117,7 @@
   footer b{background:linear-gradient(100deg,var(--green),var(--mint));-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:880}
   footer a{color:inherit;opacity:.75;margin-left:8px}
 
-  /* ── SHARINGAN EYE & WHINING ANIMATIONS ── */
-  .sharingan-wrap{display:inline-flex;align-items:center;justify-content:center;position:relative}
-  .sharingan-eye{width:42px;height:42px;border-radius:50%;background:#d8001e;box-shadow:0 0 16px rgba(255,0,50,.8),0 0 32px rgba(255,0,40,.4);display:grid;place-items:center;position:relative;cursor:pointer;transition:transform .3s,box-shadow .3s}
-  .sharingan-eye:hover{transform:scale(1.08);box-shadow:0 0 24px rgba(255,0,50,1),0 0 45px rgba(255,0,50,.7)}
-  .sharingan-svg{width:38px;height:38px;animation:sharinganSpin 9s linear infinite;transform-origin:center center}
-  .sharingan-eye.whining .sharingan-svg{animation:sharinganWhine 0.45s linear infinite}
-  .sharingan-eye.whining{box-shadow:0 0 30px #ff0033,0 0 65px #ff1a40,inset 0 0 18px #ff5566;animation:sharinganPulse .5s ease-in-out infinite alternate}
-  @keyframes sharinganSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-  @keyframes sharinganWhine{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-  @keyframes sharinganPulse{0%{filter:brightness(1)}100%{filter:brightness(1.4)}}
+  
 
   /* ── CARDS & BUTTONS THEMED TO CRIMSON CHAKRA ── */
   .card{position:relative;background:var(--card-bg);border:1px solid var(--line);border-radius:28px;padding:26px;min-width:0;backdrop-filter:blur(22px);box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 40px 90px -50px #000}
@@ -148,44 +139,21 @@
   .debug-card-title{display:flex;align-items:center;gap:8px;font-weight:850;font-size:13.5px;color:#ff526a;margin-bottom:8px}
   .debug-row{margin-top:6px;font-size:12.5px;color:#d6dbe2}
   .debug-row b{color:#ff8595;font-weight:700}
-  .sfx-chip{background:rgba(255,0,50,.14);border-color:rgba(255,0,50,.4);color:#ff8595;cursor:pointer;user-select:none}
   .sfx-chip:hover{background:rgba(255,0,50,.28);color:#fff}
 
 </style>
 </head>
 <body>
-<div class="itachi-overlay" aria-hidden="true"></div>
+
 <div class="aurora" aria-hidden="true"></div>
 <div class="gridbg" aria-hidden="true"></div>
 <div class="wrap">
   <header>
     <div class="brand">
-      <div class="sharingan-wrap" title="Mangekyo Sharingan (Click to test sound)">
-        <div class="sharingan-eye" id="sharinganEye">
-          <svg class="sharingan-svg" viewBox="0 0 100 100">
-            <!-- Iris outer black ring -->
-            <circle cx="50" cy="50" r="47" fill="#d90429" stroke="#110204" stroke-width="5"/>
-            <circle cx="50" cy="50" r="36" fill="none" stroke="#220005" stroke-width="2.5" stroke-dasharray="4 2"/>
-            <!-- Itachi Mangekyo 3 curved blades / tomoe -->
-            <g fill="#0a0002">
-              <!-- Blade 1 -->
-              <path d="M 50 50 C 50 25, 68 15, 78 22 C 70 32, 58 38, 50 50 Z"/>
-              <!-- Blade 2 (rotated 120 deg) -->
-              <path d="M 50 50 C 50 25, 68 15, 78 22 C 70 32, 58 38, 50 50 Z" transform="rotate(120 50 50)"/>
-              <!-- Blade 3 (rotated 240 deg) -->
-              <path d="M 50 50 C 50 25, 68 15, 78 22 C 70 32, 58 38, 50 50 Z" transform="rotate(240 50 50)"/>
-            </g>
-            <!-- Center pupil -->
-            <circle cx="50" cy="50" r="10" fill="#000" stroke="#d90429" stroke-width="2"/>
-            <!-- Highlights -->
-            <circle cx="43" cy="42" r="3.5" fill="rgba(255,255,255,0.7)"/>
-          </svg>
-        </div>
-      </div>
-      <div>MAIS MDX<small>Itachi Sharingan · WhatsApp Link</small></div>
+      <div class="logo-box" style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#25d366,#128c7e);display:grid;place-items:center;font-size:20px;box-shadow:0 0 20px rgba(37,211,102,0.3);">🤖</div>
+      <div>MAIS MDX<small>WhatsApp Link</small></div>
     </div>
     <div class="nav">
-      <button id="sfxToggleBtn" class="pill sfx-chip" type="button" title="Toggle & Play Sharingan Whining SFX">🔊 Sharingan SFX</button>
       <span id="serverPill" class="pill">Checking server…</span>
       <a class="pill link" href="/admin">Admin</a>
     </div>
@@ -490,7 +458,6 @@
       case 'connecting':     
         setStage('connect', 'Connecting to WhatsApp servers'); 
         showSpinner(d.msg || 'Connecting…'); 
-        triggerSharinganWhineEffect(1200);
         break;
       case 'authenticating': 
         setStage('auth', 'Waiting for WhatsApp to approve the link'); 
@@ -500,18 +467,15 @@
         if (!pending) break; 
         setStage('ready', d.cached ? 'Pairing code ready (saved)' : 'Pairing code issued'); 
         showCode(d.code); 
-        playSharinganWhine(2.2);
         break;
       case 'qr_ready':       
         if (!pending) break; 
         setStage('ready', 'QR code issued'); 
         showQr(d.url); 
-        playSharinganWhine(1.8);
         break;
       case 'linked':         
         setStage('linked', 'WhatsApp linked. Starting the bot'); 
         showSpinner(d.msg || 'Starting the bot…'); 
-        playSharinganWhine(2.5);
         break;
       case 'bot_started':    
         setStage('bot', 'Bot is live'); 
@@ -559,185 +523,6 @@
     return (digits.length >= 7 && digits.length <= 15) ? digits : '';
   }
 
-
-  // ── SHARINGAN AUDIO SYNTHESIZER (Web Audio API) ──────────────────────────
-  let audioCtx = null;
-  let sfxEnabled = true;
-
-  function initAudio() {
-    if (!audioCtx) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (AudioContext) audioCtx = new AudioContext();
-    }
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume();
-    }
-  }
-
-  function playSharinganWhine(duration = 1.6) {
-    if (!sfxEnabled) return;
-    try {
-      initAudio();
-      if (!audioCtx) return;
-      const now = audioCtx.currentTime;
-
-      // Master gain envelope
-      const masterGain = audioCtx.createGain();
-      masterGain.gain.setValueAtTime(0.001, now);
-      masterGain.gain.exponentialRampToValueAtTime(0.32, now + 0.15);
-      masterGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-      masterGain.connect(audioCtx.destination);
-
-      // Primary whining oscillator (rising frequency with vibrato)
-      const osc1 = audioCtx.createOscillator();
-      osc1.type = 'sawtooth';
-      osc1.frequency.setValueAtTime(1600, now);
-      osc1.frequency.exponentialRampToValueAtTime(2950, now + duration * 0.7);
-      osc1.frequency.exponentialRampToValueAtTime(2400, now + duration);
-
-      // Vibrato LFO for eerie chakra resonance
-      const lfo = audioCtx.createOscillator();
-      lfo.frequency.setValueAtTime(14, now); // 14 Hz shimmer
-      const lfoGain = audioCtx.createGain();
-      lfoGain.gain.setValueAtTime(90, now);
-      lfo.connect(lfoGain);
-      lfoGain.connect(osc1.frequency);
-
-      // High-resonance bandpass filter
-      const filter = audioCtx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(2400, now);
-      filter.Q.setValueAtTime(12, now);
-
-      // Secondary sine overtone
-      const osc2 = audioCtx.createOscillator();
-      osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(3200, now);
-      osc2.frequency.exponentialRampToValueAtTime(4200, now + duration);
-      const osc2Gain = audioCtx.createGain();
-      osc2Gain.gain.setValueAtTime(0.12, now);
-      osc2Gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-      osc2.connect(osc2Gain);
-      osc2Gain.connect(filter);
-
-      osc1.connect(filter);
-      filter.connect(masterGain);
-
-      lfo.start(now);
-      osc1.start(now);
-      osc2.start(now);
-
-      lfo.stop(now + duration);
-      osc1.stop(now + duration);
-      osc2.stop(now + duration);
-
-      triggerSharinganWhineEffect(duration * 1000);
-    } catch (e) {
-      console.warn('Audio SFX error:', e);
-    }
-  }
-
-  function triggerSharinganWhineEffect(ms = 1800) {
-    const eye = $('sharinganEye');
-    if (eye) {
-      eye.classList.add('whining');
-      clearTimeout(eye._whineTimer);
-      eye._whineTimer = setTimeout(() => {
-        eye.classList.remove('whining');
-      }, ms);
-    }
-  }
-
-  // Diagnostic Log State & UI
-  function showDiagnosticInfo(info) {
-    const card = $('debugCard');
-    if (!card) return;
-    if (!info || (!info.what && !info.why && !info.code)) {
-      card.classList.remove('show');
-      return;
-    }
-    card.classList.add('show');
-    $('debugCardStage').textContent = info.stage || 'Connection Diagnosis';
-    $('debugCardCode').textContent = info.code ? 'Code ' + info.code : 'Protocol';
-    $('debugWhat').textContent = info.what || 'Pairing activity ongoing.';
-    $('debugWhy').textContent = info.why || 'Standard WhatsApp multi-device validation.';
-    $('debugSolution').textContent = info.solution || 'Keep WhatsApp open on your phone.';
-  }
-
-  async function start(force){
-    playSharinganWhine(2.0);
-    clearAlert();
-    $('repairRow').classList.add('hidden');
-    const digits = $('phoneInput').value.replace(/\D/g, '');
-    if (digits.length < 7 || digits.length > 15) {
-      alertMsg('Enter a valid WhatsApp number with country code, for example +2348012345678.');
-      return;
-    }
-    stopAll();
-    number = digits; stage = 'idle'; codeShown = null; qrReady = false; qrRetries = 0; pending = true; lastPhase = null;
-    try { localStorage.setItem('mais-last-number', number); } catch {}
-    startedAt = Date.now(); lastEventAt = Date.now(); stallNoted = false;
-    $('logBody').innerHTML = ''; logCount = 0; $('logCount').textContent = '';
-    $('stageOut').innerHTML = '';
-    $('pairBtn').disabled = true;
-    setPct(0, 'Starting…');
-    markSteps('none', false);
-    openStream();
-    log('Starting pairing for ' + number + ' (' + mode + ' mode)');
-    try {
-      const r = await fetch('/api/pair', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ number, mode, force: !!force })
-      });
-      const data = await r.json().catch(() => ({}));
-      if (r.status === 409 && data.canRepair) {
-        pending = false; stopAll();
-        setPct(0, 'Already connected');
-        alertMsg(data.error || 'This number is already connected.', 'info');
-        $('repairRow').classList.remove('hidden');
-        refreshHealth();
-        return;
-      }
-      if (r.status === 503) return fail(data.error || 'The server is still starting. Try again in 30 seconds.');
-      if (r.status === 429) return fail('Too many attempts. Wait a minute, then try again.');
-      if (!r.ok || data.ok === false) return fail(data.error || 'Could not start pairing. Try again.');
-      setStage('connect', 'Request accepted');
-      pollTimer = setInterval(pollStatus, 3000);
-      watchTimer = setInterval(watch, 1000);
-    } catch {
-      fail('Network problem. Check your connection and try again.');
-    } finally {
-      $('pairBtn').disabled = false;
-    }
-  }
-
-  function setMode(m){
-    mode = m;
-    $('modeCode').setAttribute('aria-pressed', String(m === 'code'));
-    $('modeQr').setAttribute('aria-pressed', String(m === 'qr'));
-    $('pairBtn').textContent = m === 'qr' ? 'Show QR code' : 'Get pairing code';
-  }
-
-
-  $('sharinganEye')?.addEventListener('click', () => {
-    initAudio();
-    playSharinganWhine(1.8);
-    log('⚡ Sharingan chakra awakened');
-  });
-
-  $('sfxToggleBtn')?.addEventListener('click', () => {
-    initAudio();
-    sfxEnabled = !sfxEnabled;
-    const btn = $('sfxToggleBtn');
-    if (sfxEnabled) {
-      btn.textContent = '🔊 Sharingan SFX';
-      btn.classList.add('sfx-chip');
-      playSharinganWhine(1.5);
-    } else {
-      btn.textContent = '🔇 SFX Muted';
-      btn.classList.remove('sfx-chip');
-    }
-  });
 
   $('copyDebugBtn')?.addEventListener('click', () => {
     const logs = Array.from(document.querySelectorAll('#logBody div')).map(d => d.textContent).join('\n');

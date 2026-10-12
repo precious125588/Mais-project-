@@ -3140,8 +3140,8 @@ Save my contact:` }).catch(() => {});
             const _isSetQuoted = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qJoined)
               || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qNorm)
               || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_qJoined);
-            const _isCuzQuoted = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_qJoined)
-              || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_qNorm);
+            const _isCuzQuoted = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qJoined)
+              || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qNorm);
 
             // 1. Sudo Card Quote or sudo numeric command (1, 2, 3, sudo 1, .sudo 1)
             const _sudoMatch = _cleanB.match(/^(?:sudo\s*)?([123])$/i);
@@ -3155,9 +3155,12 @@ Save my contact:` }).catch(() => {});
               }
             }
 
-            // 2. Settings Panel Quote or Settings Numeric Option (e.g. 8.1, 9.1, 9 1, 0, or section number)
+            // 2. Settings Panel Quote or Settings Numeric Option (never steal TikTok/picker replies)
             const _setMatch = _cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i) || (_cleanB === "0" ? ["0", "0"] : null);
-            if (_isSetQuoted || _setMatch) {
+            const _isTikTokQ = /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(_qNorm);
+            const _hasPendingP = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(msg.key.remoteJid);
+            const _hasActiveSetSession = !!(settingsSession && settingsSession.get(msg.key.remoteJid));
+            if (!_isTikTokQ && !_hasPendingP && (_isSetQuoted || (_hasActiveSetSession && _setMatch))) {
               if (typeof handleSettingsNumericReply === "function") {
                 const _setChoice = _setMatch ? (_setMatch[0] === "0" ? "0" : `${_setMatch[1]}.${_setMatch[2]}`) : _cleanB;
                 if (await handleSettingsNumericReply(sock, msg, _setChoice)) return;
@@ -3214,7 +3217,7 @@ Save my contact:` }).catch(() => {});
             const _eqNorm = _eqTxt.normalize("NFKD");
             const _eqCleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
             const _isSudoQ = /SUDO|ACCESS CONTROL/i.test(_eqTxt) || /SUDO|ACCESS CONTROL/i.test(_eqNorm) || !!globalThis.__lastSudoPending;
-            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_eqTxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|cuz/i.test(_eqNorm) || !!globalThis.__cuzPending;
+            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqTxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqNorm) || !!globalThis.__cuzPending;
             const _isSetQ = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqTxt) || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqNorm) || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_eqTxt);
 
             if (_isSudoQ && /^[123]$/.test(_eqCleanB)) {
@@ -3230,7 +3233,9 @@ Save my contact:` }).catch(() => {});
                 }
               } catch (_) {}
             }
-            if (_isSetQ || /^(\d{1,2}\.[1-4]|0)$/.test(_eqCleanB)) {
+            const _eqIsTikTok = /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(_eqNorm);
+            const _eqHasPicker = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(msg.key.remoteJid);
+            if (_isSetQ && !_eqIsTikTok && !_eqHasPicker) {
               if (typeof handleSettingsNumericReply === "function") {
                 if (await handleSettingsNumericReply(sock, msg, body)) return;
               }
@@ -3240,7 +3245,7 @@ Save my contact:` }).catch(() => {});
           const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
             const _pQtxt = (typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||"";
             const _pNorm = String(_pQtxt || "").normalize("NFKD");
-   const _pIsSettingsPanel = /SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot|\b\d{1,2}\.[1-4]\b/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT|\b\d{1,2}\.[1-4]\b/i.test(_pNorm);
+   const _pIsSettingsPanel = (/SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT/i.test(_pNorm)) && !/TIKTOK|PHOTO SLIDE|NO WATERMARK/i.test(_pNorm);
             if (!_pIsSettingsPanel && _pickerChoice && (_pickerActive || (_v32HasQuote && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test(_pQtxt)))) {
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
             }
@@ -42562,11 +42567,20 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       const q = typeof __v31Unwrap === "function" ? __v31Unwrap(qCtx?.quotedMessage || {}) : (qCtx?.quotedMessage || {});
       const t = String(q?.conversation || q?.extendedTextMessage?.text || q?.imageMessage?.caption || q?.videoMessage?.caption || q?.caption || "");
       const tNorm = t.normalize("NFKD");
-      quotedIsSettings = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(tNorm)
-        || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(t);
+
+      // TikTok or Media Picker context MUST NOT be swallowed by settings
+      const isTikTokContext = /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(tNorm)
+        || (typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(jid))
+        || (typeof __ttGetSelection === "function" && !!__ttGetSelection(jid));
+      if (isTikTokContext) return false;
+
+      quotedIsSettings = (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(tNorm)
+        || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(t))
+        && !/TIKTOK|PLAYER|SUDO|CUSTOMIZ/i.test(tNorm);
     } catch {}
 
-    if (!choice && !quotedIsSettings) return false;
+    if (!choice) return false;
+    if (!quotedIsSettings && !sessLive) return false;
 
     if (choice === "0") {
       try { settingsSession.delete(jid); } catch {}
@@ -42604,13 +42618,8 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       } catch {}
       try { settingsSession.set(jid, { ts: Date.now() }); } catch {}
       try { saveNow && saveNow(); } catch {}
-      let formattedOut = typeof out === "string" ? out : "✅ Setting updated.";
-      if (!formattedOut.startsWith("{") && !formattedOut.startsWith("❌")) {
-        const cleanName = choice.replace(/[^0-9.]/g, "");
-        const state = choice.endsWith(".1") ? "on" : "off";
-        formattedOut = `{ setting_${cleanName} ${state} }`;
-      }
-      await sendReply(sock, msg, formattedOut);
+      const replyText = typeof out === "string" ? out : "✅ Setting updated.";
+      await sendReply(sock, msg, `${replyText}\n\n_Reply another option, or *0* to close._`);
     } catch (e) { await sendReply(sock, msg, `❌ Settings error: ${e?.message || e}`); }
     return true;
   };
@@ -44472,15 +44481,16 @@ Please reply with:
     const sNum = _cleanNum(getSender(msg));
     const key = sNum + "|" + jid;
 
-    let pend = _sudoPending.get(key) || _sudoPending.get(jid) || globalThis.__lastSudoPending;
+    let pend = _sudoPending.get(key) || _sudoPending.get(jid) || _sudoPending.get(sNum) || globalThis.__lastSudoPending;
 
     if (!pend && isSudoCard) {
-      let tm = quotedText.match(/Target:\s*@?(\d{7,15})/i) || quotedText.match(/@(\d{7,15})/) || quotedText.match(/\b(\d{7,15})\b/);
+      let tm = quotedText.match(/(?:\*?Target\*?[:* \t]+|@)(\d{7,15})/i) || quotedText.match(/@(\d{7,15})/) || quotedText.match(/\b(\d{7,15})\b/);
       if (tm) {
         const tNum = tm[1];
-        pend = { target: tNum + "@s.whatsapp.net", tNum, ts: Date.now(), recovered: true };
+        pend = _sudoPending.get(tNum) || { target: tNum + "@s.whatsapp.net", tNum, ts: Date.now(), recovered: true };
         _sudoPending.set(key, pend);
         _sudoPending.set(jid, pend);
+        _sudoPending.set(tNum, pend);
       }
     }
 
@@ -44492,11 +44502,9 @@ Please reply with:
     }
 
     if (!pend) {
-      // NEVER-SILENT (settings/sudo/cuz quote rewrite): the user quoted the
-      // sudo card and replied with a number, but the pending target was lost
-      // (restart / TTL). Never stay silent — tell them exactly what to do.
-      if (isSudoCard && /^[.!#/]?[123]$/.test(raw)) {
-        await sendReply(sock, msg, "⌛ That sudo card expired — run *" + ((typeof CONFIG !== 'undefined' && CONFIG.PREFIX) || ".") + "sudo @user* again, then reply 1, 2 or 3 on the fresh card.");
+      // NEVER-SILENT: user quoted or replied to sudo card, but pending was lost
+      if (isSudoCard) {
+        await sendReply(sock, msg, "⌛ That sudo session expired — run *" + ((typeof CONFIG !== 'undefined' && CONFIG.PREFIX) || ".") + "sudo @user* again to issue a fresh card, then reply 1, 2 or 3.");
         return true;
       }
       return false;

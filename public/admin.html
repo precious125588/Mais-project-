@@ -16,7 +16,7 @@
 
 *{margin:0;padding:0;box-sizing:border-box}
 html{color-scheme:dark}
-body{background:#070204 url('/itachi-wallpaper.jpg') no-repeat center center fixed;background-size:cover;color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased;transition:background .4s,color .4s;overflow-x:hidden}
+body{background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased;transition:background .4s,color .4s;overflow-x:hidden}
 body::before{content:'';position:fixed;inset:0;z-index:0;background:radial-gradient(circle at 70% 30%,rgba(255,0,40,.22),transparent 65%),radial-gradient(circle at 20% 75%,rgba(180,0,30,.18),transparent 55%),linear-gradient(180deg,rgba(7,2,4,.78) 0%,rgba(10,2,6,.92) 100%);pointer-events:none}
 body::before{content:'';position:fixed;inset:0;z-index:0;background:var(--grad);pointer-events:none}
 body::after{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:48px 48px;-webkit-mask-image:radial-gradient(ellipse at 60% 0%,#000,transparent 70%);mask-image:radial-gradient(ellipse at 60% 0%,#000,transparent 70%)}
@@ -206,17 +206,6 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
   .mob-nav button .mn-icon{font-size:1.15rem;line-height:1}
 }
 
-/* ── SHARINGAN EYE & WHINING ANIMATIONS ── */
-.sharingan-admin-wrap{display:flex;align-items:center;gap:12px;margin-bottom:6px}
-.sharingan-eye-admin{width:36px;height:36px;border-radius:50%;background:#d8001e;box-shadow:0 0 14px rgba(255,0,50,.8),0 0 28px rgba(255,0,40,.4);display:grid;place-items:center;position:relative;cursor:pointer;flex-shrink:0;transition:transform .3s,box-shadow .3s}
-.sharingan-eye-admin:hover{transform:scale(1.1);box-shadow:0 0 22px rgba(255,0,50,1),0 0 40px rgba(255,0,50,.7)}
-.sharingan-svg-admin{width:32px;height:32px;animation:sharinganSpin 9s linear infinite;transform-origin:center center}
-.sharingan-eye-admin.whining .sharingan-svg-admin{animation:sharinganWhine 0.45s linear infinite}
-.sharingan-eye-admin.whining{box-shadow:0 0 28px #ff0033,0 0 55px #ff1a40,inset 0 0 15px #ff5566;animation:sharinganPulse .5s ease-in-out infinite alternate}
-@keyframes sharinganSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-@keyframes sharinganWhine{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-@keyframes sharinganPulse{0%{filter:brightness(1)}100%{filter:brightness(1.4)}}
-.sfx-btn-active{color:#ff8595!important;border-color:rgba(255,0,50,.45)!important;background:rgba(255,0,50,.15)!important}
 
 </style>
 </head>
@@ -245,7 +234,6 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
 
 <!-- TOP BAR -->
 <div class="topbar">
-  <button type="button" class="tb-btn sfx-btn-active" id="adminSfxBtn" onclick="toggleAdminSFX()">🔊 Sharingan SFX</button>
   <button type="button" class="tb-btn" onclick="location.href='/'">🌐 Pair page</button>
   <button type="button" class="tb-btn" onclick="toggleTP()">🎨 Theme</button>
   <button type="button" class="tb-btn" onclick="doLogout()">Logout</button>
@@ -277,23 +265,11 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
 <div class="shell">
   <div class="sidebar">
     <div class="sb-logo">
-      <div class="sharingan-admin-wrap" onclick="triggerAdminSFX()" title="Mangekyo Sharingan (Click to play sound)">
-        <div class="sharingan-eye-admin" id="adminSharinganEye">
-          <svg class="sharingan-svg-admin" viewBox="0 0 100 100">
-            <circle cx="50" cy="50" r="47" fill="#d90429" stroke="#110204" stroke-width="5"/>
-            <circle cx="50" cy="50" r="36" fill="none" stroke="#220005" stroke-width="2.5" stroke-dasharray="4 2"/>
-            <g fill="#0a0002">
-              <path d="M 50 50 C 50 25, 68 15, 78 22 C 70 32, 58 38, 50 50 Z"/>
-              <path d="M 50 50 C 50 25, 68 15, 78 22 C 70 32, 58 38, 50 50 Z" transform="rotate(120 50 50)"/>
-              <path d="M 50 50 C 50 25, 68 15, 78 22 C 70 32, 58 38, 50 50 Z" transform="rotate(240 50 50)"/>
-            </g>
-            <circle cx="50" cy="50" r="10" fill="#000" stroke="#d90429" stroke-width="2"/>
-            <circle cx="43" cy="42" r="3.5" fill="rgba(255,255,255,0.7)"/>
-          </svg>
-        </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#25d366,#128c7e);display:grid;place-items:center;font-size:18px;">⚡</div>
         <div>
           <div class="sb-brand">MAIS MDX</div>
-          <div class="sb-sub">Itachi Sharingan Admin</div>
+          <div class="sb-sub">Control Center</div>
         </div>
       </div>
     </div>
@@ -986,105 +962,6 @@ function onLoggedIn(){
   startLogStream();
   loadStats();
   setInterval(loadStats,15000);
-}
-
-// ── SHARINGAN AUDIO SYNTHESIZER (Admin) ──
-let adminAudioCtx = null;
-let adminSfxEnabled = true;
-
-function initAdminAudio() {
-  if (!adminAudioCtx) {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (AudioContext) adminAudioCtx = new AudioContext();
-  }
-  if (adminAudioCtx && adminAudioCtx.state === 'suspended') {
-    adminAudioCtx.resume();
-  }
-}
-
-function playAdminSharinganWhine(duration = 1.6) {
-  if (!adminSfxEnabled) return;
-  try {
-    initAdminAudio();
-    if (!adminAudioCtx) return;
-    const now = adminAudioCtx.currentTime;
-
-    const masterGain = adminAudioCtx.createGain();
-    masterGain.gain.setValueAtTime(0.001, now);
-    masterGain.gain.exponentialRampToValueAtTime(0.3, now + 0.15);
-    masterGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-    masterGain.connect(adminAudioCtx.destination);
-
-    const osc1 = adminAudioCtx.createOscillator();
-    osc1.type = 'sawtooth';
-    osc1.frequency.setValueAtTime(1600, now);
-    osc1.frequency.exponentialRampToValueAtTime(2950, now + duration * 0.7);
-    osc1.frequency.exponentialRampToValueAtTime(2400, now + duration);
-
-    const lfo = adminAudioCtx.createOscillator();
-    lfo.frequency.setValueAtTime(14, now);
-    const lfoGain = adminAudioCtx.createGain();
-    lfoGain.gain.setValueAtTime(90, now);
-    lfo.connect(lfoGain);
-    lfoGain.connect(osc1.frequency);
-
-    const filter = adminAudioCtx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(2400, now);
-    filter.Q.setValueAtTime(12, now);
-
-    const osc2 = adminAudioCtx.createOscillator();
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(3200, now);
-    osc2.frequency.exponentialRampToValueAtTime(4200, now + duration);
-    const osc2Gain = adminAudioCtx.createGain();
-    osc2Gain.gain.setValueAtTime(0.12, now);
-    osc2Gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-    osc2.connect(osc2Gain);
-    osc2Gain.connect(filter);
-
-    osc1.connect(filter);
-    filter.connect(masterGain);
-
-    lfo.start(now);
-    osc1.start(now);
-    osc2.start(now);
-
-    lfo.stop(now + duration);
-    osc1.stop(now + duration);
-    osc2.stop(now + duration);
-
-    const eye = document.getElementById('adminSharinganEye');
-    if (eye) {
-      eye.classList.add('whining');
-      clearTimeout(eye._timer);
-      eye._timer = setTimeout(() => eye.classList.remove('whining'), duration * 1000);
-    }
-  } catch (e) {
-    console.warn('Admin audio error:', e);
-  }
-}
-
-function triggerAdminSFX() {
-  initAdminAudio();
-  playAdminSharinganWhine(1.8);
-  showToast('⚡ Sharingan chakra awakened');
-}
-
-function toggleAdminSFX() {
-  initAdminAudio();
-  adminSfxEnabled = !adminSfxEnabled;
-  const btn = document.getElementById('adminSfxBtn');
-  if (adminSfxEnabled) {
-    btn.textContent = '🔊 Sharingan SFX';
-    btn.classList.add('sfx-btn-active');
-    playAdminSharinganWhine(1.5);
-    showToast('Sharingan sound effect enabled');
-  } else {
-    btn.textContent = '🔇 SFX Muted';
-    btn.classList.remove('sfx-btn-active');
-    showToast('Sound effects muted');
-  }
 }
 
 </script>

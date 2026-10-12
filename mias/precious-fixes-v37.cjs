@@ -183,9 +183,20 @@ module.exports = function installV37(ctx) {
           || (m?.body) || '';
         const ctx = m?.message?.extendedTextMessage?.contextInfo;
         if (!ctx?.stanzaId || !ctx?.quotedMessage) return false;
-        // The reply QUOTES the settings panel? Then respect the typed number even
-        // if the panel reply contains a `meta.ai` style card with badge text.
-        const fullText = body + ' ' + body; // extraction
+        const jid = m?.key?.remoteJid;
+
+        // Never steal TikTok or media picker replies
+        if (typeof globalThis.__miasHasPendingPicker === "function" && globalThis.__miasHasPendingPicker(jid)) return false;
+
+        const qRaw = JSON.stringify(ctx.quotedMessage || {});
+        if (/TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK|PLAYER|SUDO|ACCESS CONTROL|CUSTOMIZ|BRANDING/i.test(qRaw)) {
+          return false;
+        }
+
+        const isSettingsPanel = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(qRaw);
+        if (!isSettingsPanel) return false;
+
+        const fullText = body + ' ' + body;
         const choice = _slugChoice(fullText);
         if (!/^\d{1,2}\.\d{1,2}$/.test(choice)) return false;
         // Re-dispense into the existing settings handler.
