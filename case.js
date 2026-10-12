@@ -2015,48 +2015,95 @@ case '__dup_removed_ownpair__': {  // moved to mias/index.js
   }
 }
 break;
-case 'pair':
-await devtrust.sendMessage(m.chat, {react: {text: '🖇️', key: m.key}})  
-  target = (q || "").split("|")[0].trim();
-  if (!target && !m.quoted && !m.mentionedJid?.length) {
-    target = String(sender || "").replace(/[^0-9]/g, "");
+case 'pair': {
+  try {
+    await devtrust.sendMessage(m.chat, { react: { text: '🖇️', key: m.key } });
+
+    let target = (q || "").split("|")[0].trim();
+    if (!target && !m.quoted && !m.mentionedJid?.length) {
+      target = String(sender || "").replace(/[^0-9]/g, "");
+    }
+    
+    let rawDigits = String(target || "").replace(/[^0-9]/g, '');
+    if (!rawDigits || rawDigits.length < 7 || rawDigits.length > 15) {
+      return reply(`*❌ Please enter a valid WhatsApp phone number with country code.*
+*Format:* \`.pair 2348012345678\``);
+    }
+
+    let sjid = rawDigits + "@s.whatsapp.net";
+
+    // Validate on WhatsApp if function exists
+    try {
+      if (typeof devtrust.onWhatsApp === 'function') {
+        const contactInfo = await devtrust.onWhatsApp(sjid);
+        if (Array.isArray(contactInfo) && contactInfo.length > 0 && !contactInfo[0]?.exists) {
+          return reply(`❌ The number *+${rawDigits}* is not registered on WhatsApp.`);
+        }
+      }
+    } catch (e) {
+      // Non-critical check failure; proceed
+    }
+
+    const pairModule = require('./pair.js');
+    const startpairing = typeof pairModule === 'function' ? pairModule : pairModule.startpairing;
+    const waitForPairingResult = pairModule.waitForPairingResult;
+    const hasPairedSession = pairModule.hasPairedSession;
+
+    if (typeof startpairing !== 'function' || typeof waitForPairingResult !== 'function') {
+      return reply(`❌ Pairing module is temporarily unavailable. Please retry in a few seconds.`);
+    }
+
+    if (typeof hasPairedSession === 'function' && hasPairedSession(sjid, { clean: false })) {
+      return reply(`✅ Number *+${rawDigits}* is already linked and active!`);
+    }
+
+    await reply(`⏳ *Requesting pairing code for +${rawDigits}...*
+_Please keep your WhatsApp mobile app open._`);
+
+    await startpairing(sjid, { mode: 'code' });
+    const cuObj = await waitForPairingResult(sjid, 120000, 'code');
+
+    if (!cuObj || !cuObj.code) {
+      return reply(`❌ Could not generate pairing code for *+${rawDigits}*. WhatsApp may be busy. Please try again in 30 seconds.`);
+    }
+
+    const formattedCode = String(cuObj.code || "").trim();
+    const cleanCode = formattedCode.replace(/[^A-Za-z0-9]/g, "");
+
+    // 1. Send clean raw code for one-tap copy
+    await devtrust.sendMessage(from, { text: `${cleanCode}` }, { quoted: m });
+
+    // 2. Send instructions with formatted code
+    const instructions = `*[🔗 PAIRING CODE GENERATED ✅]*
+
+` +
+      `📱 *Number:* +${rawDigits}
+` +
+      `🔑 *Code:* \`${formattedCode}\`
+
+` +
+      `*Steps to link:*
+` +
+      `1. Open WhatsApp on your phone
+` +
+      `2. Tap *Settings* (or three dots ⋮) ➔ *Linked Devices*
+` +
+      `3. Tap *Link a Device*
+` +
+      `4. Select *Link with phone number instead*
+` +
+      `5. Enter the code: *${cleanCode}*
+
+` +
+      `⏱️ _This code expires in 2 minutes. Your bot session will start automatically once connected._`;
+
+    await devtrust.sendMessage(from, { text: instructions }, { quoted: m });
+  } catch (err) {
+    console.error('[pair cmd error]', err);
+    await reply(`❌ *Pairing Error:* ${err.message || 'Unknown error occurred. Please try again.'}`);
   }
-  if (!target) return reply(`*Please enter a valid number to request the pairing code.\nFormat: .pair 234xxxxxxx*`);
-
-  sjid = m.mentionedJid?.[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : target.replace(/[^0-9]/g,'') + "@s.whatsapp.net";
-
-  var contactInfo = await devtrust.onWhatsApp(sjid);
-  if (contactInfo.length === 0) {
-    return reply("The number is not registered on WhatsApp");
-  }
-
-  const pairModule = require('./pair.js');
-  const startpairing = typeof pairModule === 'function' ? pairModule : pairModule.startpairing;
-  const waitForPairingResult = pairModule.waitForPairingResult;
-  const hasPairedSession = pairModule.hasPairedSession;
-  if (typeof startpairing !== 'function' || typeof waitForPairingResult !== 'function') throw new Error('Pairing module is not loaded correctly');
-  if (typeof hasPairedSession === 'function' && hasPairedSession(sjid)) {
-    return reply(`✅ Already paired: +${sjid.split('@')[0]}`);
-  }
-  await startpairing(sjid);
-  const cuObj = await waitForPairingResult(sjid, 120000);
-
-  const cleanCode = String(cuObj.code || "").replace(/[^A-Za-z0-9]/g, "");
-  // Send clean code for one-tap copy
-  await devtrust.sendMessage(from, { text: `${cleanCode}` }, { quoted: m });
-
-  // Send the instructions next
-  const instructions = `
-*[🔗 Pairing Code Generated ✅]*
-
-Steps 📑
-➔Open WhatsApp
-➔ Linked Devices
-➔ Link Device
-➔ Enter this code`;
-
-  await devtrust.sendMessage(from, { text: instructions }, { quoted: m });
-break;
+  break;
+}
 case '__dup_removed_codeai__': {  // moved to mias/index.js
     if (!text) return reply(`⚠️ Usage: ${command} <your coding question>\n\nExample: ${command} write a python function to check prime numbers`)
 

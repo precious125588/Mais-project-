@@ -243,6 +243,9 @@ function getPairingRuntimeState(nexusDevNumber) {
         qr,
         error: tracker?.pairingError || null,
         disconnected: !!tracker?.disconnected,
+        debug: tracker?.pairingDebug || null,
+        stage: tracker?.pairingStage || (code ? 'code_ready' : (qr ? 'qr_ready' : (isPairingActive(nexusDevNumber) ? 'connecting' : 'idle'))),
+        lastDisconnectReason: tracker?.lastDisconnectReason || null,
     };
 }
 
@@ -551,6 +554,10 @@ function processQueue() {
 }
 
 function queuePairing(nexusDevNumber) {
+    const tr = rentbotTracker.get(nexusDevNumber);
+    if (tr?.disconnected || tr?.isRestarting515) {
+        pairingInFlight.delete(nexusDevNumber);
+    }
     if (queuedNumbers.has(nexusDevNumber) || pairingInFlight.has(nexusDevNumber)) {
         return Promise.resolve(rentbotTracker.get(nexusDevNumber)?.connection || null);
     }
@@ -818,6 +825,8 @@ function waitForSocketOpen(sock, timeoutMs = 20000) {
 // identity. WhatsApp reacts to that ~60s later with reason 401, which the
 // 401 branch then treated as a real logout and wiped the session.
 function retireSocket(nexusDevNumber, reason = 'retired') {
+    pairingInFlight.delete(nexusDevNumber);
+    queuedNumbers.delete(nexusDevNumber);
     const tracker = rentbotTracker.get(nexusDevNumber);
     const conn = tracker && tracker.connection;
     if (!conn) return;
@@ -1042,7 +1051,8 @@ async function startpairing(nexusDevNumber, options = {}) {
         // fingerprint now — macOS/Chrome QR payloads were the "fake QR /
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
-        browser: ["Mac OS", "Chrome", "121.0.6167.85"],
+        // Most reliable, long-lasting client fingerprint across WhatsApp Web & Baileys
+        browser: (typeof Browsers !== "undefined" && Browsers?.ubuntu) ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "22.04.4"],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
@@ -1087,7 +1097,7 @@ async function startpairing(nexusDevNumber, options = {}) {
 
     if (store) store.bind(nexus.ev);
 
-    if (pairingMode === 'code' && !state.creds.registered && !state.creds?.me?.id) {
+    if (pairingMode === 'code' && !state.creds.registered && !state.creds?.me?.id && !tracker?.isRestarting515) {
         if (useMobile) {
             throw new Error('Cannot use pairing code with mobile API');
         }
@@ -1728,19 +1738,30 @@ async function startpairing(nexusDevNumber, options = {}) {
             // Wipe the half session and start a clean pairing instead of
             // dead-ending the user.
             if (reason === 401 && pairingStillPending) {
+                tracker.lastDisconnectReason = 401;
+                tracker.pairingDebug = {
+                    code: 401,
+                    stage: 'Authentication Rejected',
+                    what: 'WhatsApp rejected the credentials during pairing (Code 401)',
+                    why: 'Usually caused if the 8-character code was entered after expiring (2-minute window), or another session link was attempted simultaneously.',
+                    solution: 'A fresh pairing code will be issued. Please enter it promptly in WhatsApp.'
+                };
                 tracker.pairRestarts = (tracker.pairRestarts || 0) + 1;
                 if (tracker.pairRestarts <= 2) {
                     console.log(chalk.yellow(`🔁 401 while pairing ${nexusDevNumber} — restarting with a fresh session (${tracker.pairRestarts}/2)`));
                     const restarts = tracker.pairRestarts;
                     endPairingWindow(nexusDevNumber);
+                    pairingInFlight.delete(nexusDevNumber);
+                    queuedNumbers.delete(nexusDevNumber);
                     forceCleanupSession(nexusDevNumber, { force: true });
-                    await sleep(2500);
-                    queuePairing(nexusDevNumber).catch(() => {});
+                    await sleep(2000);
+                    startpairing(nexusDevNumber, { mode: tracker.pairingMode || 'code' }).catch(() => {});
                     const t2 = rentbotTracker.get(nexusDevNumber);
                     if (t2) t2.pairRestarts = restarts;
                     return;
                 }
                 console.log(chalk.red(`❌ Pairing rejected repeatedly for ${nexusDevNumber}`));
+                tracker.pairingError = 'Pairing was rejected by WhatsApp (401). Please check that your WhatsApp app is updated and retry.';
                 endPairingWindow(nexusDevNumber);
                 forceCleanupSession(nexusDevNumber, { force: true });
                 return;
@@ -1750,17 +1771,28 @@ async function startpairing(nexusDevNumber, options = {}) {
             // pairing — reconnect, never wipe the session.
             if (reason === 515) {
                 tracker.isRestarting515 = true;
-                console.log(chalk.blue(`🔄 Restart required (515) for ${nexusDevNumber}`));
+                tracker.lastDisconnectReason = 515;
+                tracker.pairingStage = 'restart_515';
+                tracker.pairingDebug = {
+                    code: 515,
+                    stage: 'Handshake Restart',
+                    what: 'WhatsApp issued a protocol restart requirement (Code 515)',
+                    why: 'This occurs right after the 8-character pairing code is entered on your phone while WhatsApp exchanges companion keys. The socket is reconnecting immediately to finalize the link.',
+                    solution: 'Keep WhatsApp open on your phone; connection is finalizing automatically.'
+                };
+                console.log(chalk.blue(`🔄 Restart required (515) for ${nexusDevNumber} — reconnecting immediately to complete pairing handshake`));
                 if (ownership.isOwnedByBot(nexusDevNumber)) {
                     console.log(chalk.gray(`🛡️ Bot owns ${nexusDevNumber} — leaving the restart to it.`));
                     return;
                 }
-                // Fully retire this socket first, otherwise its creds.update
-                // listener overwrites the new session's creds -> 401 later.
+                pairingInFlight.delete(nexusDevNumber);
+                queuedNumbers.delete(nexusDevNumber);
                 retireSocket(nexusDevNumber, '515 restart required');
                 tracker.pairedAt = Date.now();
-                await sleep(2000);
-                queuePairing(nexusDevNumber).catch(() => {});
+                await sleep(1200);
+                startpairing(nexusDevNumber, { mode: tracker.pairingMode || 'code' }).catch(err => {
+                    console.error(chalk.red(`515 reconnect error: ${err.message}`));
+                });
                 return;
             }
 
@@ -1889,11 +1921,10 @@ async function startpairing(nexusDevNumber, options = {}) {
                 };
                 try { nexus.ev.once('messaging-history.set', onHistory); } catch {}
 
-                // Wait up to 20 seconds or until companion history arrives, plus buffer
-                for (let i = 0; i < 20; i++) {
+                // Wait up to 5 seconds for companion encryption keys to finish exchanging
+                for (let i = 0; i < 5; i++) {
                     await sleep(1000);
                     try { await _safeSaveCreds(); } catch {}
-                    if (syncSettled && i >= 6) break;
                 }
 
                 ownership.handOffToBot(nexusDevNumber, 'mias-mdx');

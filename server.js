@@ -455,8 +455,14 @@ app.get('/api/pair/stream/:number', (req,res) => {
                 active: !!state.active,
                 paired: !!state.paired,
                 live: !!state.live,
-                mode: state.mode || requestedMode || null
+                mode: state.mode || requestedMode || null,
+                debug: state.debug || null,
+                stage: state.stage || null,
+                lastDisconnectReason: state.lastDisconnectReason || null
             });
+            if (state.debug) {
+                sendPairingEvent(res, 'debug', state.debug);
+            }
             if (state.active && !sentConnecting) {
                 sentConnecting = true;
                 sendPairingEvent(res, 'connecting', {msg:'Connected to the pairing service.'});
@@ -628,6 +634,9 @@ app.get('/api/pair/status/:number', (req,res) => {
         ready:_ready,botRunning,
         active:!!runtime.active,
         error:runtime.error||null,
+        debug:runtime.debug||null,
+        stage:runtime.stage||null,
+        lastDisconnectReason:runtime.lastDisconnectReason||null,
         awaitingSelection: false,
         bot: botRunning ? { id: "mias-mdx", name: "MIAS MDX", locked: true } : null,
         botStatus: bs,
