@@ -36,6 +36,17 @@ try {
   _ytdl = _req("@vreden/youtube_scraper");
 } catch (_) {}
 
+
+let _portableVideo = null;
+function getPortableVideo() {
+  if (_portableVideo) return _portableVideo;
+  try {
+    const _req = createRequire(import.meta.url);
+    _portableVideo = _req("./portableVideo.cjs");
+  } catch (_) {}
+  return _portableVideo;
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const ZERO_BASE   = "https://zeroapi2-production.up.railway.app";
@@ -325,10 +336,22 @@ async function fromTikwm(url, platform) {
   const r = await httpPostForm("https://www.tikwm.com/api/", { url, hd: "1" }, { headers: { Referer: "https://www.tikwm.com/" } });
   const d = r.data?.data;
   if (!d) return null;
-  const dl = d.hdplay || d.play || d.wmplay || d.video || d.images?.[0];
+  const rawImages = Array.isArray(d.images) ? d.images : (Array.isArray(d.image_post_info?.images) ? d.image_post_info.images.map(x => x?.display_image?.url_list?.[0] || x) : []);
+  const images = rawImages.filter(x => typeof x === "string" && x);
+  if (images.length > 0) {
+    return {
+      type: "slider",
+      images,
+      music: d.music || d.play,
+      title: d.title || platform,
+      thumb: d.cover,
+      _via: "tikwm"
+    };
+  }
+  const dl = d.hdplay || d.play || d.wmplay || d.video;
   if (!dl) return null;
   const fullUrl = String(dl).startsWith("http") ? dl : `https://www.tikwm.com${dl}`;
-  return { url: fullUrl, type: d.images?.length && !d.play ? "image" : "video", title: d.title || platform, thumb: d.cover, _via: "tikwm" };
+  return { url: fullUrl, type: "video", title: d.title || platform, thumb: d.cover, _via: "tikwm" };
 }
 
 // ─── YouTube resolvers (in priority order) ─────────────────────────────────
@@ -1166,7 +1189,7 @@ async function resolvePlatformMedia(url, platform) {
   // ── TikTok ──
   if (platform === "tiktok") {
     const tik = await fromTikwm(expanded, platform).catch(() => null);
-    if (tik?.url) return tik;
+    if (tik?.url || (tik?.type === "slider" && tik?.images?.length)) return tik;
     try {
       const r = await prexzyGet("/download/tiktok", { url: expanded });
       const d = r?.data?.data || r?.data?.result || r?.data;
@@ -1493,33 +1516,64 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
   let tmpPath = null;
   try {
     const result = await resolveMediaUrl(url, platform);
-    if (!result?.url) throw new Error("No download URL resolved");
+    if (!result?.url && !(result?.type === "slider" && result?.images?.length)) {
+      throw new Error("No download URL resolved");
+    }
 
-    const downloaded = await downloadToTemp(result.url, result.type || preferredType(platform));
-    tmpPath = downloaded.tmpPath;
-    const bytes = fs.readFileSync(tmpPath);
-    const sizeText = downloaded.size >= 1024 * 1024
-      ? `${(downloaded.size / 1024 / 1024).toFixed(1)} MB`
-      : `${(downloaded.size / 1024).toFixed(1)} KB`;
-    const caption = `*${result.title || `Auto-downloaded from ${platform}`}*\n📦 ${sizeText}`;
-    const fileName = `${platform}_${Date.now()}.${downloaded.ext}`;
+    let bytes;
+    let caption;
+    let fileName;
+    let dlType = result.type || preferredType(platform);
+    let dlMime = "video/mp4";
 
-    if (downloaded.type === "video") {
+    if (result.type === "slider" && Array.isArray(result.images) && result.images.length > 0) {
+      const pv = getPortableVideo();
+      if (!pv?.createSliderVideo) throw new Error("Slider video generator unavailable");
+      bytes = await pv.createSliderVideo({
+        images: result.images,
+        audioUrl: result.music,
+        durationPerSlide: 3,
+      });
+      caption = `*${result.title || "TikTok Slider"}*\n🖼️ ${result.images.length} slides (3s each with music)`;
+      fileName = `tiktok_slider_${Date.now()}.mp4`;
+      dlType = "video";
+      dlMime = "video/mp4";
+    } else {
+      const downloaded = await downloadToTemp(result.url, dlType);
+      tmpPath = downloaded.tmpPath;
+      bytes = fs.readFileSync(tmpPath);
+      const sizeText = downloaded.size >= 1024 * 1024
+        ? `${(downloaded.size / 1024 / 1024).toFixed(1)} MB`
+        : `${(downloaded.size / 1024).toFixed(1)} KB`;
+      caption = `*${result.title || `Auto-downloaded from ${platform}`}*\n📦 ${sizeText}`;
+      fileName = `${platform}_${Date.now()}.${downloaded.ext}`;
+      dlType = downloaded.type;
+      dlMime = downloaded.mimetype;
+    }
+
+    if (dlType === "video") {
+      let vBytes = bytes;
+      try {
+        const pv = getPortableVideo();
+        if (typeof pv?.normalizeVideoBuffer === "function") {
+          vBytes = await pv.normalizeVideoBuffer(bytes);
+        }
+      } catch (_) {}
       // sendVideo auto-generates a jpeg thumbnail via mediaHandler
-      const sent = await sendVideo(sock, jid, bytes, {
+      const sent = await sendVideo(sock, jid, vBytes, {
         caption,
-        mimetype: downloaded.mimetype,
+        mimetype: dlMime,
         quoted: msg,
       });
       if (!sent) {
-        await sendDocument(sock, jid, bytes, {
+        await sendDocument(sock, jid, vBytes, {
           caption,
-          mimetype: downloaded.mimetype,
+          mimetype: dlMime,
           fileName,
           quoted: msg,
         });
       }
-    } else if (downloaded.type === "audio") {
+    } else if (dlType === "audio") {
       await sendAudio(sock, jid, bytes, {
         mimetype: downloaded.mimetype || "audio/mpeg",
         quoted: msg,

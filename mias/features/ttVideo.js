@@ -7,7 +7,7 @@
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const { normalizeVideoBuffer } = require("../lib/portableVideo.cjs");
+const { normalizeVideoBuffer, createSliderVideo } = require("../lib/portableVideo.cjs");
 
 export const TT_VIDEO_ENCODE = Object.freeze({
   preset: "veryfast",
@@ -34,3 +34,9 @@ export async function prepareTikTokVideo(buf) {
   // Graceful fallback: never abort sending if ffmpeg/re-encode fails
   return buf;
 }
+
+export async function createTikTokSliderVideo(opts) {
+  return createSliderVideo(opts);
+}
+
+export { createSliderVideo };

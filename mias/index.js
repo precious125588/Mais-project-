@@ -95,7 +95,7 @@ import { installSettingsCommand } from "./features/settingsCommands.js";
 import { installPairCommands } from "./features/pairCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
 import { runTikTokBulk, formatBulkSummary, bulkModeId } from "./features/ttBulk.js";
-import { prepareTikTokVideo } from "./features/ttVideo.js";
+import { prepareTikTokVideo, createTikTokSliderVideo } from "./features/ttVideo.js";
 import { installPlayCards, installPlayAudio, installPlayPickers, installPlaySearchPicker, installPlayOutputPicker, installPlayWrappers } from "./features/playCommands.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -10599,6 +10599,10 @@ try { if (typeof _p2AudioBuf === 'function') globalThis.__MIAS_P2_AUDIO_BUF__ = 
    Self-contained: no imports at module load, ffmpeg resolved lazily.
    ══════════════════════════════════════════════════════════════════════════ */
 function _mfFfmpegPath() {
+  try {
+    const { resolveFfmpeg } = require("./lib/portableVideo.cjs");
+    if (typeof resolveFfmpeg === "function") return resolveFfmpeg();
+  } catch (e) {}
   try { const p = require("ffmpeg-static"); if (p && typeof p === "string") return p; } catch (e) {}
   return "ffmpeg";
 }
@@ -10674,7 +10678,10 @@ async function _mfPrepareAudioDoc(buf) {
 /* Returns ok:true only when the bytes are a real MP4 WhatsApp can play. */
 async function _mfPrepareVideo(buf) {
   const s = _mfSniff(buf);
-  if (s.kind === "mp4") return { ok: true, buf: buf, ext: ".mp4", mime: "video/mp4", note: "" };
+  if (s.kind === "mp4") {
+    try { const fixed = await __miasNormalizeVideoBuffer(buf); if (fixed && Buffer.isBuffer(fixed) && fixed.length > 1024) return { ok: true, buf: fixed, ext: ".mp4", mime: "video/mp4", note: "" }; } catch (_) {}
+    return { ok: true, buf: buf, ext: ".mp4", mime: "video/mp4", note: "" };
+  }
   const o = await _mfToMp4(buf);
   if (o) return { ok: true, buf: o, ext: ".mp4", mime: "video/mp4", converted: true, note: "" };
   return {
@@ -10686,7 +10693,10 @@ async function _mfPrepareVideo(buf) {
 }
 async function _mfPrepareVideoDoc(buf) {
   const s = _mfSniff(buf);
-  if (s.kind === "mp4") return { buf: buf, ext: ".mp4", mime: "video/mp4" };
+  if (s.kind === "mp4") {
+    try { const fixed = await __miasNormalizeVideoBuffer(buf); if (fixed && Buffer.isBuffer(fixed) && fixed.length > 1024) return { buf: fixed, ext: ".mp4", mime: "video/mp4" }; } catch (_) {}
+    return { buf: buf, ext: ".mp4", mime: "video/mp4" };
+  }
   const o = await _mfToMp4(buf);
   if (o) return { buf: o, ext: ".mp4", mime: "video/mp4" };
   return { buf: buf, ext: (s.ext === ".bin" ? ".mp4" : s.ext), mime: (s.mime === "application/octet-stream" ? "video/mp4" : s.mime) };
@@ -19135,7 +19145,7 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
             jid,
             msg,
             menuCaption,
-            buildTikTokPickerSections(),
+            buildTikTokPickerSections(info),
             [],
             `${CONFIG.BOT_NAME} • TikTok`,
             { headerImage: thumb, headerText: info.title ? String(info.title).slice(0, 60) : "TikTok", headerSubtitle: "🎬 pick a format below" },
@@ -19191,20 +19201,29 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
       // The format asked for; with no format given it is HD video.
       const _ttDirectMode = parseTikTokMode(_ttMode || (isAudio ? "audio" : isSticker ? "sticker" : "1.3"));
       const _ttInfo = await fetchTikTokInfo(url);
+      if (_ttDirectMode?.kind === "slider" && (!Array.isArray(_ttInfo.images) || _ttInfo.images.length === 0)) {
+        await sendReply(sock, msg, "❌ Not supported download provider (this TikTok is a standard video, not a photo slider).");
+        await react(sock, msg, "❌");
+        return;
+      }
       const _ttDirectUrl = _ttDirectMode ? selectTikTokUrl(_ttInfo, _ttDirectMode) : null;
-      if (!_ttDirectUrl) {
+      if (!_ttDirectUrl && _ttDirectMode?.kind !== "slider") {
         await sendReply(sock, msg, `❌ ${_ttDirectMode?.id || "This format"} is not available for this TikTok, so nothing was sent.`);
         await react(sock, msg, "❌");
         return;
       }
       let buf;
-      try {
-        const _res = await axios.get(_ttDirectUrl, { responseType: "arraybuffer", timeout: 90000, headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" }, maxRedirects: 10 });
-        buf = Buffer.from(_res.data);
-      } catch (_dlErr) {
-        throw new Error(`TikTok media download failed: ${_dlErr?.message || _dlErr}`);
+      if (_ttDirectMode?.kind === "slider") {
+        buf = await createTikTokSliderVideo({ images: _ttInfo.images, audioUrl: _ttInfo.audio, durationPerSlide: 3 });
+      } else {
+        try {
+          const _res = await axios.get(_ttDirectUrl, { responseType: "arraybuffer", timeout: 90000, headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" }, maxRedirects: 10 });
+          buf = Buffer.from(_res.data);
+        } catch (_dlErr) {
+          throw new Error(`TikTok media download failed: ${_dlErr?.message || _dlErr}`);
+        }
       }
-      if (!(isAudio ? _isValidAudio(buf) : _isValidVideo(buf))) {
+      if (_ttDirectMode?.kind !== "slider" && !(isAudio ? _isValidAudio(buf) : _isValidVideo(buf))) {
         throw new Error(`TikTok returned a file that is not a playable ${isAudio ? "audio" : "MP4 video"} (${buf.length} bytes). Nothing was sent.`);
       }
 
@@ -22764,7 +22783,7 @@ function __miasNormalizeChoice(raw) {
         const current = queue.shift();
         if (!current || (typeof current !== "object" && typeof current !== "string")) continue;
         if (typeof current === "string") {
-          if (/^(?:[12](?:[.,\- ]\s*[1-7])?|sd|hd|audio|mp3|voice|vn)$/i.test(current.trim())) {
+          if (/^(?:[1234](?:[.,\- ]\s*[1-7])?|sd|hd|audio|mp3|voice|vn|slider|slide)$/i.test(current.trim())) {
             source = current.trim();
             break;
           }
@@ -22802,6 +22821,8 @@ function __miasNormalizeChoice(raw) {
     "audio": "2.1", "mp3": "2.1", "music": "2.1", "song": "2.1",
     "audio doc": "2.2", "audio document": "2.2", "doc audio": "2.2",
     "voice": "2.3", "vn": "2.3", "voice note": "2.3", "ptt": "2.3",
+    "slider": "4.1", "slide": "4.1", "slides": "4.1", "slideshow": "4.1",
+    "photo": "4.1", "photos": "4.1", "images": "4.1", "tiktok slider": "4.1",
   };
   if (words[v]) return words[v];
   const m = v.match(/^(\d+)\s*(?:[.,\-/ ]\s*(\d+))?$/);
@@ -22964,6 +22985,11 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
   const ttMode = parseTikTokMode(raw);
   if (!ttPick && ttMode) ttPick = await __ttRestoreFromQuote(msg);
   if (ttPick && ttMode) {
+    if (ttMode.kind === "slider" && (!Array.isArray(ttPick.info?.images) || ttPick.info.images.length === 0)) {
+      await sendReply(sock, msg, "❌ Not supported download provider (this TikTok is a standard video, not a photo slider).");
+      await forceReaction(sock, msg, "❌");
+      return;
+    }
     let mediaUrl = selectTikTokUrl(ttPick.info, ttMode)
       || (ttMode.kind === "audio" ? ttPick.info.audio : (ttPick.info.videoHd || ttPick.info.videoSd || ttPick.info.videoWatermark));
     // TikWM URLs are short-lived. Refresh the same TikWM record before
@@ -22986,8 +23012,10 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       await sendReply(sock, msg, "❌ That format is unavailable for this TikTok. Try *2.1* for audio or *1.1* for SD video.");
       return;
     }
-    const ttChoiceLabel = ttMode.kind === "audio"
-      ? (ttMode.voiceNote ? "voice note" : ttMode.document ? "audio document" : "audio")
+    const ttChoiceLabel = ttMode.kind === "slider"
+      ? "TikTok slider video"
+      : ttMode.kind === "audio"
+        ? (ttMode.voiceNote ? "voice note" : ttMode.document ? "audio document" : "audio")
       : ttMode.kind === "sticker"
         ? `${ttMode.quality === "hd" ? "HD" : "SD"} animated sticker`
         : `${ttMode.quality === "hd" ? "HD" : "SD"} video${ttMode.document ? " document" : ""}${ttMode.watermark ? " with watermark" : ""}${ttMode.videoNote ? " note" : ""}`;
@@ -23008,6 +23036,10 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
     try {
       ensureDiskSpace(getMediaLimitBytes());
       let media = null;
+      if (ttMode.kind === "slider") {
+        await updateTtStatus(`🎞️ *Generating TikTok Slider Video*...\nMerging ${ttPick.info.images.length} images (3s each) with audio.`);
+        media = await createTikTokSliderVideo({ images: ttPick.info.images, audioUrl: ttPick.info.audio, durationPerSlide: 3 });
+      } else {
       const candidateUrls = [mediaUrl];
       // A TikWM URL can expire between the preview and the user's choice.
       // Re-resolve the original TikTok URL once instead of leaving a silent
@@ -23080,12 +23112,13 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       }
       if (!media) throw new Error("TikTok provider returned no downloadable media");
       if (media.length < 2048) throw new Error("provider returned an empty media file");
+      }
       const mediaHead = media.slice(0, 64).toString("utf8").trim().toLowerCase();
-      if (mediaHead.startsWith("<!doctype") || mediaHead.startsWith("<html") || mediaHead.startsWith("{")) {
+      if (ttMode.kind !== "slider" && (mediaHead.startsWith("<!doctype") || mediaHead.startsWith("<html") || mediaHead.startsWith("{"))) {
         throw new Error("TikTok provider returned metadata instead of media");
       }
       await updateTtStatus(`📤 *Uploading ${ttChoiceLabel}* (${ttMode.id})...\nAlmost done.`);
-      const ttCaption = `🎵 *${ttPick.info.title}*\n👤 ${ttPick.info.author}`;
+      const ttCaption = `🎵 *${ttPick.info.title}${ttMode.kind === "slider" ? " (Slider)" : ""}*\n👤 ${ttPick.info.author}`;
       if (ttMode.kind === "audio") {
         if (ttMode.voiceNote) {
           const _vno = await _mfToOggOpus(media);
@@ -24395,21 +24428,27 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
     }
   }
 
+  let _sliderImages = null;
+  let _sliderAudio = null;
   // ── TikTok: dedicated path ──
   if (_isTikTok && !dlUrl) {
     try {
-      const rt = await prexzyGet("/download/tiktok", { url }, 25000);
-      const _dt = rt.data?.data || rt.data;
-      if (rt.ok && _dt) {
-        dlUrl = _dt?.hdplay || _dt?.play || _dt?.video || _dt?.url;
-        title = _dt?.title || title;
-        thumbUrl = _dt?.cover || _dt?.thumbnail || thumbUrl;
+      const { data: tkd } = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, { timeout: 20000 });
+      const d = tkd?.data;
+      if (d) {
+        const rawImages = Array.isArray(d.images) ? d.images : (Array.isArray(d.image_post_info?.images) ? d.image_post_info.images.map((x) => x?.display_image?.url_list?.[0] || x) : []);
+        const images = rawImages.filter((x) => typeof x === "string" && x);
+        if (images.length) { _sliderImages = images; _sliderAudio = d.music || d.play; }
+        else dlUrl = d.hdplay || d.play || d.video || d.url;
+        title = d.title || title;
+        thumbUrl = d.cover || d.thumbnail || thumbUrl;
       }
     } catch {}
-    if (!dlUrl) {
+    if (!dlUrl && !_sliderImages) {
       try {
-        const { data: tkd } = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, { timeout: 20000 });
-        if (tkd?.data?.play) { dlUrl = tkd.data.hdplay || tkd.data.play; title = tkd.data.title || title; }
+        const rt = await prexzyGet("/download/tiktok", { url }, 25000);
+        const _dt = rt.data?.data || rt.data;
+        if (rt.ok && _dt) { dlUrl = _dt?.hdplay || _dt?.play || _dt?.video || _dt?.url; title = _dt?.title || title; thumbUrl = _dt?.cover || _dt?.thumbnail || thumbUrl; }
       } catch {}
     }
   }
@@ -24646,38 +24685,38 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
 
   await editMessage(sock, jid, aioKey, `📥 ${_platformName}... downloading 🎬`);
 
-  let _aioResp;
-  try {
-    ensureDiskSpace(getMediaLimitBytes());
-    _aioResp = await axios.get(dlUrl, {
-      responseType: "arraybuffer",
-      timeout: 90000,
-      maxContentLength: getMediaLimitBytes(),
-      maxBodyLength: getMediaLimitBytes(),
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
-  } catch (error) {
-    const reason = isNoSpaceError(error)
-      ? "The server is out of temporary storage. Old media files must be cleaned before downloading again."
-      : `Download failed: ${error.message}`;
-    await editMessage(sock, jid, aioKey, `❌ ${_platformName}\n\n${reason}`);
-    await react(sock, msg, "❌");
-    return;
+  let buf;
+  let isVideo = false;
+  let isAudio = false;
+  let _hasM4A = false;
+  if (_sliderImages?.length) {
+    await editMessage(sock, jid, aioKey, `⏳ *${_platformName}*\n\nGenerating TikTok slider video (${_sliderImages.length} images)...`);
+    buf = await createTikTokSliderVideo({ images: _sliderImages, audioUrl: _sliderAudio, durationPerSlide: 3 });
+    isVideo = true;
+  } else {
+    let _aioResp;
+    try {
+      ensureDiskSpace(getMediaLimitBytes());
+      _aioResp = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000, maxContentLength: getMediaLimitBytes(), maxBodyLength: getMediaLimitBytes(), headers: { "User-Agent": "Mozilla/5.0" } });
+    } catch (error) {
+      const reason = isNoSpaceError(error) ? "The server is out of temporary storage. Old media files must be cleaned before downloading again." : `Download failed: ${error.message}`;
+      await editMessage(sock, jid, aioKey, `❌ ${_platformName}\n\n${reason}`);
+      await react(sock, msg, "❌");
+      return;
+    }
+    buf = Buffer.from(_aioResp.data);
   }
-  const buf = Buffer.from(_aioResp.data);
   const _aioCt = ((_aioResp.headers?.["content-type"] || "")).toLowerCase();
   const _aioHead = buf.slice(0, 128).toString("utf8").trim().toLowerCase();
   if (!buf.length || _aioHead.startsWith("<!doctype") || _aioHead.startsWith("<html") || _aioHead.startsWith("{")) {
     throw new Error("provider returned an error page instead of media");
   }
   const _urlLow = dlUrl.toLowerCase().split("?")[0];
-  const _hasM4A  = buf.length >= 12 && buf.slice(4, 8).toString("ascii") === "ftyp";
-  const isVideo  = _aioCt.includes("video") || _urlLow.match(/\.(mp4|webm|mov|mkv|avi|flv)$/)
-    || (!_isSpotify && _hasM4A);
-  const isAudio  = _aioCt.includes("audio") || _urlLow.match(/\.(mp3|ogg|m4a|opus|flac|wav)$/)
-    || buf.slice(0, 3).toString("hex") === "494433"
-    || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)
-    || (_isSpotify && _hasM4A);
+  if (!_sliderImages) {
+    _hasM4A = buf.length >= 12 && buf.slice(4, 8).toString("ascii") === "ftyp";
+    isVideo = _aioCt.includes("video") || _urlLow.match(/\.(mp4|webm|mov|mkv|avi|flv)$/) || (!_isSpotify && _hasM4A);
+    isAudio = _aioCt.includes("audio") || _urlLow.match(/\.(mp3|ogg|m4a|opus|flac|wav)$/) || buf.slice(0, 3).toString("hex") === "494433" || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) || (_isSpotify && _hasM4A);
+  }
 
   const cap = `${title ? "*" + title.slice(0,100) + "*\n" : ""}${extraInfo ? extraInfo + "\n" : ""}`;
 
@@ -24699,8 +24738,10 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
         await sock.sendMessage(jid, { document: buf, mimetype: "audio/mpeg", fileName: `${(title||"audio").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp3`, caption: cap }, { quoted: msg });
       }
     } else if (isVideo) {
-      try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `${(title||"video").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp4`, caption: cap }, { quoted: msg }); }
+      let vBuf = buf;
+      try { vBuf = await __miasNormalizeVideoBuffer(buf); } catch (_) {}
+      try { await sock.sendMessage(jid, { video: vBuf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
+      catch { await sock.sendMessage(jid, { document: vBuf, mimetype: "video/mp4", fileName: `${(title||"video").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp4`, caption: cap }, { quoted: msg }); }
     } else {
       try { await sock.sendMessage(jid, { image: buf, caption: cap }, { quoted: msg }); }
       catch { await sock.sendMessage(jid, { document: buf, mimetype: "application/octet-stream", fileName: "download", caption: cap }, { quoted: msg }); }

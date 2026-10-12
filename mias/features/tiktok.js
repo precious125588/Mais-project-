@@ -20,12 +20,20 @@ const MODES = {
   "2.3": { kind: "audio", document: false, voiceNote: true },
   "3.1": { kind: "sticker", quality: "hd", document: false, watermark: false },
   "3.2": { kind: "sticker", quality: "sd", document: false, watermark: false },
+  "4.1": { kind: "slider", quality: "best", document: false },
 };
 
 const pick = (...values) => values.find((value) => typeof value === "string" && value);
 
 export function normalizeTikTokResponse(payload = {}) {
   const data = payload?.data || payload?.result || payload;
+  const rawImages = Array.isArray(data.images)
+    ? data.images
+    : (Array.isArray(data.image_post_info?.images)
+      ? data.image_post_info.images.map((x) => x?.display_image?.url_list?.[0] || x)
+      : []);
+  const images = rawImages.filter((value) => typeof value === "string" && value);
+
   return {
     title: pick(data.title, data.desc, data.description, "TikTok video"),
     author: pick(data.author?.nickname, data.author?.unique_id, data.author, data.author_name, "Unknown author"),
@@ -33,12 +41,13 @@ export function normalizeTikTokResponse(payload = {}) {
     thumbnail: pick(data.cover, data.thumbnail, data.origin_cover, data.ai_dynamic_cover, data.dynamic_cover, data.music_info?.cover),
     // Every cover candidate, so the caller can try the next one when a CDN
     // link 403s — the picker should always carry the video image.
-    covers: [data.cover, data.thumbnail, data.origin_cover, data.ai_dynamic_cover, data.dynamic_cover, data.music_info?.cover]
+    covers: [data.cover, data.thumbnail, data.origin_cover, data.ai_dynamic_cover, data.dynamic_cover, data.music_info?.cover, ...images]
       .filter((value) => typeof value === "string" && value),
     videoHd: pick(data.hdplay, data.hd, data.play_hd, data.download_url),
     videoSd: pick(data.play, data.sd, data.wmplay),
     videoWatermark: pick(data.wmplay, data.play),
     audio: pick(data.music, data.music_info?.play, data.audio),
+    images,
   };
 }
 
@@ -54,6 +63,8 @@ const MODE_ALIASES = {
   "audiodoc": "2.2",
   "vn": "2.3", "voice": "2.3", "voicenote": "2.3", "ptt": "2.3",
   "sticker": "3.1", "stickerize": "3.1", "stik": "3.1",
+  "4": "4.1", "4.1": "4.1", "slider": "4.1", "slide": "4.1", "slides": "4.1",
+  "slideshow": "4.1", "photo": "4.1", "photos": "4.1", "images": "4.1", "album": "4.1",
 };
 
 // Accepts "1.3", " 1.3 ", "*1.3*", "1 3", "1,3", "1-3", "hd", "audio", ...
@@ -76,10 +87,12 @@ export function parseTikTokMode(value) {
 }
 
 export function formatTikTokMenu(info, prefix = ".") {
+  const isSlider = Array.isArray(info?.images) && info.images.length > 0;
   return [
     `*${info.title}*`,
     `Author: ${info.author}`,
     info.duration ? `Duration: ${info.duration}s` : null,
+    isSlider ? `Type: 📸 Photo Slider (${info.images.length} slides)` : null,
     "",
     "Reply with the number you want:",
     "➜ [1] Video",
@@ -97,15 +110,21 @@ export function formatTikTokMenu(info, prefix = ".") {
     "➜ [3] Stickers",
     "3.1 Animated Sticker (HD)",
     "3.2 Animated Sticker (SD)",
+    "➜ [4] Slider",
+    `4.1 TikTok Slider (video with images & music${isSlider ? ` — ${info.images.length} slides` : ""})`,
     "",
-    "Reply with a choice such as *1.3* within 5 minutes.",
+    "Reply with a choice such as *1.3* or *4.1* within 5 minutes.",
   ].filter(Boolean).join("\n");
 }
 
 // Native WhatsApp single-select menus are the reliable "radio" path. The
 // selected row id is the same value accepted by normalizeTikTokMode, so both
 // taps and typed replies share one handler.
-export function buildTikTokPickerSections() {
+export function buildTikTokPickerSections(info = null) {
+  const isSlider = Array.isArray(info?.images) && info.images.length > 0;
+  const slideDesc = isSlider
+    ? `Convert ${info.images.length} photo slides to video (3s each)`
+    : "Convert photo slides into video with music";
   return [
     {
       title: "Video",
@@ -134,6 +153,12 @@ export function buildTikTokPickerSections() {
         { title: "3.2 Animated Sticker", description: "SD video converted to WebP sticker", id: "3.2", rowId: "3.2" },
       ],
     },
+    {
+      title: "Slider",
+      rows: [
+        { title: "4.1 TikTok Slider", description: slideDesc, id: "4.1", rowId: "4.1" },
+      ],
+    },
   ];
 }
 
@@ -152,7 +177,7 @@ export async function fetchTikTokInfo(url, fetchImpl = fetch) {
     throw new Error("TikTok provider returned an invalid response");
   }
   const info = normalizeTikTokResponse(json);
-  if (!info.videoHd && !info.videoSd && !info.videoWatermark && !info.audio) {
+  if (!info.videoHd && !info.videoSd && !info.videoWatermark && !info.audio && (!info.images || !info.images.length)) {
     throw new Error("TikTok provider returned no media for this link");
   }
   return info;
@@ -161,6 +186,9 @@ export async function fetchTikTokInfo(url, fetchImpl = fetch) {
 // Returns only the URL for the exact format requested, or null.
 // No quality or watermark substitution.
 export function selectTikTokUrl(info, mode) {
+  if (mode.kind === "slider") {
+    return (info.images && info.images.length > 0) ? (info.images[0] || "slider") : null;
+  }
   if (mode.kind === "audio") return info.audio || null;
   if (mode.watermark) return info.videoWatermark || null;
   return (mode.quality === "hd" ? info.videoHd : info.videoSd) || null;
