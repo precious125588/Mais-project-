@@ -422,9 +422,10 @@ async function handleCuzReply(sock, msg, body, P) {
     const norm = rawInput.replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
     const numMatch = norm.match(/^(?:cuz\s*)?(\d{1,2})$/i);
 
-    // CRITICAL FIX: If message neither quotes the cuz card nor is a valid option number (1-17),
-    // NEVER intercept! Normal conversation text must flow freely without altering bot settings.
-    if (!isCuzQuoted && !numMatch) {
+    // v39 HARDEN: cuz only reacts when the reply QUOTES the actual cuz card.
+    // A bare number (or number-ish text) with no cuz-card quote is normal chat and is
+    // left completely alone — it must go SILENT, never touch customization settings.
+    if (!isCuzQuoted) {
       return false;
     }
 
