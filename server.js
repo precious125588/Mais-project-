@@ -315,7 +315,9 @@ app.post('/api/pair', rateLimit(60000,10), async (req,res) => {
         return res.json({ok:true,mode:'qr',qrUrl:`/api/pair/qr/${number}`,cached:true});
     }
     if (mode === 'code' && existing?.code) {
-        broadcastPairingEvent(jid,'code_ready',{code:existing.code,cached:true});
+        const _dbgExisting = _pair?.getPairingRuntimeState?.(jid)?.debug || null;
+        broadcastPairingEvent(jid,'code_ready',{code:existing.code,cached:true, debug:_dbgExisting});
+        if (_dbgExisting) broadcastPairingEvent(jid,'debug',_dbgExisting);
         return res.json({ok:true,mode:'code',code:existing.code,cached:true});
     }
 
@@ -346,7 +348,9 @@ app.post('/api/pair', rateLimit(60000,10), async (req,res) => {
                 if (mode === 'qr') {
                     broadcastPairingEvent(jid,'qr_ready',{url:detail});
                 } else {
-                    broadcastPairingEvent(jid,'code_ready',{code:result.code});
+                    const _dbg = _pair?.getPairingRuntimeState?.(jid)?.debug || null;
+                    broadcastPairingEvent(jid,'code_ready',{code:result.code, debug:_dbg});
+                    if (_dbg) broadcastPairingEvent(jid,'debug',_dbg);
                 }
             })
             .catch(err => {
@@ -940,7 +944,15 @@ const httpServer = app.listen(PORT, '0.0.0.0', () => {
     setImmediate(async () => {
         try { require('./setting/config'); console.log('✓ Config'); } catch(e){ console.error('✗ Config:',e.message); }
         try { _launcher=require('./mais_launcher'); console.log('✓ Launcher'); } catch(e){ console.error('✗ Launcher:',e.message); }
-        try { _pair=require('./pair'); console.log('✓ Pair module'); } catch(e){ console.error('✗ Pair:',e.message); }
+        try {
+            _pair = require('./pair');
+            if (_pair?.pairEvents) {
+                _pair.pairEvents.on('event', ({ jid, event, data }) => {
+                    try { broadcastPairingEvent(jid, event, data); } catch {}
+                });
+            }
+            console.log('✓ Pair module');
+        } catch(e) { console.error('✗ Pair:', e.message); }
         _ready=true;
         logger.log('system',`Server started port=${PORT} pair=${!!_pair} launcher=${!!_launcher}`);
         console.log('✅ Server READY\n');

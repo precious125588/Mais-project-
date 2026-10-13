@@ -24,6 +24,8 @@ const _baileysReady = (async () => {
         throw e;
     }
 })();
+const { EventEmitter } = require("events");
+const pairEvents = new EventEmitter();
 const NodeCache = require("node-cache");
 const _ = require('lodash')
 const {
@@ -1052,7 +1054,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
         // Most reliable, long-lasting client fingerprint across WhatsApp Web & Baileys
-        browser: (typeof Browsers !== "undefined" && Browsers?.ubuntu) ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "22.04.4"],
+        browser: (typeof Browsers !== "undefined" && Browsers?.macOS) ? Browsers.macOS("Desktop") : ["Mac OS", "Chrome", "121.0.6167.85"],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
@@ -1163,7 +1165,32 @@ async function startpairing(nexusDevNumber, options = {}) {
 
                     tracker.pairingCode = code;
                     tracker.pairingError = null;
+                    tracker.pairingDebug = {
+                        code: 'AWAITING_LINK',
+                        stage: 'Pairing Code Active',
+                        what: 'Pairing code generated successfully. Waiting for WhatsApp link.',
+                        why: 'If your phone did not show an automatic notification, battery saver or WhatsApp companion push throttling is active.',
+                        solution: 'Do NOT wait for a notification. Open WhatsApp > Settings (⋮) > Linked Devices > Link a Device > Link with phone number instead > Enter the pairing code.'
+                    };
                     console.log(chalk.green(`✓ Pairing code saved to pairing.json`));
+
+                    // Detect when WhatsApp does not push the companion notification (phone did not link within 10s)
+                    const notifCheckTimer = setTimeout(() => {
+                        const cur = rentbotTracker.get(nexusDevNumber);
+                        if (cur && cur.pairingCode === code && !state.creds?.registered && !cur.disconnected && !cur.isRestarting515) {
+                            const notifDebug = {
+                                code: 'NO_NOTIFICATION_DETECTED',
+                                stage: 'No WhatsApp Notification Detected',
+                                what: 'WhatsApp did not push the "Enter code to link new device" notification.',
+                                why: 'Phone battery optimization, background sleep mode, or restricted notifications prevented WhatsApp from pushing the alert to your notification bar.',
+                                solution: 'Do NOT wait for a notification! Open WhatsApp now > Tap ⋮ (three dots / Settings) > Linked Devices > Link a Device > tap "Link with phone number instead" at the bottom > Type code: ' + code
+                            };
+                            cur.pairingDebug = notifDebug;
+                            console.log(chalk.yellow(`ℹ️ [Pairing Debug] No notification detected for ${nexusDevNumber}: manual link required in WhatsApp.`));
+                            try { pairEvents.emit('event', { jid: nexusDevNumber, event: 'debug', data: notifDebug }); } catch {}
+                        }
+                    }, 10000);
+                    if (nexus.__timers) nexus.__timers.push(notifCheckTimer);
                     return { number: nexusDevNumber, code };
                 } catch (err) {
                     lastError = err;
@@ -2149,6 +2176,7 @@ try {
 }
 // Export anti-spam maps for use in case.js
 module.exports = {
+    pairEvents,
     startpairing,
     waitForPairingResult,
     isPairingActive,

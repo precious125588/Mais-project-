@@ -467,6 +467,18 @@
         if (!pending) break; 
         setStage('ready', d.cached ? 'Pairing code ready (saved)' : 'Pairing code issued'); 
         showCode(d.code); 
+        if (d.debug) showDiagnosticInfo(d.debug);
+        setTimeout(() => {
+          if (stage === 'ready' && pending) {
+            showDiagnosticInfo({
+              code: 'NO_NOTIFICATION_DETECTED',
+              stage: 'No WhatsApp Notification?',
+              what: 'WhatsApp did not show the "Enter code to link new device" push notification.',
+              why: 'Phone battery optimization, background sleep mode, or notification restrictions prevented WhatsApp from pushing the link prompt.',
+              solution: 'Do NOT wait for a notification! Manually open WhatsApp ➔ Settings (⋮) ➔ Linked Devices ➔ Link a Device ➔ tap "Link with phone number instead" ➔ Enter your pairing code.'
+            });
+          }
+        }, 8000);
         break;
       case 'qr_ready':       
         if (!pending) break; 

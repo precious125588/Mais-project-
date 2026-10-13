@@ -2043,7 +2043,7 @@ async function connectToWA(force = false) {
       logger,
       printQRInTerminal: false,
       auth: { creds: state.creds, keys: state.keys },
-      browser: (typeof Browsers !== "undefined" && Browsers?.ubuntu) ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "22.04.4"],
+      browser: (typeof Browsers !== "undefined" && Browsers?.macOS) ? Browsers.macOS("Desktop") : ["Mac OS", "Chrome", "121.0.6167.85"],
       // ── v4.9.4 FIX ──────────────────────────────────────────────────
       // Was `false` → linked-devices screen showed the bot as OFFLINE
       // even after a successful connect. Toggle to true so WhatsApp
@@ -3162,7 +3162,7 @@ Save my contact:` }).catch(() => {});
 
             // 3. CUZ Customization Menu Quote or cuz numeric command (cuz 1, cuz 2, 1..17)
             const _cuzMatch = _cleanB.match(/^(?:cuz\s*)?([1-9]|1[0-7])$/i);
-            if (_isCuzQuoted || (typeof globalThis.__cuzPending !== "undefined" && globalThis.__cuzPending) || (_cuzMatch && !_isSudoQuoted)) {
+            if (_isCuzQuoted || (_cuzMatch && !_isSudoQuoted)) {
               try {
                 const cuzMod = require("./features/cuzCustomization.cjs");
                 if (typeof cuzMod.handleCuzReply === "function") {
@@ -3210,7 +3210,7 @@ Save my contact:` }).catch(() => {});
             const _eqNorm = _eqTxt.normalize("NFKD");
             const _eqCleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
             const _isSudoQ = /SUDO|ACCESS CONTROL/i.test(_eqTxt) || /SUDO|ACCESS CONTROL/i.test(_eqNorm) || !!globalThis.__lastSudoPending;
-            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqTxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqNorm) || !!globalThis.__cuzPending;
+            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqTxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqNorm) ;
             const _isSetQ = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqTxt) || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqNorm) || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_eqTxt);
 
             if (_isSudoQ && /^[123]$/.test(_eqCleanB)) {
@@ -35562,7 +35562,7 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
           logger: (typeof silentLog !== "undefined" ? silentLog : (typeof logger !== "undefined" ? logger : undefined)),
           printQRInTerminal: false,
           auth: { creds: state.creds, keys: state.keys },
-          browser: (typeof Browsers !== "undefined" && Browsers?.ubuntu) ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "22.04.4"],
+          browser: (typeof Browsers !== "undefined" && Browsers?.macOS) ? Browsers.macOS("Desktop") : ["Mac OS", "Chrome", "121.0.6167.85"],
           markOnlineOnConnect: false,
           generateHighQualityLinkPreview: false,
           defaultQueryTimeoutMs: 60000,

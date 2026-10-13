@@ -2095,7 +2095,11 @@ _Please keep your WhatsApp mobile app open._`);
       `5. Enter the code: *${cleanCode}*
 
 ` +
-      `⏱️ _This code expires in 2 minutes. Your bot session will start automatically once connected._`;
+      `⏱️ _This code expires in 2 minutes. Your bot session will start automatically once connected._\n\n` +
+      `💡 *Didn't receive a WhatsApp notification?*\n` +
+      `• *What:* WhatsApp didn't pop up the link device alert.\n` +
+      `• *Why:* Phone battery optimization, background sleep mode, or restricted notification permissions prevented WhatsApp from pushing the link alert.\n` +
+      `• *Solution:* You do *NOT* need to wait for a notification! Manually open WhatsApp ➔ Settings (⋮) ➔ Linked Devices ➔ Link a Device ➔ "Link with phone number instead" ➔ Enter code: *${cleanCode}*.`;
 
     await devtrust.sendMessage(from, { text: instructions }, { quoted: m });
   } catch (err) {

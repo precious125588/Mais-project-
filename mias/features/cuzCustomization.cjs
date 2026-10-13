@@ -158,7 +158,7 @@ function toDopeFont(str) {
   return res;
 }
 
-function buildCustomizeMenuText() {
+function buildCustomizeMenuText(pendingValue) {
   let lines = [
     "╭━━〔 𝐂𝐔𝐒𝐓𝐎𝐌𝐈𝐙𝐄 〕━━╮",
     "┃",
@@ -180,10 +180,21 @@ function buildCustomizeMenuText() {
     "┃ 𝟏𝟔. 𝐃𝐚𝐭𝐞 𝐅𝐨𝐫𝐦𝐚𝐭",
     "┃ 𝟏𝟕. 𝐑𝐞𝐬𝐞𝐭",
     "┃",
-    "╰━━━━━━━━━━━━━━━━━━╯",
-    "",
-    "✨ " + toDopeFont("Reply with option number to edit or reset")
+    "╰━━━━━━━━━━━━━━━━━━╯"
   ];
+  if (pendingValue) {
+    lines.push(
+      "",
+      "📝 *Value to apply:* *" + pendingValue + "*",
+      "",
+      "👉 " + toDopeFont("Reply with option number 1-17 to apply this value")
+    );
+  } else {
+    lines.push(
+      "",
+      "✨ " + toDopeFont("Reply with option number to edit or reset")
+    );
+  }
   return lines.join("\n");
 }
 
@@ -285,7 +296,14 @@ function installCuzSystem(P) {
     const userId = String(sender).replace(/:[0-9]+@/, "@");
     const rawVal = args.join(" ").trim();
 
-    const menuText = buildCustomizeMenuText();
+    // Bare command rejection: .cuz with no value is rejected immediately
+    if (!rawVal) {
+      return await sock.sendMessage(jid, {
+        text: "❌ *Invalid command: empty value field!*\n\n*Usage:* \`.cuz <value>\`\n*Example:* \`.cuz Mia\'s MDX\`\n\n👉 Please specify the new value with the command first (e.g. *.cuz Mia\'s MDX*), then choose which option to apply it to from the menu card."
+      }, { quoted: msg });
+    }
+
+    const menuText = buildCustomizeMenuText(rawVal);
     let sentMsg = null;
     let botPic = null;
     try {
@@ -313,15 +331,16 @@ function installCuzSystem(P) {
       chatId: jid,
       userId: userId,
       menuMessageId: menuMsgId || null,
-      pendingValue: rawVal || null,
-      awaitingValueOption: null,
+      pendingValue: rawVal,
       createdAt: Date.now()
     };
     pendingSessions.set(sessionKey, sessObj);
-    pendingSessions.set(jid, sessObj);
-    pendingSessions.set(userId, sessObj);
-    globalThis.__lastCuzPending = sessObj;
-    globalThis.__cuzPending = true;
+
+    // Auto-expire session after 2 minutes
+    setTimeout(() => {
+      const cur = pendingSessions.get(sessionKey);
+      if (cur === sessObj) pendingSessions.delete(sessionKey);
+    }, 2 * 60 * 1000).unref();
   };
 
   if (typeof cmd === "function") {
@@ -399,80 +418,32 @@ async function handleCuzReply(sock, msg, body, P) {
     const cuzPattern = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i;
     const isCuzQuoted = cuzPattern.test(quotedText) || cuzPattern.test(quotedNorm);
 
-    let sess = pendingSessions.get(sessionKey) || pendingSessions.get(jid) || pendingSessions.get(userId);
-    if (!sess && globalThis.__lastCuzPending && (Date.now() - (globalThis.__lastCuzPending.createdAt || 0) < 15 * 60 * 1000)) {
-      if (globalThis.__lastCuzPending.chatId === jid || !isGroup) {
-        sess = globalThis.__lastCuzPending;
-      }
-    }
-    if (!sess && isCuzQuoted) {
-      let recoveredOpt = null;
-      const promptMatch = quotedText.match(/(?:Send the new value for|Editing)\s*\*?([^*:\n]+)\*?/i);
-      if (promptMatch) {
-        const targetLabel = promptMatch[1].trim().toLowerCase();
-        recoveredOpt = customizationOptions.find(o => o.label.toLowerCase() === targetLabel || o.id.toLowerCase() === targetLabel);
-      }
-
-      sess = {
-        chatId: jid,
-        userId: userId,
-        menuMessageId: rawCtx?.stanzaId || null,
-        pendingValue: null,
-        awaitingValueOption: recoveredOpt,
-        createdAt: Date.now()
-      };
-      pendingSessions.set(sessionKey, sess);
-      pendingSessions.set(jid, sess);
-      pendingSessions.set(userId, sess);
-      globalThis.__lastCuzPending = sess;
-      globalThis.__cuzPending = true;
-    } else if (sess && !sess.awaitingValueOption && isCuzQuoted) {
-      const promptMatch = quotedText.match(/(?:Send the new value for|Editing)\s*\*?([^*:\n]+)\*?/i);
-      if (promptMatch) {
-        const targetLabel = promptMatch[1].trim().toLowerCase();
-        const recoveredOpt = customizationOptions.find(o => o.label.toLowerCase() === targetLabel || o.id.toLowerCase() === targetLabel);
-        if (recoveredOpt) sess.awaitingValueOption = recoveredOpt;
-      }
-    }
-
-    if (!sess && !isCuzQuoted) {
-      return false;
-    }
-
-    // Refresh TTL on interaction
-    if (sess) sess.createdAt = Date.now();
-
     const rawInput = String(body || "").trim();
-
-    // 1. If currently awaiting a text value for a previously selected option
-    if (sess && sess.awaitingValueOption) {
-      const opt = sess.awaitingValueOption;
-      const validation = validateCustomizationValue(opt, rawInput);
-      if (!validation.valid) {
-        await sock.sendMessage(jid, { text: `❌ Invalid input for *${opt.label}*:\n${validation.error}\n\nPlease try again:` }, { quoted: msg });
-        return true;
-      }
-      setCustomization(jid, isGroup, opt.id, validation.value, getSettings, saveNow);
-      if (opt.id === "prefix" && CONFIG) CONFIG.PREFIX = validation.value;
-      if (opt.id === "botName" && CONFIG) CONFIG.BOT_NAME = validation.value;
-      pendingSessions.delete(sessionKey);
-      await sock.sendMessage(jid, { text: `✅ *${opt.label}* changed to: *${validation.value}*` }, { quoted: msg });
-      return true;
-    }
-
-    // 2. Expecting option selection number (1 to 17)
     const norm = rawInput.replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
     const numMatch = norm.match(/^(?:cuz\s*)?(\d{1,2})$/i);
 
+    // CRITICAL FIX: If message neither quotes the cuz card nor is a valid option number (1-17),
+    // NEVER intercept! Normal conversation text must flow freely without altering bot settings.
+    if (!isCuzQuoted && !numMatch) {
+      return false;
+    }
+
+    const sess = pendingSessions.get(sessionKey);
+
+    // Numeric option reply (1 to 17)
     if (numMatch) {
       const num = parseInt(numMatch[1], 10);
       if (num < 1 || num > customizationOptions.length) {
-        await sock.sendMessage(jid, { text: `❌ Invalid option *${num}*. Please reply with a number from *1 to ${customizationOptions.length}*.` }, { quoted: msg });
-        return true;
+        if (isCuzQuoted) {
+          await sock.sendMessage(jid, { text: `❌ Invalid option *${num}*. Please reply with a number from *1 to ${customizationOptions.length}*.` }, { quoted: msg });
+          return true;
+        }
+        return false;
       }
 
       const opt = customizationOptions[num - 1];
 
+      // Option 17: Reset all
       if (opt.id === "reset") {
         resetCustomization(jid, isGroup, getSettings, saveNow);
         pendingSessions.delete(sessionKey);
@@ -480,11 +451,12 @@ async function handleCuzReply(sock, msg, body, P) {
         return true;
       }
 
+      // If user has a pre-supplied value from .cuz <value>
       if (sess && sess.pendingValue) {
         const validation = validateCustomizationValue(opt, sess.pendingValue);
         if (!validation.valid) {
           pendingSessions.delete(sessionKey);
-          await sock.sendMessage(jid, { text: `❌ Invalid input for *${opt.label}*:\n${validation.error}` }, { quoted: msg });
+          await sock.sendMessage(jid, { text: `❌ Invalid value "*${sess.pendingValue}*" for *${opt.label}*:\n${validation.error}` }, { quoted: msg });
           return true;
         }
         setCustomization(jid, isGroup, opt.id, validation.value, getSettings, saveNow);
@@ -495,31 +467,23 @@ async function handleCuzReply(sock, msg, body, P) {
         return true;
       }
 
-      // Enter waiting state for the option's value
-      if (!sess) {
-        sess = { chatId: jid, userId, menuMessageId: rawCtx?.stanzaId, pendingValue: null, awaitingValueOption: opt, createdAt: Date.now() };
-      } else {
-        sess.awaitingValueOption = opt;
+      // User chose an option without providing a value: block waiting-value mode!
+      if (isCuzQuoted || sess) {
+        pendingSessions.delete(sessionKey);
+        await sock.sendMessage(jid, {
+          text: `❌ *Invalid command: empty value field!*\n\n*Usage:* \`.cuz <value>\`\n*Example:* \`.cuz Mia\'s MDX\`\n\nPlease supply the value with the command first, then select option *${num}* (*${opt.label}*). No raw message waiting mode is allowed.`
+        }, { quoted: msg });
+        return true;
       }
-      pendingSessions.set(sessionKey, sess);
-      pendingSessions.set(jid, sess);
-      pendingSessions.set(userId, sess);
-      globalThis.__lastCuzPending = sess;
-      globalThis.__cuzPending = true;
 
-      let promptGuide = "";
-      if (opt.type === "emoji") promptGuide = " (send 1 or 2 emojis)";
-      else if (opt.type === "timeFormat") promptGuide = " (type *12h* or *24h*)";
-      else if (opt.type === "dateFormat") promptGuide = " (e.g. *DD/MM/YYYY* or *MM/DD/YYYY*)";
-      else promptGuide = " (type the new text)";
-
-      await sock.sendMessage(jid, { text: `✏️ Send the new value for *${opt.label}*${promptGuide}:` }, { quoted: msg });
-      return true;
+      return false;
     }
 
-    // If the user quoted the cuz card with something else, give helpful guidance instead of going silent
+    // User quoted the cuz card with non-numeric text
     if (isCuzQuoted) {
-      await sock.sendMessage(jid, { text: `ℹ️ *Customization Menu*\n\nPlease reply with a number from *1 to ${customizationOptions.length}* to select an option to customize.` }, { quoted: msg });
+      await sock.sendMessage(jid, {
+        text: `ℹ️ *Customization Menu*\n\nPlease reply with an option number from *1 to ${customizationOptions.length}* to apply your value, or use *.cuz <value>* to start with a new value.`
+      }, { quoted: msg });
       return true;
     }
 
