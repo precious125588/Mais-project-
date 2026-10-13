@@ -16,6 +16,11 @@ cmd("setsudo", { desc: "Add sudo user", category: "OWNER", ownerOnly: true }, as
     // v14: resolve @lid → real phone JID FIRST, then standardise
     _st = toStandardJid(resolveLid(_st));
     const _sNum = _st.split("@")[0];
+    const botNum = String(sock.user?.id || "").replace(/[^0-9]/g, "");
+    if (_sNum && botNum && _sNum === botNum) {
+      await sendReply(sock, msg, "🚫 Unauthorized behavior: you can't be bot and sudo!");
+      return;
+    }
      // v9: creator/owner CAN be added as sudo (user request). Only refuse no-op duplicates.
      if (sudoUsers.has(_sNum)) { await sendReply(sock, msg, `ℹ️ +${_sNum} is already sudo.`); return; }
     sudoUsers.add(_sNum);
@@ -39,12 +44,27 @@ cmd(["sudo"], { desc: "Grant sudo: .sudo in a DM or reply to a user", category: 
     let target = ctx?.mentionedJid?.[0] || ctx?.participant || "";
     if (!target && args[0]) { const n = String(args[0]).replace(/[^0-9]/g,""); if (n.length>=7) target = n + "@s.whatsapp.net"; }
     if (!target && !isGroup(msg)) target = jid; // DM → the other person
+
+    const botNum = _cleanNum((typeof _botJid !== "undefined" ? _botJid : "") || sock.user?.id || "");
+    const senderNum = _cleanNum(getSender ? getSender(msg) : (msg.key.participant || jid));
+    const tNum = _cleanNum(target);
+
+    // Guard: Prevent using sudo in bot DM targeting the bot itself or self-sudo in bot DM
+    const isBotDm = !isGroup(msg);
+    const isBotTarget = (tNum && botNum && tNum === botNum);
+    const isBotDmSudo = isBotDm && (!args[0] || !ctx?.mentionedJid?.length || tNum === botNum || tNum === senderNum);
+
+    if (isBotTarget || isBotDmSudo) {
+      try { await react(sock, msg, "🚫"); } catch {}
+      await sendReply(sock, msg, "🚫 Unauthorized behavior: you can't be bot and sudo!");
+      return;
+    }
+
     if (!target || target === jid && isGroup(msg)) {
       try { await react(sock, msg, "❌"); } catch {}
       await sendReply(sock, msg, "❌ Reply to a user, tag them, give a number, or use inside their DM.");
       return;
     }
-    const tNum = _cleanNum(target);
     let card = null;
     try { const u = await sock.profilePictureUrl(target, "image"); if (u) card = Buffer.from((await axios.get(u,{responseType:"arraybuffer",timeout:12000})).data); } catch {}
     if (!card) { try { card = await getBotPic(); } catch {} }

@@ -406,18 +406,33 @@ async function handleCuzReply(sock, msg, body, P) {
       }
     }
     if (!sess && isCuzQuoted) {
+      let recoveredOpt = null;
+      const promptMatch = quotedText.match(/(?:Send the new value for|Editing)\s*\*?([^*:\n]+)\*?/i);
+      if (promptMatch) {
+        const targetLabel = promptMatch[1].trim().toLowerCase();
+        recoveredOpt = customizationOptions.find(o => o.label.toLowerCase() === targetLabel || o.id.toLowerCase() === targetLabel);
+      }
+
       sess = {
         chatId: jid,
         userId: userId,
         menuMessageId: rawCtx?.stanzaId || null,
         pendingValue: null,
-        awaitingValueOption: null,
+        awaitingValueOption: recoveredOpt,
         createdAt: Date.now()
       };
       pendingSessions.set(sessionKey, sess);
       pendingSessions.set(jid, sess);
+      pendingSessions.set(userId, sess);
       globalThis.__lastCuzPending = sess;
       globalThis.__cuzPending = true;
+    } else if (sess && !sess.awaitingValueOption && isCuzQuoted) {
+      const promptMatch = quotedText.match(/(?:Send the new value for|Editing)\s*\*?([^*:\n]+)\*?/i);
+      if (promptMatch) {
+        const targetLabel = promptMatch[1].trim().toLowerCase();
+        const recoveredOpt = customizationOptions.find(o => o.label.toLowerCase() === targetLabel || o.id.toLowerCase() === targetLabel);
+        if (recoveredOpt) sess.awaitingValueOption = recoveredOpt;
+      }
     }
 
     if (!sess && !isCuzQuoted) {
@@ -483,10 +498,14 @@ async function handleCuzReply(sock, msg, body, P) {
       // Enter waiting state for the option's value
       if (!sess) {
         sess = { chatId: jid, userId, menuMessageId: rawCtx?.stanzaId, pendingValue: null, awaitingValueOption: opt, createdAt: Date.now() };
-        pendingSessions.set(sessionKey, sess);
       } else {
         sess.awaitingValueOption = opt;
       }
+      pendingSessions.set(sessionKey, sess);
+      pendingSessions.set(jid, sess);
+      pendingSessions.set(userId, sess);
+      globalThis.__lastCuzPending = sess;
+      globalThis.__cuzPending = true;
 
       let promptGuide = "";
       if (opt.type === "emoji") promptGuide = " (send 1 or 2 emojis)";

@@ -3121,17 +3121,14 @@ Save my contact:` }).catch(() => {});
               _mQ = _unxt;
             }
             const _qAllTexts = [];
-            if (_mQ) {
-              _qAllTexts.push(
-                _mQ.conversation,
-                _mQ.extendedTextMessage?.text,
-                _mQ.imageMessage?.caption,
-                _mQ.videoMessage?.caption,
-                _mQ.documentMessage?.caption,
-                _mQ.interactiveMessage?.body?.text,
-                _mQ.buttonsMessage?.contentText
-              );
-            }
+            const _collectQStrings = (o) => {
+              if (!o || typeof o !== "object") return;
+              for (const k of Object.keys(o)) {
+                if (typeof o[k] === "string" && o[k].trim()) _qAllTexts.push(o[k]);
+                else if (typeof o[k] === "object") _collectQStrings(o[k]);
+              }
+            };
+            if (_mQ) _collectQStrings(_mQ);
             const _qJoined = _qAllTexts.filter(Boolean).join(" ");
             const _qNorm = _qJoined.normalize("NFKD");
             const _cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
@@ -3153,7 +3150,7 @@ Save my contact:` }).catch(() => {});
 
             // 2. Settings Panel Quote or Settings Numeric Option (never steal TikTok/picker replies)
             const _setMatch = _cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i) || (_cleanB === "0" ? ["0", "0"] : null);
-            const _isTikTokQ = /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(_qNorm);
+            const _isTikTokQ = !_isSetQuoted && /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(_qNorm);
             const _hasPendingP = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(msg.key.remoteJid);
             const _hasActiveSetSession = !!(settingsSession && settingsSession.get(msg.key.remoteJid));
             if (!_isTikTokQ && !_hasPendingP && (_isSetQuoted || (_hasActiveSetSession && _setMatch))) {
@@ -3241,8 +3238,11 @@ Save my contact:` }).catch(() => {});
           const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
             const _pQtxt = (typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||"";
             const _pNorm = String(_pQtxt || "").normalize("NFKD");
-   const _pIsSettingsPanel = (/SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT/i.test(_pNorm)) && !/TIKTOK|PHOTO SLIDE|NO WATERMARK/i.test(_pNorm);
-            if (!_pIsSettingsPanel && _pickerChoice && (_pickerActive || (_v32HasQuote && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test(_pQtxt)))) {
+   const _pIsSudoCard = /SUDO|ACCESS CONTROL/i.test(_pQtxt) || /SUDO|ACCESS CONTROL/i.test(_pNorm);
+   const _pIsCuzCard = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(_pQtxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(_pNorm);
+   const _pIsSettingsPanel = /SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT/i.test(_pNorm);
+   const _pIsProtectedCard = _pIsSettingsPanel || _pIsSudoCard || _pIsCuzCard;
+            if (!_pIsProtectedCard && _pickerChoice && (_pickerActive || (_v32HasQuote && !/SUDO|ACCESS CONTROL/i.test(_pQtxt) && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test(_pQtxt)))) {
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
             }
           } catch (_pickerFirstErr) {
@@ -42564,15 +42564,16 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       const t = String(q?.conversation || q?.extendedTextMessage?.text || q?.imageMessage?.caption || q?.videoMessage?.caption || q?.caption || "");
       const tNorm = t.normalize("NFKD");
 
-      // TikTok or Media Picker context MUST NOT be swallowed by settings
-      const isTikTokContext = /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(tNorm)
-        || (typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(jid))
-        || (typeof __ttGetSelection === "function" && !!__ttGetSelection(jid));
-      if (isTikTokContext) return false;
-
       quotedIsSettings = (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(tNorm)
         || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle/i.test(t))
-        && !/TIKTOK|PLAYER|SUDO|CUSTOMIZ/i.test(tNorm);
+        && !/PLAYER|SUDO|CUSTOMIZ/i.test(tNorm);
+
+      // TikTok or Media Picker context MUST NOT be swallowed by settings,
+      // but the Settings panel itself (which lists TikTok in section 29) is NOT TikTok context.
+      const isTikTokContext = !quotedIsSettings && (/TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(tNorm)
+        || (typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(jid))
+        || (typeof __ttGetSelection === "function" && !!__ttGetSelection(jid)));
+      if (isTikTokContext) return false;
     } catch {}
 
     if (!choice) return false;
@@ -44441,17 +44442,16 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       || msg.message?.extendedTextMessage?.contextInfo || {};
     const quotedMsg = typeof __v31Unwrap === "function" ? __v31Unwrap(_ctxInfo.quotedMessage || {}) : (_ctxInfo.quotedMessage || {});
 
-    let quotedText = String(
-      quotedMsg.conversation ||
-      quotedMsg.extendedTextMessage?.text ||
-      quotedMsg.imageMessage?.caption ||
-      quotedMsg.videoMessage?.caption ||
-      quotedMsg.documentMessage?.caption ||
-      quotedMsg.buttonsMessage?.contentText ||
-      quotedMsg.listMessage?.description ||
-      quotedMsg.interactiveMessage?.body?.text ||
-      ""
-    );
+    const _qArr = [];
+    const _recTxt = (o) => {
+      if (!o || typeof o !== "object") return;
+      for (const k of Object.keys(o)) {
+        if (typeof o[k] === "string" && o[k].trim()) _qArr.push(o[k]);
+        else if (typeof o[k] === "object") _recTxt(o[k]);
+      }
+    };
+    _recTxt(quotedMsg);
+    let quotedText = _qArr.join(" ");
     const quotedNorm = quotedText.normalize("NFKD");
     if (/JINX PLAYER|PLAY|MUSIC|SONG|SELECT A TRACK|AUDIO DOWNLOAD|VIDEO DOWNLOAD/i.test(quotedText) || /JINX PLAYER|PLAY|MUSIC|SONG|SELECT A TRACK|AUDIO DOWNLOAD|VIDEO DOWNLOAD/i.test(quotedNorm)) {
       return false;
@@ -44497,6 +44497,13 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
 
     try { await react(sock, msg, "🌀"); } catch {}
     const { target, tNum } = pend;
+
+    const botNum = _cleanNum((typeof _botJid !== "undefined" ? _botJid : "") || sock.user?.id || "");
+    if (tNum && botNum && tNum === botNum) {
+      try { await react(sock, msg, "🚫"); } catch {}
+      await sendReply(sock, msg, "🚫 Unauthorized behavior: you can't be bot and sudo!");
+      return true;
+    }
 
     if (pick === "1" || pick === "2") {
       const isVip = pick === "2";

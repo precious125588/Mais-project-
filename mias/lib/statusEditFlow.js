@@ -311,37 +311,70 @@ async function tikwmRequest(url, params) {
 }
 
 // Keyword search straight from TikTok's index: real titles, real view counts
-// and a direct playable URL, so results genuinely match the topic.
+// and a direct playable URL, mixing fresh new 4k/viral edits with classic high-quality edits.
 async function tikwmSearch(query) {
-  const results = [];
-  for (const keywords of [`${query} edit`, query]) {
-    try {
-      const data = await tikwmRequest("https://tikwm.com/api/feed/search", {
-        keywords,
-        count: 20,
-        cursor: 0,
-        HD: 1,
-      });
-      const rows = data?.data?.videos || data?.data || [];
-      for (const row of Array.isArray(rows) ? rows : []) {
-        const author = row?.author?.unique_id || row?.author?.uniqueId || "";
-        const videoId = row?.video_id || row?.aweme_id || row?.id;
-        if (!author || !videoId) continue;
-        const title = String(row?.title || row?.desc || "").trim();
-        if (!matchesQuery(query, title, author)) continue;
-        const item = candidate(`https://www.tiktok.com/@${author}/video/${videoId}`, {
-          platform: "tiktok",
-          title: title || `${query} edit`,
-          views: row?.play_count,
-          likes: row?.digg_count,
-          downloadUrl: row?.hdplay || row?.play || "",
-        });
-        if (item) results.push(item);
+  const cleanQ = String(query || "").trim();
+  const freshQueries = [`${cleanQ} 4k edit`, `${cleanQ} viral edit 2026`, `${cleanQ} trending edit`];
+  const classicQueries = [`${cleanQ} best edit`, `${cleanQ} edit`, cleanQ];
+
+  const searchEndpoints = [
+    "https://www.tikwm.com/api/feed/search/",
+    "https://tikwm.com/api/feed/search/"
+  ];
+
+  const fetchForQueries = async (queryList, targetCount = 10) => {
+    const list = [];
+    for (const keywords of queryList) {
+      for (const ep of searchEndpoints) {
+        try {
+          const data = await tikwmRequest(ep, {
+            keywords,
+            count: 20,
+            cursor: 0,
+            HD: 1,
+          });
+          const rows = data?.data?.videos || data?.data || [];
+          for (const row of Array.isArray(rows) ? rows : []) {
+            const author = row?.author?.unique_id || row?.author?.uniqueId || "";
+            const videoId = row?.video_id || row?.aweme_id || row?.id;
+            if (!author || !videoId) continue;
+            const title = String(row?.title || row?.desc || "").trim();
+            if (!matchesQuery(cleanQ, title, author)) continue;
+            const item = candidate(`https://www.tiktok.com/@${author}/video/${videoId}`, {
+              platform: "tiktok",
+              title: title || `${cleanQ} edit`,
+              views: row?.play_count,
+              likes: row?.digg_count,
+              downloadUrl: row?.hdplay || row?.play || "",
+            });
+            if (item) list.push(item);
+          }
+          if (list.length >= targetCount) break;
+        } catch {}
       }
-    } catch {}
-    if (results.length >= 8) break;
+      if (list.length >= targetCount) break;
+    }
+    return list;
+  };
+
+  const [freshRaw, classicRaw] = await Promise.all([
+    fetchForQueries(freshQueries, 8),
+    fetchForQueries(classicQueries, 8)
+  ]);
+
+  const fresh = uniqueCandidates(freshRaw).sort((a, b) => b.qualityScore - a.qualityScore);
+  const classic = uniqueCandidates(classicRaw).sort((a, b) => b.qualityScore - a.qualityScore);
+
+  // Blend fresh and classic edits so users get a mix of both
+  const blended = [];
+  const maxLen = Math.max(fresh.length, classic.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < fresh.length) blended.push(fresh[i]);
+    if (i < classic.length) blended.push(classic[i]);
   }
-  return uniqueCandidates(results).sort((a, b) => b.qualityScore - a.qualityScore);
+
+  const result = uniqueCandidates(blended.length ? blended : [...fresh, ...classic]);
+  return result;
 }
 
 // Confirms a scraped link really is about the requested topic before it is

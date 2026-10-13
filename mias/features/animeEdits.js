@@ -1318,9 +1318,15 @@ async function remoteEdits(entry) {
   if (entry.slug === "jjk") return jjkEdits();
   if (entry.slug === "demon-slayer") return demonSlayerEdits();
 
-  // Search the exact title first so a request for Naruto cannot come back
-  // with an unrelated clip.
-  const queries = [`${entry.query} anime edit`, `${entry.query} edit`, entry.query];
+  // Search both fresh 4k/viral queries and classic queries to blend new and old edits
+  const queries = [
+    `${entry.query} 4k anime edit`,
+    `${entry.query} viral anime edit 2026`,
+    `${entry.query} anime edit`,
+    `${entry.query} best edit`,
+    `${entry.query} edit`,
+    entry.query
+  ];
   // Source restriction is deliberate: anime edits come from TikTok only.
   // The status flow validates the host again before downloading, so a
   // search-engine redirect cannot widen this allow-list.

@@ -22,7 +22,7 @@ import { writeFileSync } from "node:fs";
 writeFileSync(new URL("./fake-baileys.js", import.meta.url).pathname, `module.exports = ${JSON.stringify({})};`);
 
 // ── Re-import after faking ──
-const __dirname_fix = "/home/user/precious-fix";
+const __dirname_fix = "/tmp/repo";
 const registry  = await import(`${__dirname_fix}/lib/pickerRegistry.js`);
 const buttons   = await import(`${__dirname_fix}/lib/universalButtons.js`);
 const videoFix  = await import(`${__dirname_fix}/lib/videoFix.js`);
