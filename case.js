@@ -2017,8 +2017,6 @@ case '__dup_removed_ownpair__': {  // moved to mias/index.js
 break;
 case 'pair': {
   try {
-    await devtrust.sendMessage(m.chat, { react: { text: '🖇️', key: m.key } });
-
     let target = (q || "").split("|")[0].trim();
     if (!target && !m.quoted && !m.mentionedJid?.length) {
       target = String(sender || "").replace(/[^0-9]/g, "");
@@ -2029,8 +2027,7 @@ case 'pair': {
       rawDigits = '234' + rawDigits.slice(1);
     }
     if (!rawDigits || rawDigits.length < 7 || rawDigits.length > 15) {
-      return reply(`*❌ Please enter a valid WhatsApp phone number with country code.*
-*Format:* \`.pair 2348012345678\``);
+      return reply(`*❌ Please enter a valid WhatsApp phone number with country code.*\n*Format:* \`.pair 2348012345678\``);
     }
 
     let sjid = rawDigits + "@s.whatsapp.net";
@@ -2051,6 +2048,7 @@ case 'pair': {
     const startpairing = typeof pairModule === 'function' ? pairModule : pairModule.startpairing;
     const waitForPairingResult = pairModule.waitForPairingResult;
     const hasPairedSession = pairModule.hasPairedSession;
+    const pairEvents = pairModule.pairEvents;
 
     if (typeof startpairing !== 'function' || typeof waitForPairingResult !== 'function') {
       return reply(`❌ Pairing module is temporarily unavailable. Please retry in a few seconds.`);
@@ -2060,51 +2058,145 @@ case 'pair': {
       return reply(`✅ Number *+${rawDigits}* is already linked and active!`);
     }
 
-    await reply(`⏳ *Requesting pairing code for +${rawDigits}...*
-_Please keep your WhatsApp mobile app open._`);
+    let liveKey = null;
+    const editLive = async (newText) => {
+      try {
+        if (liveKey) {
+          await devtrust.sendMessage(from, { text: String(newText), edit: liveKey });
+          return;
+        }
+        const sent = await devtrust.sendMessage(from, { text: String(newText) }, { quoted: m });
+        if (sent?.key) liveKey = sent.key;
+      } catch (err) {
+        try {
+          const fallback = await devtrust.sendMessage(from, { text: String(newText) }, { quoted: m });
+          if (fallback?.key) liveKey = fallback.key;
+        } catch (_) {}
+      }
+    };
 
+    // Step 1: Initial live message
+    await editLive(`Request code for ${rawDigits}`);
+
+    // Request pairing code
     await startpairing(sjid, { mode: 'code' });
-    const cuObj = await waitForPairingResult(sjid, 120000, 'code');
+
+    let cuObj = null;
+    try {
+      cuObj = await waitForPairingResult(sjid, 120000, 'code');
+    } catch (err) {
+      const state = typeof pairModule.getPairingRuntimeState === 'function' ? pairModule.getPairingRuntimeState(sjid) : null;
+      const dbg = state?.debug?.what || err?.message || 'Could not reach WhatsApp servers. Please retry.';
+      await editLive(`debug: ${dbg}`);
+      return;
+    }
 
     if (!cuObj || !cuObj.code) {
-      return reply(`❌ Could not generate pairing code for *+${rawDigits}*. WhatsApp may be busy. Please try again in 30 seconds.`);
+      const state = typeof pairModule.getPairingRuntimeState === 'function' ? pairModule.getPairingRuntimeState(sjid) : null;
+      const dbg = state?.debug?.what || state?.error || 'Could not generate pairing code. Please try again.';
+      await editLive(`debug: ${dbg}`);
+      return;
     }
 
     const formattedCode = String(cuObj.code || "").trim();
-    const cleanCode = formattedCode.replace(/[^A-Za-z0-9]/g, "");
+    // Step 2: Edit to pairing code
+    await editLive(formattedCode);
 
-    // 1. Send clean raw code for one-tap copy
-    await devtrust.sendMessage(from, { text: `${cleanCode}` }, { quoted: m });
+    // Step 3: Track linking lifecycle (event-driven + polling fallback)
+    let isFinished = false;
+    let currentStage = 'code';
+    const startTime = Date.now();
 
-    // 2. Send instructions with formatted code
-    const instructions = `*[🔗 PAIRING CODE GENERATED ✅]*
+    const cleanup = () => {
+      try { clearInterval(pollTimer); } catch {}
+      try {
+        if (pairEvents && typeof pairEvents.off === 'function') {
+          pairEvents.off('event', onPairEvent);
+        } else if (pairEvents && typeof pairEvents.removeListener === 'function') {
+          pairEvents.removeListener('event', onPairEvent);
+        }
+      } catch {}
+    };
 
-` +
-      `📱 *Number:* +${rawDigits}
-` +
-      `🔑 *Code:* \`${formattedCode}\`
+    const onPairEvent = async (ev) => {
+      if (isFinished) return;
+      const eventJid = ev?.jid || ev?.data?.number;
+      const eventDigits = String(eventJid || '').split('@')[0].replace(/[^0-9]/g, '');
+      if (eventDigits && eventDigits !== rawDigits) return;
 
-` +
-      `*Steps to link:*
-` +
-      `1. Open WhatsApp on your phone
-` +
-      `2. Tap *Settings* (or three dots ⋮) ➔ *Linked Devices*
-` +
-      `3. Tap *Link a Device*
-` +
-      `4. Select *Link with phone number instead*
-` +
-      `5. Enter the code: *${cleanCode}*
+      const eventName = ev?.event;
+      const data = ev?.data || {};
 
-` +
-      `⏱️ _This code expires in 2 minutes. Your bot session will start automatically once connected._\n\n` +
-      `💡 *Didn't receive a WhatsApp notification?*\n` +
-      `• *What:* WhatsApp didn't pop up the link device alert.\n` +
-      `• *Why:* Phone battery optimization, background sleep mode, or restricted notification permissions prevented WhatsApp from pushing the link alert.\n` +
-      `• *Solution:* You do *NOT* need to wait for a notification! Manually open WhatsApp ➔ Settings (⋮) ➔ Linked Devices ➔ Link a Device ➔ "Link with phone number instead" ➔ Enter code: *${cleanCode}*.`;
+      if (eventName === 'linking') {
+        if (currentStage !== 'linking') {
+          currentStage = 'linking';
+          await editLive('linking device');
+        }
+      } else if (eventName === 'paired' || eventName === 'connected') {
+        isFinished = true;
+        cleanup();
+        await editLive('bot alive');
+      } else if (eventName === 'timeout') {
+        isFinished = true;
+        cleanup();
+        await editLive('code timeout');
+      } else if (eventName === 'failed' || eventName === 'error') {
+        isFinished = true;
+        cleanup();
+        const dbg = data?.debug?.what || data?.msg || data?.error || 'debug: pairing failed';
+        await editLive(`debug: ${dbg}`);
+      }
+    };
 
-    await devtrust.sendMessage(from, { text: instructions }, { quoted: m });
+    if (pairEvents && typeof pairEvents.on === 'function') {
+      pairEvents.on('event', onPairEvent);
+    }
+
+    const pollTimer = setInterval(async () => {
+      if (isFinished) return;
+
+      if (Date.now() - startTime >= 120000) {
+        isFinished = true;
+        cleanup();
+        await editLive('code timeout');
+        return;
+      }
+
+      const state = typeof pairModule.getPairingRuntimeState === 'function'
+        ? pairModule.getPairingRuntimeState(sjid)
+        : null;
+      const isPaired = typeof hasPairedSession === 'function'
+        ? hasPairedSession(sjid, { clean: false })
+        : false;
+
+      if (isPaired || state?.paired || state?.stage === 'open' || state?.handoffToMais) {
+        isFinished = true;
+        cleanup();
+        await editLive('bot alive');
+        return;
+      }
+
+      if (state?.isLinking || state?.isRestarting515 || state?.stage === 'linking' || state?.stage === 'restart_515') {
+        if (currentStage !== 'linking') {
+          currentStage = 'linking';
+          await editLive('linking device');
+        }
+        return;
+      }
+
+      if (state?.error) {
+        isFinished = true;
+        cleanup();
+        if (String(state.error).toLowerCase().includes('timeout')) {
+          await editLive('code timeout');
+        } else {
+          const dbg = state?.debug?.what || state?.error || 'debug: connection failed';
+          await editLive(`debug: ${dbg}`);
+        }
+        return;
+      }
+    }, 1500);
+
   } catch (err) {
     console.error('[pair cmd error]', err);
     await reply(`❌ *Pairing Error:* ${err.message || 'Unknown error occurred. Please try again.'}`);

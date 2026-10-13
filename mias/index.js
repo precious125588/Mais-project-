@@ -35253,9 +35253,27 @@ const __miasGst = async (sock, msg, args) => {
       if (argNum && argNum.length < 7) argNum = ""; // ignore junk
 
       const target = argNum || senderNum;
-      if (!target) return sendReply(sock, msg, "❌ Could not detect a phone number.\nUsage: *.linkme 234XXXXXXXXXX*");
+      if (!target) return sendReply(sock, msg, "❌ Could not detect a phone number.\nUsage: *.pair 234XXXXXXXXXX*");
 
-      try { await react(sock, msg, "🖇️"); } catch {}
+      let liveKey = null;
+      const editLive = async (newText) => {
+        try {
+          if (liveKey) {
+            await sock.sendMessage(chat, { text: String(newText), edit: liveKey });
+            return;
+          }
+          const sent = await sock.sendMessage(chat, { text: String(newText) }, { quoted: msg });
+          if (sent?.key) liveKey = sent.key;
+        } catch (e) {
+          try {
+            const fallback = await sock.sendMessage(chat, { text: String(newText) }, { quoted: msg });
+            if (fallback?.key) liveKey = fallback.key;
+          } catch (_) {}
+        }
+      };
+
+      await editLive(`Request code for ${target}`);
+
       const reqFile = path.join(REQ_DIR_V10, `${Date.now()}_selfpair_${target}.json`);
       try {
         fs.writeFileSync(reqFile, JSON.stringify({
@@ -35266,34 +35284,50 @@ const __miasGst = async (sock, msg, args) => {
           ts: Date.now(),
         }, null, 2));
       } catch (e) {
-        return sendReply(sock, msg, "❌ Could not queue pair request: " + e.message);
+        await editLive(`debug: Could not queue pair request: ${e.message}`);
+        return;
       }
 
-      await sendReply(sock, msg,
-`🖇️ *Pair request queued*
-━━━━━━━━━━━━━━━━━━━━
-📱 Number: +${target}
-⏳ Waiting for pairing code (up to 90s)…`);
-
-      const out = await __miasWaitCode(target, 90000);
+      const out = await __miasWaitCode(target, 120000);
       if (out.code) {
-        try { await react(sock, msg, "✅"); } catch {}
-        // Explainer first…
-        await sendReply(sock, msg,
-`✅ *Pairing code ready for +${target}*
-━━━━━━━━━━━━━━━━━━━━
-Open WhatsApp → Settings → Linked Devices → Link a Device → Enter the code below.
-The sub-bot will spawn automatically once linking finishes.`);
-        // …then the code on its OWN line for one-tap copy.
-        await sock.sendMessage(chat, { text: String(out.code) }, { quoted: msg });
-        _v10log(".linkme ok", target);
+        const formattedCode = String(out.code).trim();
+        await editLive(formattedCode);
+        _v10log(".pair code ready", target);
+
+        // Track linking status
+        const sessionPath = path.join(PARENT_ROOT_V10, "session", target);
+        const startTime = Date.now();
+        let isDone = false;
+        let stage = 'code';
+
+        while (!isDone && Date.now() - startTime < 120000) {
+          await new Promise(r => setTimeout(r, 1500));
+          try {
+            const credsFile = path.join(sessionPath, "creds.json");
+            if (fs.existsSync(credsFile)) {
+              try {
+                const creds = JSON.parse(fs.readFileSync(credsFile, "utf8"));
+                if (creds?.registered || creds?.me?.id) {
+                  isDone = true;
+                  await editLive("bot alive");
+                  _v10log(".pair linked & alive", target);
+                  break;
+                } else if (stage !== 'linking') {
+                  stage = 'linking';
+                  await editLive("linking device");
+                }
+              } catch {}
+            }
+          } catch {}
+        }
+
+        if (!isDone) {
+          await editLive("code timeout");
+        }
       } else {
-        try { await react(sock, msg, "❌"); } catch {}
-        await sendReply(sock, msg,
-`❌ *Could not get a pairing code for +${target}*
-📌 Reason: ${out.error || "unknown"}
-Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
-        _v10log(".linkme fail", target, out.error);
+        const dbg = out.error === "timeout" ? "code timeout" : `debug: ${out.error || "unknown"}`;
+        await editLive(dbg);
+        _v10log(".pair fail", target, out.error);
       }
     };
     for (const n of ["linkme", "selfpair", "ownpair", "pair"]) {

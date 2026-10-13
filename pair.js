@@ -248,6 +248,9 @@ function getPairingRuntimeState(nexusDevNumber) {
         debug: tracker?.pairingDebug || null,
         stage: tracker?.pairingStage || (code ? 'code_ready' : (qr ? 'qr_ready' : (isPairingActive(nexusDevNumber) ? 'connecting' : 'idle'))),
         lastDisconnectReason: tracker?.lastDisconnectReason || null,
+        handoffToMais: !!tracker?.handoffToMais,
+        isRestarting515: !!tracker?.isRestarting515,
+        isLinking: !!tracker?.isLinking,
     };
 }
 
@@ -764,7 +767,7 @@ function cleanupExpiredSessions() {
 // Run once at boot as well as hourly. Waiting an hour allowed failed pairing
 // bursts to exhaust a small Railway volume before cleanup ever started.
 try { cleanupExpiredSessions(); } catch {}
-setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
+const _cleanupInterval = setInterval(cleanupExpiredSessions, 60 * 60 * 1000); if (typeof _cleanupInterval?.unref === "function") _cleanupInterval.unref();
 
 function ensureDirectoryExists(dirPath) {
     if (!fs.existsSync(dirPath)) {
@@ -802,7 +805,7 @@ async function getWAVersion() {
 // Resolves as soon as the underlying websocket is actually open, so we never
 // request a pairing code against a socket that is not ready (a common source
 // of instant 401 / stale codes).
-function waitForSocketOpen(sock, timeoutMs = 20000) {
+function waitForSocketOpen(sock, timeoutMs = 35000) {
     return new Promise((resolve) => {
         const done = (ok) => { clearTimeout(timer); try { sock.ev.off('connection.update', onUpd); } catch {} resolve(ok); };
         const timer = setTimeout(() => done(false), timeoutMs);
@@ -978,9 +981,15 @@ async function startpairing(nexusDevNumber, options = {}) {
     tracker.disconnected = false;
     tracker.lastActivity = Date.now();
     const isRestarting515 = Boolean(tracker.isRestarting515);
-    tracker.isRestarting515 = false;
-    tracker.pairingCode = null;
-    tracker.pairingQr = null;
+    if (isRestarting515) {
+        tracker.pairingStage = 'linking';
+        tracker.isLinking = true;
+    } else {
+        tracker.isRestarting515 = false;
+        tracker.isLinking = false;
+        tracker.pairingCode = null;
+        tracker.pairingQr = null;
+    }
     tracker.pairingMode = pairingMode;
     tracker.pairingError = null;
     tracker.pairingPromise = null;
@@ -1067,9 +1076,10 @@ async function startpairing(nexusDevNumber, options = {}) {
         // v23: the 30s connect timeout was the "loads forever then couldn't
         // link" killer on Railway/Replit — the handshake often takes 35-50s
         // on a cold dyno. Raised to 60s so the code is actually delivered.
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 30000,
-        keepAliveIntervalMs: 45000,
+        connectTimeoutMs: 90000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
+        retryRequestDelayMs: 2500,
         emitOwnEvents: true,
         fireInitQueries: true,
         generateHighQualityLinkPreview: false,
@@ -1099,7 +1109,7 @@ async function startpairing(nexusDevNumber, options = {}) {
 
     if (store) store.bind(nexus.ev);
 
-    if (pairingMode === 'code' && !state.creds.registered && !state.creds?.me?.id && !tracker?.isRestarting515) {
+    if (pairingMode === 'code' && !state.creds.registered && !state.creds?.me?.id && !isRestarting515 && !tracker?.isRestarting515) {
         if (useMobile) {
             throw new Error('Cannot use pairing code with mobile API');
         }
@@ -1119,7 +1129,7 @@ async function startpairing(nexusDevNumber, options = {}) {
             // Wait for the websocket to actually be open instead of a blind
             // sleep. On a weak network the old 2.5s sleep fired too early and
             // every request failed, burning the 120s window.
-            const opened = await waitForSocketOpen(nexus, 18000);
+            const opened = await waitForSocketOpen(nexus, 35000);
             if (!opened) {
                 tracker.pairingError = 'Could not reach WhatsApp servers. Please retry.';
                 throw new Error(tracker.pairingError);
@@ -1168,6 +1178,30 @@ async function startpairing(nexusDevNumber, options = {}) {
 
                     tracker.pairingCode = code;
                     tracker.pairingError = null;
+                    tracker.pairingStage = 'code_ready';
+                    try {
+                        pairEvents.emit('event', {
+                            jid: nexusDevNumber,
+                            event: 'code_ready',
+                            data: { number: nexusDevNumber, code }
+                        });
+                    } catch {}
+                    const codeExpireTimer = setTimeout(() => {
+                        const cur = rentbotTracker.get(nexusDevNumber);
+                        if (cur && cur.pairingCode === code && !state.creds?.registered && !cur.handoffToMais) {
+                            console.log(chalk.yellow(`⌛ Pairing code timed out for ${nexusDevNumber}`));
+                            cur.pairingError = 'code timeout';
+                            cur.pairingStage = 'timeout';
+                            try {
+                                pairEvents.emit('event', {
+                                    jid: nexusDevNumber,
+                                    event: 'timeout',
+                                    data: { number: nexusDevNumber, msg: 'code timeout' }
+                                });
+                            } catch {}
+                        }
+                    }, 120000);
+                    if (nexus.__timers) nexus.__timers.push(codeExpireTimer);
                     tracker.pairingDebug = {
                         code: 'AWAITING_LINK',
                         stage: 'Pairing Code Active',
@@ -1792,6 +1826,18 @@ async function startpairing(nexusDevNumber, options = {}) {
                 }
                 console.log(chalk.red(`❌ Pairing rejected repeatedly for ${nexusDevNumber}`));
                 tracker.pairingError = 'Pairing was rejected by WhatsApp (401). Please check that your WhatsApp app is updated and retry.';
+                tracker.pairingStage = 'failed';
+                try {
+                    pairEvents.emit('event', {
+                        jid: nexusDevNumber,
+                        event: 'failed',
+                        data: {
+                            number: nexusDevNumber,
+                            msg: tracker.pairingError,
+                            debug: tracker.pairingDebug
+                        }
+                    });
+                } catch {}
                 endPairingWindow(nexusDevNumber);
                 forceCleanupSession(nexusDevNumber, { force: true });
                 return;
@@ -1801,8 +1847,16 @@ async function startpairing(nexusDevNumber, options = {}) {
             // pairing — reconnect, never wipe the session.
             if (reason === 515) {
                 tracker.isRestarting515 = true;
+                tracker.isLinking = true;
                 tracker.lastDisconnectReason = 515;
-                tracker.pairingStage = 'restart_515';
+                tracker.pairingStage = 'linking';
+                try {
+                    pairEvents.emit('event', {
+                        jid: nexusDevNumber,
+                        event: 'linking',
+                        data: { number: nexusDevNumber, stage: 'linking device', reason: 515 }
+                    });
+                } catch {}
                 tracker.pairingDebug = {
                     code: 515,
                     stage: 'Handshake Restart',
@@ -1897,7 +1951,20 @@ async function startpairing(nexusDevNumber, options = {}) {
             }
         } else if (connection === "open") {
             endPairingWindow(nexusDevNumber);
-            if (tracker) { tracker.pairedAt = Date.now(); tracker.reauthTried = false; }
+            if (tracker) {
+                tracker.pairedAt = Date.now();
+                tracker.reauthTried = false;
+                tracker.pairingStage = 'open';
+                tracker.isLinking = false;
+                tracker.isRestarting515 = false;
+            }
+            try {
+                pairEvents.emit('event', {
+                    jid: nexusDevNumber,
+                    event: 'paired',
+                    data: { number: nexusDevNumber, status: 'bot alive' }
+                });
+            } catch {}
             console.log(chalk.bgGreen.black(`✅ Paired: ${nexusDevNumber}`));
             // Always surface the ANIME GC LIBRARY state after any successful pairing,
             // so the +2348152433778 library connection state is visible in the logs.
@@ -2000,6 +2067,18 @@ async function startpairing(nexusDevNumber, options = {}) {
                 try { fs.mkdirSync(sessionPath, { recursive: true }); } catch {}
             }
             await saveCreds();
+            if (tracker && tracker.pairingCode && !tracker.hasEmittedLinking && !state.creds?.registered) {
+                tracker.hasEmittedLinking = true;
+                tracker.isLinking = true;
+                tracker.pairingStage = 'linking';
+                try {
+                    pairEvents.emit('event', {
+                        jid: nexusDevNumber,
+                        event: 'linking',
+                        data: { number: nexusDevNumber, stage: 'linking device' }
+                    });
+                } catch {}
+            }
         } catch (e) {
             if (e && e.code === 'ENOENT') return; // session was wiped — ignore
             console.log(chalk.yellow(`⚠️ saveCreds ${nexusDevNumber}: ${e.message}`));

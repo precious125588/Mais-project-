@@ -422,14 +422,12 @@ async function handleCuzReply(sock, msg, body, P) {
     const norm = rawInput.replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
     const numMatch = norm.match(/^(?:cuz\s*)?(\d{1,2})$/i);
 
-    // v39 HARDEN: cuz only reacts when the reply QUOTES the actual cuz card.
-    // A bare number (or number-ish text) with no cuz-card quote is normal chat and is
-    // left completely alone — it must go SILENT, never touch customization settings.
-    if (!isCuzQuoted) {
+    const sess = pendingSessions.get(sessionKey);
+
+    // v39 HARDEN: cuz only reacts when the reply QUOTES the actual cuz card OR there is an active pending session
+    if (!isCuzQuoted && !sess) {
       return false;
     }
-
-    const sess = pendingSessions.get(sessionKey);
 
     // Numeric option reply (1 to 17)
     if (numMatch) {
