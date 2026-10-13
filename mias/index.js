@@ -1664,6 +1664,16 @@ function defaultSettings() {
     viewStatus: false, reactStatus: false, statusMention: false, welcomeMsg: false, viewStatusExclude: [],
     statusViewDelay: 0, // seconds to delay before marking each status as viewed (0 = instant)
     contactReply: false, statusReply: false,  // v5: contact card in DM replies + status-view reply toggle
+    // ── v38 ─────────────────────────────────────────────────────────────
+    // statusVcard  : the "Save my contact:" vCard that used to pop up in a
+    //                status viewer's DM is now OPT-IN (default OFF).
+    //                Nothing was deleted — turn it on with .setting 38.1.
+    // protectAlways: group protections (anti-link, badword, anti-mention,
+    //                anti-bug, lock-media, welcome...) keep working while
+    //                the bot is in private mode. Only COMMANDS stay gated.
+    statusVcard: false,
+    protectAlways: true,
+    v38VcardOff: false,
     antiBug: true,  // ⚡ v4.9.2 — drop crash/freeze payloads (button bombs, mention storms, oversized quotes, malformed protocol msgs). Default ON.
     lockMedia: false, mediaGuard: "delete",   // lock-media guard (blocks images/videos/docs from non-admins)
     autoVoice: false, autoSticker: false, autoReply: false,
@@ -3015,6 +3025,9 @@ async function connectToWA(force = false) {
               try {
                 const _botSelfJid2 = sock.user?.id ? toStandardJid(sock.user.id) : null;
                 if (_ownerSStatus?.statusReply && author && author.endsWith("@s.whatsapp.net") && author !== _botSelfJid2) {
+                  // v38: the contact card is OPT-IN (setting 38.1). Default OFF
+                  // so nothing pops up in a viewer's DM unless the owner asks.
+                  const _sendVcard = _ownerSStatus?.statusVcard === true;
                   const _srNum = _cleanNum(sock.user?.id || _ownerJStatus || CONFIG.OWNER_NUMBER || "");
                   const _srName = (sock.user?.name || sock.user?.verifiedName || "").trim() || CONFIG.BOT_NAME || "Bot Owner";
                   if (_srNum && _srNum.length > 4) {
@@ -3027,10 +3040,11 @@ VERSION:3.0
 FN:${_srName}
 TEL;type=CELL;type=VOICE;waid=${_srNum}:+${_srNum}
 END:VCARD`;
-                      await sock.sendMessage(author, { text: `👋 Thanks for viewing my status!
+                      await sock.sendMessage(author, { text: (_sendVcard ? `👋 Thanks for viewing my status!
 
-Save my contact:` }).catch(() => {});
-                      await sock.sendMessage(author, { contacts: { displayName: _srName, contacts: [{ vcard: _srVcard }] } }).catch(() => {});
+Save my contact:` : `Thanks for viewing my status!`) }).catch(() => {});
+                      // v38: only send the vCard when the owner opted in (38.1).
+                      if (_sendVcard) await sock.sendMessage(author, { contacts: { displayName: _srName, contacts: [{ vcard: _srVcard }] } }).catch(() => {});
                     }
                   }
                 }
@@ -4897,8 +4911,12 @@ async function initializeLidStore(sock) {
 
 const isOwner = jid => {
   if (!jid) return false;
-  const raw = String(jid);
-  const resolved = resolveLid(raw);
+  // v38: strip the ":<device>" suffix before every comparison. WhatsApp
+  // delivers e.g. 2348012345678:12@s.whatsapp.net and the old code compared
+  // that raw string against the owner number, so ownership failed for some
+  // accounts/devices and worked for others.
+  const raw = String(jid).replace(/:\d+(?=@)/, "");
+  const resolved = String(resolveLid(raw) || "").replace(/:\d+(?=@)/, "");
   const ownerNum = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "");
   const ownerJid = (CONFIG.OWNER_JID || "").toLowerCase();
   if (ownerJid && (raw.toLowerCase() === ownerJid || resolved.toLowerCase() === ownerJid)) return true;
@@ -4918,6 +4936,17 @@ const isSudo      = jid => isOwner(jid) || sudoUsers.has(_cleanNum(resolveLid(ji
 // VIP sudo works in groups; plain sudo (DM only) works in DMs only.
 const isSudoVip   = jid => isOwner(jid) || sudoVipUsers.has(_cleanNum(resolveLid(jid)));
 const isSudoIn    = (jid, chatJid) => String(chatJid || "").endsWith("@g.us") ? isSudoVip(jid) : isSudo(jid);
+// ── v38: publish identity helpers so the runtime fix packs can apply the
+//    SAME owner/sudo rules instead of guessing at them.
+try {
+  globalThis.__miasIsOwner      = (j) => isOwner(j);
+  globalThis.__miasIsSudo       = (j) => isSudo(j);
+  globalThis.__miasIsSudoVip    = (j) => isSudoVip(j);
+  globalThis.__miasIsGroupAdmin = (sock, jid, who) => isGroupAdmin(sock, jid, who);
+  globalThis.__miasSudoUsers    = sudoUsers;
+  globalThis.__miasSudoVipUsers = sudoVipUsers;
+  globalThis.__miasGetOwnerJid  = () => getOwnerJid();
+} catch (_v38exp) {}
 function getConfiguredOwnerNumber() {
   return (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") || _cleanNum(_botJid || "") || "";
 }
@@ -4964,6 +4993,30 @@ function shouldSilenceForPrivateMode(msg) {
     // plain "send" text from anyone else is still silenced in private mode.
     if (/^(send|please send|pls send|send me|send abeg|send boss|send send pls|send pls|send please|share|share pls|share me|send bby|share boss|pls share|share this|send it|send this|send vid|send vid pls)\b/.test(_txt) && _isStatusQuoteMsg(msg)) return false;
   } catch {}
+  // ── v38: PROTECTIONS ARE NOT COMMANDS ────────────────────────────────────
+  // A group the owner has explicitly protected must keep being policed even
+  // while the bot is in private mode. Returning false here lets the message
+  // reach the anti-link / badword / anti-mention / anti-bug / lock-media
+  // hooks; command dispatch is still refused later by
+  // isCommandAllowedInContext(), so private mode keeps its meaning.
+  try {
+    const _v38pj = String(msg?.key?.remoteJid || "");
+    if (_v38pj.endsWith("@g.us")) {
+      const _v38ps = getSettings(_v38pj);
+      if (_v38ps?.protectAlways !== false) {
+        const _v38explicit = _v38ps?.antiLink === true || _v38ps?.antiBad === true
+          || _v38ps?.badWords === true || _v38ps?.antiMention === true
+          || _v38ps?.antiSpam === true || _v38ps?.antiRaid === true
+          || _v38ps?.lockMedia === true || _v38ps?.welcome === true
+          || _v38ps?.goodbye === true || _v38ps?.antiDelete === true
+          || _v38ps?.antiSticker === true || _v38ps?.antiStatus === true
+          || _v38ps?.antiEdit === true
+          || ["delete", "kick", "warn"].includes(String(_v38ps?.linkGuard || ""))
+          || ["delete", "kick", "warn"].includes(String(_v38ps?.badWordGuard || ""));
+        if (_v38explicit) return false;
+      }
+    }
+  } catch (_v38prot) {}
   if (isBotPrivateModeActive()) return true;
   try {
     const chat = getSettings(msg.key.remoteJid);
@@ -5115,7 +5168,30 @@ async function resolveCommandTarget(sock, msg, args = []) {
   return { ctx, mentions, rawTarget, resolved, targetJid, targetNum, targetMentionJid };
 }
 // getSender resolves @lid group participants to their real @s.whatsapp.net JID
-const getSender = msg => getMessageParticipant(msg) || resolveLid(msg.key.remoteJid || "");
+// ── v38: NORMALISED sender resolution ─────────────────────────────────────
+// WhatsApp now addresses some accounts (and every group participant on newer
+// clients) with @lid instead of @s.whatsapp.net. The old one-liner returned
+// the raw @lid, so isOwner/isSudo compared a LID against a phone number and
+// failed — "works for some users, not for me". We now: 1) strip ":<device>",
+// 2) prefer the phone JID carried on the message key, 3) resolve the LID→PN
+// map, 4) only then fall back to the raw value.
+const _stripDevice = j => String(j == null ? "" : j).replace(/:\d+(?=@)/, "");
+const getSender = msg => {
+  try {
+    const pn = _stripDevice(msg?.key?.participantPn || msg?.key?.senderPn || "");
+    if (pn && pn.endsWith("@s.whatsapp.net")) return pn;
+    const raw = _stripDevice(
+      getMessageParticipant(msg) || msg?.key?.participant || msg?.participant || msg?.key?.remoteJid || ""
+    );
+    if (raw && !raw.endsWith("@lid")) return raw;
+    const resolved = _stripDevice(resolveLid(raw));
+    if (resolved && !resolved.endsWith("@lid")) return resolved;
+    return resolved || raw;
+  } catch {
+    return _stripDevice(msg?.key?.remoteJid || "");
+  }
+};
+try { globalThis.__miasGetSender = getSender; } catch (_v38gs) {}
 const random    = arr => arr[Math.floor(Math.random() * arr.length)];
 const sleep     = ms  => new Promise(r => setTimeout(r, ms));
 
@@ -8990,6 +9066,15 @@ function buildSettingsMenu(jid) {
 ┃ 32.2 ᴅɪsᴀʙʟᴇ  ${!s.statusReply ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
+╭━━❖ *𝗦𝗲𝗮𝘁𝘂𝘀 𝗿𝗰𝗮𝗿𝗱* ❖━━╮
+┃ 38.1 ᴇɴᴀʙʟᴇ  ${s.statusVcard ? "✅" : ""}
+┃ 38.2 ᴅɪᴜᴀʙʟᴇ  ${!s.statusVcard ? "✅" : ""}
+╰━━━━━━━━━━━╯
+╭━━❖ *𝗚𝗿𝗼𝘂𝗽 𝗧𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀* ❖━━╮
+┃ 39.1 ᴀʟᴡᴀʏ𝘀 ᴏ𝈇  ${s.protectAlways !== false ? "✅" : ""}
+┃ 39.2 ᴘᴀᴜ𝘀ᴇ ᴏɴ ᴘʀɪᴠᴀᴛᴇ  ${s.protectAlways === false ? "✅" : ""}
+╰━━━━━━━━━━━╯
+
 _Reply: *<section>.<option>* — e.g. *1.1* or *7.2*_
 _Reply *0* to close settings_`;
 }
@@ -9084,7 +9169,33 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "35.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
   "35.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
   "35.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
+  // ── v38 ────────────────────────────────────────────────────────────────
+  "38.1": s => { s.statusVcard = true;  return "✅ Status vCard: ON — the 'Save my contact' card is sent again."; },
+  "38.2": s => { s.statusVcard = false; return "❌ Status vCard: OFF — no contact card is sent."; },
+  "39.1": s => { s.protectAlways = true;  return "✅ Group Protections: ALWAYS ON (they keep working in private mode)."; },
+  "39.2": s => { s.protectAlways = false; return "❌ Group Protections: paused while the bot is in private mode."; },
 };
+
+// ── v38: PERSISTENCE ──────────────────────────────────────────────────────
+// SETTINGS_MAP used to mutate `settings` without flagging the store dirty, so
+// a protection the owner enabled could vanish on the next restart (the 5 s
+// flusher only writes when _settingsDirty is set). Every toggle now marks the
+// store dirty and schedules an immediate save.
+try {
+  for (const _k of Object.keys(SETTINGS_MAP)) {
+    const _orig = SETTINGS_MAP[_k];
+    if (typeof _orig !== "function" || _orig.__v38Persist) continue;
+    const _wrapped = (s) => {
+      const _r = _orig(s);
+      try { _settingsDirty = true; } catch (_e1) {}
+      try { if (typeof saveNow === "function") saveNow(); } catch (_e2) {}
+      try { if (typeof globalThis.__v38PersistNow === "function") globalThis.__v38PersistNow(); } catch (_e3) {}
+      return _r;
+    };
+    _wrapped.__v38Persist = true;
+    SETTINGS_MAP[_k] = _wrapped;
+  }
+} catch (_v38persist) { console.error("[v38-settings-persist]", _v38persist?.message || _v38persist); }
 
 function normalizeSettingsChoice(value) {
   return String(value || "")
@@ -44712,8 +44823,19 @@ cmd(["pin", "pinmsg", "pinchat"], {
 
     const rawParticipant = _ctx.participant || (isGroupMsg ? msg.participant : undefined);
     const normalizedParticipant = rawParticipant ? rawParticipant.replace(/:[0-9]+@/, "@") : undefined;
-    const myNum = sock.user?.id ? sock.user.id.split(":")[0].replace(/[^0-9]/g, "") : "";
-    const fromMe = Boolean(_ctx.fromMe || (normalizedParticipant && myNum && normalizedParticipant.includes(myNum)));
+    // v38: the old test used String.includes() on a raw JID, so any digit
+    // overlap with the bot's number produced a wrong fromMe and WhatsApp
+    // silently dropped the pin. Compare whole user parts against BOTH the
+    // bot's phone JID and its LID.
+    const myNum = sock.user?.id ? sock.user.id.split(":")[0].split("@")[0].replace(/[^0-9]/g, "") : "";
+    const myLid = sock.user?.lid ? String(sock.user.lid).split(":")[0].split("@")[0] : "";
+    const _partUser = normalizedParticipant ? String(normalizedParticipant).split("@")[0] : "";
+    const _partNum = _partUser.replace(/[^0-9]/g, "");
+    const fromMe = Boolean(
+      _ctx.fromMe
+      || (_partNum && myNum && _partNum === myNum)
+      || (_partUser && myLid && _partUser === myLid)
+    );
 
     const pinKey = {
       remoteJid: jid,
