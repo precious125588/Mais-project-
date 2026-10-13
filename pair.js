@@ -2,6 +2,7 @@
 let makeWASocket, jidDecode, DisconnectReason, PHONENUMBER_MCC,
     makeCacheableSignalKeyStore, useMultiFileAuthState, Browsers,
     getContentType, proto, downloadContentFromMessage, fetchLatestBaileysVersion,
+    fetchLatestWaWebVersion,
     makeInMemoryStore;
 
 const _baileysReady = (async () => {
@@ -18,6 +19,7 @@ const _baileysReady = (async () => {
         proto                      = B.proto;
         downloadContentFromMessage = B.downloadContentFromMessage;
         fetchLatestBaileysVersion  = B.fetchLatestBaileysVersion;
+        fetchLatestWaWebVersion    = B.fetchLatestWaWebVersion;
         makeInMemoryStore          = B.makeInMemoryStore;
     } catch (e) {
         console.error('[pair] Failed to load @whiskeysockets/baileys:', e.message);
@@ -777,7 +779,7 @@ function ensureDirectoryExists(dirPath) {
 }
 
 // ── FAST / CACHED WHATSAPP VERSION (synced from full-dp-uploader) ───────
-const FALLBACK_WA_VERSION = [2, 3000, 1015901307];
+const FALLBACK_WA_VERSION = [2, 3000, 1050189019];
 let _waVersionCache = { version: null, at: 0 };
 const WA_VERSION_TTL = 6 * 60 * 60 * 1000;
 
@@ -786,7 +788,19 @@ async function getWAVersion() {
         return _waVersionCache.version;
     }
     try {
-        if (fetchLatestBaileysVersion) {
+        if (typeof fetchLatestWaWebVersion === "function") {
+            const result = await Promise.race([
+                fetchLatestWaWebVersion({}),
+                new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))
+            ]);
+            if (result?.version) {
+                _waVersionCache = { version: result.version, at: Date.now() };
+                return result.version;
+            }
+        }
+    } catch (_) {}
+    try {
+        if (typeof fetchLatestBaileysVersion === "function") {
             const result = await Promise.race([
                 fetchLatestBaileysVersion(),
                 new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3500))
@@ -1963,6 +1977,11 @@ async function startpairing(nexusDevNumber, options = {}) {
                     jid: nexusDevNumber,
                     event: 'paired',
                     data: { number: nexusDevNumber, status: 'bot alive' }
+                });
+                pairEvents.emit('event', {
+                    jid: nexusDevNumber,
+                    event: 'linked',
+                    data: { number: nexusDevNumber, msg: 'WhatsApp linked! Starting the bot...' }
                 });
             } catch {}
             console.log(chalk.bgGreen.black(`✅ Paired: ${nexusDevNumber}`));

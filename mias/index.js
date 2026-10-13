@@ -458,11 +458,11 @@ try {
 } catch (e) { console.error('jidDecode shim install failed:', e?.message); }
 
 const fetchLatestBaileysVersion =
-  typeof fetchLatestBaileysVersionRaw === "function"
-    ? fetchLatestBaileysVersionRaw
-    : typeof fetchLatestWaWebVersionRaw === "function"
-      ? fetchLatestWaWebVersionRaw
-      : async () => ({ version: [2, 3000, 1043857760], isLatest: false });
+  typeof fetchLatestWaWebVersionRaw === "function"
+    ? fetchLatestWaWebVersionRaw
+    : typeof fetchLatestBaileysVersionRaw === "function"
+      ? fetchLatestBaileysVersionRaw
+      : async () => ({ version: [2, 3000, 1050189019], isLatest: false });
 let makeWASocket =
   typeof makeWASocketFromExports === "function"
     ? makeWASocketFromExports

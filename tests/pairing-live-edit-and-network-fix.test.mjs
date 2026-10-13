@@ -21,6 +21,18 @@ test("pair.js contains weak network resilience configuration", () => {
   assert.ok(pairCode.includes("waitForSocketOpen(nexus, 35000)"), "startpairing should wait 35000ms for socket open");
 });
 
+test("pairing prefers the live WhatsApp Web version and surfaces link events", () => {
+  const pairCode = fs.readFileSync(path.join(ROOT, "pair.js"), "utf8");
+  const miasCode = fs.readFileSync(path.join(ROOT, "mias/index.js"), "utf8");
+  const uiCode = fs.readFileSync(path.join(ROOT, "public/index.html"), "utf8");
+
+  assert.ok(pairCode.includes("fetchLatestWaWebVersion    = B.fetchLatestWaWebVersion"), "pairing should load the WhatsApp Web version helper");
+  assert.ok(pairCode.indexOf("fetchLatestWaWebVersion({})") < pairCode.indexOf("fetchLatestBaileysVersion()"), "pairing should prefer the live WhatsApp Web revision");
+  assert.ok(miasCode.indexOf("typeof fetchLatestWaWebVersionRaw === \"function\"") < miasCode.indexOf("typeof fetchLatestBaileysVersionRaw === \"function\""), "the long-lived bot should prefer the same WhatsApp Web revision");
+  assert.ok(pairCode.includes("event: 'linked'"), "paired sockets should emit a UI-compatible linked event");
+  assert.ok(uiCode.includes("'linking','paired'"), "the pairing UI should subscribe to linking lifecycle events");
+});
+
 test("pair.js fixes 515 restart loop and emits linking/paired events", () => {
   const pairCode = fs.readFileSync(path.join(ROOT, "pair.js"), "utf8");
 

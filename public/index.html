@@ -265,7 +265,7 @@
   const STALL_NOTE_MS = 90000;    // log a note if WhatsApp is slow
   const HEALTH_MS = 5000;         // live condition refresh
   const CIRC = 2 * Math.PI * 54;
-  const EVENTS = ['waiting','state','connecting','authenticating','qr_ready','code_ready','linked','bot_started','failed','timeout','debug'];
+  const EVENTS = ['waiting','state','connecting','authenticating','qr_ready','code_ready','linked','bot_started','failed','timeout','debug','linking','paired'];
 
   let mode = 'code', number = '', es = null, stage = 'idle', pending = false;
   let startedAt = 0, lastEventAt = 0, stallNoted = false;
@@ -485,6 +485,11 @@
         setStage('ready', 'QR code issued'); 
         showQr(d.url); 
         break;
+      case 'linking':
+        setStage('auth', 'Linking with WhatsApp...');
+        showSpinner('Linking device with WhatsApp on your phone…');
+        break;
+      case 'paired':
       case 'linked':         
         setStage('linked', 'WhatsApp linked. Starting the bot'); 
         showSpinner(d.msg || 'Starting the bot…'); 
