@@ -1668,7 +1668,7 @@ function defaultSettings() {
     lockMedia: false, mediaGuard: "delete",   // lock-media guard (blocks images/videos/docs from non-admins)
     autoVoice: false, autoSticker: false, autoReply: false,
     recording: false, typing: false, alwaysOnline: true,
-    workMode: "private", language: "en", chatBotMode: false,
+    workMode: "public", language: "en", chatBotMode: false,
     // v23: autoBlock auto-blocks DM strangers whose number starts with these
     // country codes (Nigeria +234, Pakistan +92, Morocco +212 — toggle in .setting §35)
     autoBlockCountries: ["92", "212"],
@@ -3595,23 +3595,7 @@ Save my contact:` }).catch(() => {});
                   const _extQ = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
                   const _isNestedMedia = _extQ && ["imageMessage","videoMessage","documentMessage"].some(k => k in _extQ);
                   if (_isMediaMsg || _isNestedMedia) {
-                    const _lmAction = _gset.mediaGuard || "delete";
-                    const _lmBotAdmin = await isBotGroupAdmin(sock, _gjid).catch(() => false);
-                    if (_lmBotAdmin) {
-                      // Bot is admin — delete the message
-                      try { await sock.sendMessage(_gjid, { delete: msg.key }); } catch {}
-                    }
-                    // Always warn (even if can't delete) so user knows why
-                    try {
-                      await sock.sendMessage(_gjid, {
-                        text: `🔒 *Lock Media* — @${_author.split("@")[0]}, media is not allowed here.
-${_lmBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}`,
-                        mentions: [_author],
-                      });
-                    } catch {}
-                    if (_lmAction === "kick" && _lmBotAdmin) {
-                      try { await sock.groupParticipantsUpdate(_gjid, [_author], "remove"); } catch {}
-                    }
+                    await applyGuardAction(sock, _gjid, _author, msg.key, _gset.mediaGuard || "delete", "Lock-Media", "Media");
                     return;
                   }
                 }
@@ -3750,34 +3734,14 @@ ${_lmBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}
                 try { _atIsAdmin = await isGroupAdmin(sock, _atJid, _atAuthor); } catch {}
                 if (!_atIsOwnerOrSudo && !_atIsAdmin) {
                   // Detect mass-mention: mentioned 4+ people OR @everyone/@all in body
-                  const _mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+                  const _mentions = getContextInfo(msg)?.mentionedJid
+                    || msg.message?.extendedTextMessage?.contextInfo?.mentionedJid
+                    || [];
                   const _bodyText = String(body || "").toLowerCase();
                   const _hasEveryoneTag = /@(everyone|all|group|here)\b/i.test(_bodyText);
                   const _isMassMention = _mentions.length >= (_atSet.antiTagThreshold || 4);
                   if (_hasEveryoneTag || _isMassMention) {
-                    const _atAction = _atSet.antiTagAction || "delete";
-                    const _atBotAdmin = await isBotGroupAdmin(sock, _atJid).catch(() => false);
-                    if (_atBotAdmin) {
-                      try { await sock.sendMessage(_atJid, { delete: msg.key }); } catch {}
-                    }
-                    try {
-                      await sock.sendMessage(_atJid, {
-                        text: `🏷️ *Anti-Tag* — @${_atAuthor.split("@")[0]}, mass-tagging is not allowed here.
-${_atBotAdmin ? "✅ Message deleted." : "⚠️ Make me admin to auto-delete."}`,
-                        mentions: [_atAuthor],
-                      });
-                    } catch {}
-                    if (_atAction === "kick" && _atBotAdmin) {
-                      try { await sock.groupParticipantsUpdate(_atJid, [_atAuthor], "remove"); } catch {}
-                    } else if (_atAction === "warn") {
-                      const _warnMap = warns.get(_atJid) || new Map();
-                      warns.set(_atJid, _warnMap);
-                      _warnMap.set(_atAuthor, (_warnMap.get(_atAuthor) || 0) + 1);
-                      if (_warnMap.get(_atAuthor) >= 3 && _atBotAdmin) {
-                        try { await sock.groupParticipantsUpdate(_atJid, [_atAuthor], "remove"); } catch {}
-                        _warnMap.delete(_atAuthor);
-                      }
-                    }
+                    await applyGuardAction(sock, _atJid, _atAuthor, msg.key, _atSet.antiTagAction || "delete", "Anti-Tag", _hasEveryoneTag ? "@everyone tag" : `mass mention (${_mentions.length} tags)`);
                     return;
                   }
                 }
@@ -5003,7 +4967,11 @@ function shouldSilenceForPrivateMode(msg) {
   if (isBotPrivateModeActive()) return true;
   try {
     const chat = getSettings(msg.key.remoteJid);
-    return !!(chat?.privateMode || chat?.workMode === "private");
+    const mode = String(chat?.workMode || (chat?.privateMode ? "private" : "public")).toLowerCase();
+    if (mode === "private") return true;
+    if (mode === "only_group" && !String(msg.key.remoteJid || "").endsWith("@g.us")) return true;
+    if (mode === "inbox" && String(msg.key.remoteJid || "").endsWith("@g.us")) return true;
+    return false;
   } catch {
     return false;
   }
@@ -19249,14 +19217,17 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
 
     try {
       // The format asked for; with no format given it is HD video.
-      const _ttDirectMode = parseTikTokMode(_ttMode || (isAudio ? "audio" : isSticker ? "sticker" : "1.3"));
+      let _ttDirectMode = parseTikTokMode(_ttMode || (isAudio ? "audio" : isSticker ? "sticker" : "1.3"));
       const _ttInfo = await fetchTikTokInfo(url);
       if (_ttDirectMode?.kind === "slider" && (!Array.isArray(_ttInfo.images) || _ttInfo.images.length === 0)) {
-        await sendReply(sock, msg, "❌ Not supported download provider (this TikTok is a standard video, not a photo slider).");
-        await react(sock, msg, "❌");
-        return;
+        // Fallback: if user asked for slider/album (4.1) but TikTok is standard video, send HD video with explanation
+        await sendReply(sock, msg, "ℹ️ *This TikTok is a standard video, not a photo slider.* Sending standard HD video instead...");
+        _ttDirectMode = parseTikTokMode("1.3") || _ttDirectMode;
       }
-      const _ttDirectUrl = _ttDirectMode ? selectTikTokUrl(_ttInfo, _ttDirectMode) : null;
+      let _ttDirectUrl = _ttDirectMode ? selectTikTokUrl(_ttInfo, _ttDirectMode) : null;
+      if (!_ttDirectUrl && _ttDirectMode?.kind !== "slider") {
+        _ttDirectUrl = _ttInfo.videoHd || _ttInfo.videoSd || _ttInfo.play || _ttInfo.videoWatermark || _ttInfo.video || null;
+      }
       if (!_ttDirectUrl && _ttDirectMode?.kind !== "slider") {
         await sendReply(sock, msg, `❌ ${_ttDirectMode?.id || "This format"} is not available for this TikTok, so nothing was sent.`);
         await react(sock, msg, "❌");
@@ -23032,13 +23003,13 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
   // ── Mode 2: Number input — try text-menu first, then adult download ───────
   const n = parseInt(args[0] || "", 10);
   let ttPick = __ttGetSelection(jid);
-  const ttMode = parseTikTokMode(raw);
+  let ttMode = parseTikTokMode(raw);
   if (!ttPick && ttMode) ttPick = await __ttRestoreFromQuote(msg);
   if (ttPick && ttMode) {
     if (ttMode.kind === "slider" && (!Array.isArray(ttPick.info?.images) || ttPick.info.images.length === 0)) {
-      await sendReply(sock, msg, "❌ Not supported download provider (this TikTok is a standard video, not a photo slider).");
-      await forceReaction(sock, msg, "❌");
-      return;
+      // Fallback: if user picked 4.1 slider but TikTok is standard video, route to HD video
+      await sendReply(sock, msg, "ℹ️ *This TikTok is a standard video, not a photo slider.* Downloading HD video instead...");
+      ttMode = parseTikTokMode("1.3") || ttMode;
     }
     let mediaUrl = selectTikTokUrl(ttPick.info, ttMode)
       || (ttMode.kind === "audio" ? ttPick.info.audio : (ttPick.info.videoHd || ttPick.info.videoSd || ttPick.info.videoWatermark));

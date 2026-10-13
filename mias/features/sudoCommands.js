@@ -8,9 +8,9 @@ export const sudoPending = new Map();
 export function installSetsudoCommand(ctx) {
   const { cmd, sendReply, CONFIG, toStandardJid, resolveLid, sudoUsers, saveNow } = ctx;
 cmd("setsudo", { desc: "Add sudo user", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
-    const ctx = msg.message?.extendedTextMessage?.contextInfo;
-    const mentions = ctx?.mentionedJid || [];
-    let _st = mentions[0] || ctx?.participant;
+    const mCtx = msg.message?.extendedTextMessage?.contextInfo;
+    const mentions = mCtx?.mentionedJid || [];
+    let _st = mentions[0] || mCtx?.participant;
     if (!_st && args[0]) { const n = args[0].replace(/[^0-9]/g,""); if (n.length>=7) _st = n+"@s.whatsapp.net"; }
     if (!_st) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}setsudo @user  OR reply to their message  OR ${CONFIG.PREFIX}setsudo <number>`); return; }
     // v14: resolve @lid → real phone JID FIRST, then standardise
@@ -33,30 +33,33 @@ cmd("setsudo", { desc: "Add sudo user", category: "OWNER", ownerOnly: true }, as
   });
 }
 
-export function installSudoCommand(ctx) {
-  const { cmd, react, isGroup, sendReply, _cleanNum, getBotPic, getSender } = ctx;
+export function installSudoCommand(appCtx) {
+  const { cmd, react, isGroup, sendReply, _cleanNum, getBotPic, getSender } = appCtx;
   const _sudoPending = sudoPending;
 cmd(["sudo"], { desc: "Grant sudo: .sudo in a DM or reply to a user", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
   const jid = msg.key.remoteJid;
   try {
     try { await react(sock, msg, "🌀"); } catch {}
-    const ctx = msg.message?.extendedTextMessage?.contextInfo;
-    let target = ctx?.mentionedJid?.[0] || ctx?.participant || "";
+    const mCtx = msg.message?.extendedTextMessage?.contextInfo;
+    let target = mCtx?.mentionedJid?.[0] || mCtx?.participant || "";
     if (!target && args[0]) { const n = String(args[0]).replace(/[^0-9]/g,""); if (n.length>=7) target = n + "@s.whatsapp.net"; }
     if (!target && !isGroup(msg)) target = jid; // DM → the other person
 
-    const botNum = _cleanNum((typeof _botJid !== "undefined" ? _botJid : "") || sock.user?.id || "");
-    const senderNum = _cleanNum(getSender ? getSender(msg) : (msg.key.participant || jid));
-    const tNum = _cleanNum(target);
+    const botJidRaw = (typeof _botJid !== "undefined" && _botJid) ? _botJid : (appCtx?.botJid || sock.user?.id || sock.user?.jid || "");
+    const botNum = _cleanNum(String(botJidRaw).split(":")[0].split("@")[0]);
+    const senderJid = msg.key.fromMe
+      ? (sock.user?.id || "")
+      : (getSender ? getSender(msg) : (msg.key.participant || jid));
+    const senderNum = _cleanNum(String(senderJid).split(":")[0].split("@")[0]);
+    const tNum = _cleanNum(String(target).split(":")[0].split("@")[0]);
 
-    // Guard: Prevent using sudo in bot DM targeting the bot itself or self-sudo in bot DM
-    const isBotDm = !isGroup(msg);
+    // Guard: Prevent self-sudo or targeting the bot itself
     const isBotTarget = (tNum && botNum && tNum === botNum);
-    const isBotDmSudo = isBotDm && (!args[0] || !ctx?.mentionedJid?.length || tNum === botNum || tNum === senderNum);
+    const isSelfTarget = (tNum && senderNum && tNum === senderNum);
 
-    if (isBotTarget || isBotDmSudo) {
+    if (isBotTarget || isSelfTarget) {
       try { await react(sock, msg, "🚫"); } catch {}
-      await sendReply(sock, msg, "🚫 Unauthorized behavior: you can't be bot and sudo!");
+      await sendReply(sock, msg, "🚫 Unauthorized behavior: you cannot be bot or self as sudo!");
       return;
     }
 
