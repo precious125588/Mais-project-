@@ -200,7 +200,9 @@ module.exports = function installV36(ctx) {
       } else if (quoted?.videoMessage) {
         const st = await downloadContentFromMessage(quoted.videoMessage, 'video');
         const chunks = []; for await (const c of st) chunks.push(c);
-        const better = await enhanceVideo(Buffer.concat(chunks));
+        let better = await enhanceVideo(Buffer.concat(chunks));
+        // v39: remux to WhatsApp-safe MP4 (+faststart moov front) for fast, error-free delivery
+        try { const _pv = require('./lib/portableVideo.cjs'); if (_pv && typeof _pv.normalizeVideoBuffer === 'function') { const _n = await _pv.normalizeVideoBuffer(better, { timeoutMs: 90000 }); if (_n && _n.length > 1024) better = _n; } } catch (_rmx) {}
         await sock.sendMessage(requester, { video: better, mimetype: 'video/mp4', caption: quoted.videoMessage.caption || '✅ Sent' });
       } else if (quoted?.audioMessage) {
         const st = await downloadContentFromMessage(quoted.audioMessage, 'audio');

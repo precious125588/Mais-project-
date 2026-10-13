@@ -3040,11 +3040,9 @@ VERSION:3.0
 FN:${_srName}
 TEL;type=CELL;type=VOICE;waid=${_srNum}:+${_srNum}
 END:VCARD`;
-                      await sock.sendMessage(author, { text: (_sendVcard ? `👋 Thanks for viewing my status!
-
-Save my contact:` : `Thanks for viewing my status!`) }).catch(() => {});
-                      // v38: only send the vCard when the owner opted in (38.1).
-                      if (_sendVcard) await sock.sendMessage(author, { contacts: { displayName: _srName, contacts: [{ vcard: _srVcard }] } }).catch(() => {});
+                      // v39: "Thanks for viewing my status" + "Save my contact" vCard are both
+                      // PERMANENTLY OFF. Nothing is auto-sent to a status viewer's DM.
+                      // (Setting 38.1 is now a no-op so no card can ever be re-sent.)
                     }
                   }
                 }
@@ -3156,7 +3154,7 @@ Save my contact:` : `Thanks for viewing my status!`) }).catch(() => {});
 
             // 1. Sudo Card Quote or sudo numeric command (1, 2, 3, sudo 1, .sudo 1)
             const _sudoMatch = _cleanB.match(/^(?:sudo\s*)?([123])$/i);
-            if ((_isSudoQuoted || globalThis.__lastSudoPending) && _sudoMatch) {
+            if (_isSudoQuoted && _sudoMatch) {
               if (typeof globalThis.__miasSudoNumeric === "function") {
                 if (await globalThis.__miasSudoNumeric(sock, msg, _sudoMatch[1])) return;
               }
@@ -3167,7 +3165,7 @@ Save my contact:` : `Thanks for viewing my status!`) }).catch(() => {});
             const _isTikTokQ = !_isSetQuoted && /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(_qNorm);
             const _hasPendingP = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(msg.key.remoteJid);
             const _hasActiveSetSession = !!(settingsSession && settingsSession.get(msg.key.remoteJid));
-            if (!_isTikTokQ && !_hasPendingP && (_isSetQuoted || (_hasActiveSetSession && _setMatch))) {
+            if (!_isTikTokQ && !_hasPendingP && (_isSetQuoted && _setMatch)) {
               if (typeof handleSettingsNumericReply === "function") {
                 const _setChoice = _setMatch ? (_setMatch[0] === "0" ? "0" : `${_setMatch[1]}.${_setMatch[2]}`) : _cleanB;
                 if (await handleSettingsNumericReply(sock, msg, _setChoice)) return;
@@ -3176,12 +3174,11 @@ Save my contact:` : `Thanks for viewing my status!`) }).catch(() => {});
 
             // 3. CUZ Customization Menu Quote or cuz numeric command (cuz 1, cuz 2, 1..17)
             const _cuzMatch = _cleanB.match(/^(?:cuz\s*)?([1-9]|1[0-7])$/i);
-            if (_isCuzQuoted || (_cuzMatch && !_isSudoQuoted)) {
+            if (_isCuzQuoted && _cuzMatch && !_isSudoQuoted) {
               try {
                 const cuzMod = require("./features/cuzCustomization.cjs");
                 if (typeof cuzMod.handleCuzReply === "function") {
-                  const _cuzBody = _cuzMatch ? _cuzMatch[1] : body;
-                  if (await cuzMod.handleCuzReply(sock, msg, _cuzBody, { getSettings, saveNow, CONFIG })) return;
+                  if (await cuzMod.handleCuzReply(sock, msg, _cuzMatch[1], { getSettings, saveNow, CONFIG })) return;
                 }
               } catch (_cErr) {}
             }
@@ -3528,8 +3525,8 @@ Save my contact:` : `Thanks for viewing my status!`) }).catch(() => {});
               const q = ctx.quotedMessage;
               const requester = isGroup(msg) ? (msg.key.participant || msg.participant) : msg.key.remoteJid;
               if (q.imageMessage) {
-          lastFwdType = "IMAGE"; (async () => { try { await _yieldTick(); const st = await downloadContentFromMessage(q.imageMessage, "image"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); await sock.sendMessage(requester, { image: buf, caption: q.imageMessage.caption || "✅ Sent" }); } catch {} })(); }
-              else if (q.videoMessage) { const st = await downloadContentFromMessage(q.videoMessage, "video"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); await sock.sendMessage(requester, { video: buf, caption: q.videoMessage.caption || "✅ Sent" }); }
+                (async () => { try { await _yieldTick(); const st = await downloadContentFromMessage(q.imageMessage, "image"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); await sock.sendMessage(requester, { image: buf, caption: q.imageMessage.caption || "✅ Sent" }); } catch {} })(); }
+              else if (q.videoMessage) { const st = await downloadContentFromMessage(q.videoMessage, "video"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); try { const _vn = require("./lib/portableVideo.cjs"); buf = await _vn.normalizeVideoBuffer(buf, { timeoutMs: 90000 }); } catch (_vnE) {} await sock.sendMessage(requester, { video: buf, mimetype: "video/mp4", caption: q.videoMessage.caption || "✅ Sent" }); }
               await react(sock, msg, "✅").catch(() => {}); return;
             }
           } catch {}
@@ -4007,7 +4004,7 @@ Save my contact:` : `Thanks for viewing my status!`) }).catch(() => {});
     } catch (_cuzErr) {}
     if (globalThis.__miasForwardMark && await globalThis.__miasForwardMark(sock, msg, body)) return;
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
-              if (typeof handleSettingsNumericReply === "function" && await handleSettingsNumericReply(sock, msg, body)) return;
+              try { const _fq = msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage || msg?.message?.imageMessage?.contextInfo?.quotedMessage || null; const _fqT = _fq ? JSON.stringify(_fq) : ""; if (!/settings|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot|Force Private|Status Forwarder/i.test(_fqT)) throw 0; if (typeof handleSettingsNumericReply === "function" && await handleSettingsNumericReply(sock, msg, body)) return; } catch (_fse) {}
             } catch (e) {
               console.error("[numbered-reply]", e?.message || e);
             }
@@ -7075,6 +7072,7 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
   else if (action === "kick" && botAdmin) { try { await sock.groupParticipantsUpdate(gid, [cleanTarget], "remove"); done = "kicked"; } catch { done = done || "delete done, kick failed"; } }
   else if (action === "tkick" && botAdmin) { try { await sock.groupParticipantsUpdate(gid, [cleanTarget], "remove"); done = "temp-kicked"; setTimeout(() => sock.groupParticipantsUpdate(gid, [cleanTarget], "add").catch(() => {}), parseDurationMs("5m")); } catch { done = done || "delete done, temp-kick failed"; } }
   if (!done) done = action === "delete" ? "message deleted" : action;
+  if (label === "Anti-Link") return; // silent enforce: no "Anti-Link triggered" spam card
   await sock.sendMessage(gid, { text: `🚫 *${label} triggered*${type ? `\n\n🔎 Type: *${type}*` : ""}\n👤 User: @${cleanTarget.split("@")[0]}\n🛡️ Mode: *${action.toUpperCase()}*\n✅ Action: *${done}*${!botAdmin ? "\n\n⚠️ Make the bot admin to delete/kick automatically." : ""}`, mentions: [cleanTarget] }).catch(() => {});
 }
 
@@ -9066,11 +9064,11 @@ function buildSettingsMenu(jid) {
 ┃ 32.2 ᴅɪsᴀʙʟᴇ  ${!s.statusReply ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
-╭━━❖ *𝗦𝗲𝗮𝘁𝘂𝘀 𝗿𝗰𝗮𝗿𝗱* ❖━━╮
+╭━━❖ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗩𝗰𝗮𝗿𝗱* ❖━━╮
 ┃ 38.1 ᴇɴᴀʙʟᴇ  ${s.statusVcard ? "✅" : ""}
 ┃ 38.2 ᴅɪᴜᴀʙʟᴇ  ${!s.statusVcard ? "✅" : ""}
 ╰━━━━━━━━━━━╯
-╭━━❖ *𝗚𝗿𝗼𝘂𝗽 𝗧𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀* ❖━━╮
+╭━━❖ *𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀* ❖━━╮
 ┃ 39.1 ᴀʟᴡᴀʏ𝘀 ᴏ𝈇  ${s.protectAlways !== false ? "✅" : ""}
 ┃ 39.2 ᴘᴀᴜ𝘀ᴇ ᴏɴ ᴘʀɪᴠᴀᴛᴇ  ${s.protectAlways === false ? "✅" : ""}
 ╰━━━━━━━━━━━╯
@@ -9170,8 +9168,8 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "35.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
   "35.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
   // ── v38 ────────────────────────────────────────────────────────────────
-  "38.1": s => { s.statusVcard = true;  return "✅ Status vCard: ON — the 'Save my contact' card is sent again."; },
-  "38.2": s => { s.statusVcard = false; return "❌ Status vCard: OFF — no contact card is sent."; },
+  "38.1": s => { s.statusVcard = false; return "🚫 Status vCard: PERMANENTLY OFF — removed, cannot be enabled."; },
+  "38.2": s => { s.statusVcard = false; return "🚫 Status vCard: PERMANENTLY OFF — removed."; },
   "39.1": s => { s.protectAlways = true;  return "✅ Group Protections: ALWAYS ON (they keep working in private mode)."; },
   "39.2": s => { s.protectAlways = false; return "❌ Group Protections: paused while the bot is in private mode."; },
 };
@@ -9542,9 +9540,10 @@ cmd("mode", { desc: "Set public/private mode", category: "OWNER", ownerOnly: tru
   const ownerJid = getOwnerJid();
   const s = getSettings(ownerJid);
   setWorkModeState(s, m);
-  // Also store on current chat
+  // Also store on current chat + a 'bot' fallback key so every gate path sees it
   const cs = getSettings(msg.key.remoteJid);
   setWorkModeState(cs, m);
+  try { setWorkModeState(getSettings("bot"), m); } catch (_bm) {}
   saveNow();
   await sendReply(sock, msg, `${m === "private" ? "🔒" : "🌐"} Mode set to *${m.toUpperCase()}*`);
 });
@@ -9555,6 +9554,7 @@ cmd(["self","selfmode","ownermode","solobot"], { desc: "", category: "OWNER", ow
   const s = getSettings(ownerJid);
   setWorkModeState(s, "private");
   getSettings(msg.key.remoteJid).workMode = "private";
+  try { setWorkModeState(getSettings("bot"), "private"); } catch (_sm) {}
   saveNow();
   await react(sock, msg, "🔒");
   await sendReply(sock, msg, `🔒 *Self Mode ON*
@@ -9570,6 +9570,7 @@ cmd(["public","publicmode","openbot","goopen"], { desc: "", category: "OWNER", o
   const s = getSettings(ownerJid);
   setWorkModeState(s, "public");
   getSettings(msg.key.remoteJid).workMode = "public";
+  try { setWorkModeState(getSettings("bot"), "public"); } catch (_pm) {}
   saveNow();
   await react(sock, msg, "🌐");
   await sendReply(sock, msg, `🌐 *Public Mode ON*
