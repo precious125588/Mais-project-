@@ -173,21 +173,22 @@ test("Numeric option without pending value refuses waiting-value mode", async ()
   assert.equal(CONFIG.BOT_NAME, "MIA'S MDX", "Bot name must not be modified");
 });
 
-test("Pairing client uses popular macOS Chrome fingerprint and has notification debug", async () => {
+test("Pairing client uses WhatsApp Web Chrome fingerprint and has notification debug", async () => {
   const pairCode = fs.readFileSync("/tmp/repo/pair.js", "utf8");
   const miasCode = fs.readFileSync("/tmp/repo/mias/index.js", "utf8");
+  const caseCode = fs.readFileSync("/tmp/repo/case.js", "utf8");
 
   assert.ok(
-    pairCode.includes('["Mac OS", "Chrome", "121.0.6167.85"]') || pairCode.includes('Browsers.macOS("Desktop")'),
-    "pair.js should use standard Mac OS Chrome fingerprint"
+    pairCode.includes('Browsers.ubuntu("Chrome")') || pairCode.includes('["Ubuntu", "Chrome", "20.0.04"]'),
+    "pair.js should use standard Chrome browser fingerprint for pairing push notifications"
   );
   assert.ok(
-    !pairCode.includes('["Ubuntu", "Chrome", "22.04.4"]'),
-    "pair.js should not use Ubuntu Chrome fingerprint"
+    !pairCode.includes('Browsers.macOS("Desktop")'),
+    "pair.js must not use Desktop platform ID which suppresses pairing push notifications"
   );
   assert.ok(
-    !miasCode.includes('["Ubuntu", "Chrome", "22.04.4"]'),
-    "mias/index.js should not use Ubuntu Chrome fingerprint"
+    !miasCode.includes('Browsers.macOS("Desktop")'),
+    "mias/index.js must not use Desktop platform ID"
   );
 
   assert.ok(
@@ -198,4 +199,10 @@ test("Pairing client uses popular macOS Chrome fingerprint and has notification 
     pairCode.includes("pairEvents"),
     "pair.js should export and use pairEvents"
   );
+
+  // Verify ss command is registered in both case.js and mias/index.js
+  assert.ok(caseCode.includes("case 'ss':"), "case.js must support .ss command");
+  assert.ok(caseCode.includes("s0.wp.com/mshots"), "case.js must use high-reliability screenshot fallbacks");
+  assert.ok(miasCode.includes('"ss"'), "mias/index.js must support .ss command");
+  assert.ok(miasCode.includes("s0.wp.com/mshots"), "mias/index.js must use high-reliability screenshot fallbacks");
 });

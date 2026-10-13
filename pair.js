@@ -1054,7 +1054,7 @@ async function startpairing(nexusDevNumber, options = {}) {
         // loads forever" symptom on the web UI. Both modes use the same,
         // reliably-accepted desktop-Chrome client.
         // Most reliable, long-lasting client fingerprint across WhatsApp Web & Baileys
-        browser: (typeof Browsers !== "undefined" && Browsers?.macOS) ? Browsers.macOS("Desktop") : ["Mac OS", "Chrome", "121.0.6167.85"],
+        browser: (typeof Browsers !== "undefined" && Browsers?.ubuntu) ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "20.0.04"],
         getMessage: async key => {
             if (!store) return { conversation: '' };
             const jid = key.remoteJid;
@@ -1105,6 +1105,9 @@ async function startpairing(nexusDevNumber, options = {}) {
         }
 
         let phoneNumber = nexusDevNumber.replace(/[^0-9]/g, '');
+        if (phoneNumber.length === 11 && phoneNumber.startsWith('0')) {
+            phoneNumber = '234' + phoneNumber.slice(1);
+        }
         
         if (!phoneNumber) {
             throw new Error('Invalid phone number');
@@ -1121,7 +1124,7 @@ async function startpairing(nexusDevNumber, options = {}) {
                 tracker.pairingError = 'Could not reach WhatsApp servers. Please retry.';
                 throw new Error(tracker.pairingError);
             }
-            await sleep(2000);
+            await sleep(3000);
 
             // Keep requesting until WhatsApp accepts the request or this
             // pairing socket actually closes. There is intentionally no

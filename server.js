@@ -277,6 +277,9 @@ app.post('/api/pair', rateLimit(60000,10), async (req,res) => {
     const mode = req.body?.mode === 'qr' ? 'qr' : 'code';
     if (!number) return res.status(400).json({ok:false,error:'Phone number required.'});
     number = number.replace(/[^0-9]/g,'');
+    if (number.length === 11 && number.startsWith('0')) {
+        number = '234' + number.slice(1);
+    }
     if (number.length<7||number.length>15) return res.status(400).json({ok:false,error:'Invalid phone number.'});
 
     const jid = `${number}@s.whatsapp.net`;

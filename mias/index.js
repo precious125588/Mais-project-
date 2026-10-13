@@ -2043,7 +2043,7 @@ async function connectToWA(force = false) {
       logger,
       printQRInTerminal: false,
       auth: { creds: state.creds, keys: state.keys },
-      browser: (typeof Browsers !== "undefined" && Browsers?.macOS) ? Browsers.macOS("Desktop") : ["Mac OS", "Chrome", "121.0.6167.85"],
+      browser: (typeof Browsers !== "undefined" && Browsers?.ubuntu) ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "20.0.04"],
       // ── v4.9.4 FIX ──────────────────────────────────────────────────
       // Was `false` → linked-devices screen showed the bot as OFFLINE
       // even after a successful connect. Toggle to true so WhatsApp
@@ -15639,33 +15639,63 @@ cmd("uuid", { desc: "Generate UUID", category: "TOOLS" }, async (sock, msg) => {
   const uuid = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16); });
   await sendReply(sock, msg, `🆔 *UUID*\n\n\`${uuid}\``);
 });
-cmd("ss", { desc: "Screenshot a website", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ss <url>`); return; }
+cmd(["ss", "ssweb", "screenshot", "webshot"], { desc: "Screenshot a website — .ss <url>", category: "TOOLS" }, async (sock, msg, args) => {
+  if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ss <url>\nExample: ${CONFIG.PREFIX}ss google.com`); return; }
   const jid = msg.key.remoteJid;
-  const statusMsg = await sock.sendMessage(jid, { text: `📸 *MIAS MDX Screenshot*\n\n⬡ Loading website...\n◻ Capturing screenshot...\n◻ Sending image...` }, { quoted: msg });
+  let targetUrl = String(args[0]).trim();
+  if (!/^https?:\/\//i.test(targetUrl)) targetUrl = "https://" + targetUrl;
+
+  const statusMsg = await sock.sendMessage(jid, { text: `📸 *MIAS MDX Screenshot*\n\n⬡ Connecting to ${targetUrl}...\n◻ Capturing screenshot...\n◻ Sending image...` }, { quoted: msg });
   const ssKey = statusMsg.key;
   try {
-    const url = args[0].startsWith("http") ? args[0] : "https://" + args[0];
-    let ssBuf;
+    let ssBuf = null;
+
+    // 1. WordPress mshots (fast, reliable, free)
     try {
-      const ssUrl = `https://image.thum.io/get/width/1280/crop/720/${encodeURIComponent(url)}`;
-      const { data } = await axios.get(ssUrl, { responseType: "arraybuffer", timeout: 15000 });
-      ssBuf = Buffer.from(data);
-    } catch {
-      // Fallback: use api.js screenshot
+      const wpUrl = `https://s0.wp.com/mshots/v1/${encodeURIComponent(targetUrl)}?w=1280&h=720`;
+      const res = await (typeof fetch === 'function' ? fetch(wpUrl, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" } }) : null);
+      if (res && res.ok) {
+        const arr = await res.arrayBuffer();
+        if (arr.byteLength > 2000) ssBuf = Buffer.from(arr);
+      }
+    } catch {}
+
+    // 2. Microlink
+    if (!ssBuf) {
       try {
-        const result = await APIs.screenshotWebsite(url);
-        ssBuf = Buffer.isBuffer(result) ? result : null;
-        if (!ssBuf && typeof result === "string") {
-          const { data } = await axios.get(result, { responseType: "arraybuffer", timeout: 15000 });
-          ssBuf = Buffer.from(data);
+        const microUrl = `https://api.microlink.io?url=${encodeURIComponent(targetUrl)}&screenshot=true&meta=false`;
+        const res = await (typeof fetch === 'function' ? fetch(microUrl) : null);
+        if (res && res.ok) {
+          const d = await res.json();
+          const imgUrl = d?.data?.screenshot?.url;
+          if (imgUrl) {
+            const imgRes = await fetch(imgUrl);
+            if (imgRes.ok) ssBuf = Buffer.from(await imgRes.arrayBuffer());
+          }
         }
       } catch {}
     }
+
+    // 3. Thum.io
+    if (!ssBuf) {
+      try {
+        const thumUrl = `https://image.thum.io/get/width/1280/crop/720/${encodeURIComponent(targetUrl)}`;
+        const res = await (typeof fetch === 'function' ? fetch(thumUrl) : null);
+        if (res && res.ok) {
+          const arr = await res.arrayBuffer();
+          if (arr.byteLength > 2000) ssBuf = Buffer.from(arr);
+        }
+      } catch {}
+    }
+
     if (ssBuf && ssBuf.length > 1000) {
-      await sock.sendMessage(msg.key.remoteJid, { image: ssBuf, caption: `📸 *Screenshot*\n${url}` }, { quoted: msg });
-    } else { await sendReply(sock, msg, "❌ Failed to capture screenshot."); }
-  } catch { await sendReply(sock, msg, "❌ Failed to capture screenshot."); }
+      await sock.sendMessage(jid, { image: ssBuf, caption: `📸 *Screenshot*\n🌐 ${targetUrl}` }, { quoted: msg });
+    } else {
+      await sendReply(sock, msg, `❌ Failed to capture screenshot for ${targetUrl}.`);
+    }
+  } catch (err) {
+    await sendReply(sock, msg, `❌ Screenshot error: ${err.message}`);
+  }
 });
 cmd("trt", { desc: "Translate text", category: "TOOLS" }, async (sock, msg, args) => {
   if (args.length < 2) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}trt <lang> <text>\nExample: ${CONFIG.PREFIX}trt fr Hello world`); return; }
@@ -35562,7 +35592,7 @@ Try again in a minute, or use the Telegram pair-bot: */pair ${target}*`);
           logger: (typeof silentLog !== "undefined" ? silentLog : (typeof logger !== "undefined" ? logger : undefined)),
           printQRInTerminal: false,
           auth: { creds: state.creds, keys: state.keys },
-          browser: (typeof Browsers !== "undefined" && Browsers?.macOS) ? Browsers.macOS("Desktop") : ["Mac OS", "Chrome", "121.0.6167.85"],
+          browser: (typeof Browsers !== "undefined" && Browsers?.ubuntu) ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "20.0.04"],
           markOnlineOnConnect: false,
           generateHighQualityLinkPreview: false,
           defaultQueryTimeoutMs: 60000,

@@ -2025,6 +2025,9 @@ case 'pair': {
     }
     
     let rawDigits = String(target || "").replace(/[^0-9]/g, '');
+    if (rawDigits.length === 11 && rawDigits.startsWith('0')) {
+      rawDigits = '234' + rawDigits.slice(1);
+    }
     if (!rawDigits || rawDigits.length < 7 || rawDigits.length > 15) {
       return reply(`*❌ Please enter a valid WhatsApp phone number with country code.*
 *Format:* \`.pair 2348012345678\``);
@@ -6383,26 +6386,75 @@ case 'http-headers': {
 }
 break;
 
+case 'ss':
 case 'ssweb':
 case 'screenshot':
 case 'webss': {
-  if (!text || !isUrl(text)) return reply(`📸 *Website Screenshot*\n\nUsage: ${prefix}ssweb <url>\nExample: ${prefix}ssweb https://google.com`);
+  let targetUrl = String(text || "").trim();
+  if (!targetUrl) return reply(`📸 *Website Screenshot*\n\nUsage: ${prefix}ss <url>\nExample: ${prefix}ss google.com\nExample: ${prefix}ss https://github.com`);
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = "https://" + targetUrl;
+  }
   await devtrust.sendMessage(m.chat, { react: { text: '📸', key: m.key } });
-  reply('⏳ Taking screenshot...');
+  reply('⏳ Taking screenshot of ' + targetUrl + '...');
   try {
-    const r = await princeGet('/api/tools/ssweb', { url: text });
-    if (r.ok && r.data?.success && r.data.result) {
-      const imgUrl = typeof r.data.result === 'string' ? r.data.result : r.data.result?.url || r.data.result?.image;
-      if (imgUrl && imgUrl.startsWith('http')) {
-        const buf = await getBuffer(imgUrl, { timeout: 30000 });
-        return await devtrust.sendMessage(m.chat, { image: buf, caption: `📸 *Website Screenshot*\n_${text}_` }, { quoted: m });
+    let buf = null;
+    // 1. WordPress mshots (fast, reliable, free full-render JPEG)
+    try {
+      const wpUrl = `https://s0.wp.com/mshots/v1/${encodeURIComponent(targetUrl)}?w=1280&h=720`;
+      const res = await (typeof fetch === 'function' ? fetch(wpUrl, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" } }) : null);
+      if (res && res.ok) {
+        const arr = await res.arrayBuffer();
+        if (arr.byteLength > 2000) buf = Buffer.from(arr);
+      }
+      if (!buf && typeof getBuffer === 'function') {
+        const b = await getBuffer(wpUrl, { timeout: 15000 });
+        if (b && b.length > 2000) buf = b;
+      }
+    } catch (e) {
+      console.warn('[ss] wp mshots failed:', e.message);
+    }
+
+    // 2. Microlink
+    if (!buf) {
+      try {
+        const microUrl = `https://api.microlink.io?url=${encodeURIComponent(targetUrl)}&screenshot=true&meta=false`;
+        const res = await (typeof fetch === 'function' ? fetch(microUrl) : null);
+        if (res && res.ok) {
+          const d = await res.json();
+          const imgUrl = d?.data?.screenshot?.url;
+          if (imgUrl) {
+            const imgRes = await fetch(imgUrl);
+            if (imgRes.ok) buf = Buffer.from(await imgRes.arrayBuffer());
+          }
+        }
+      } catch (e) {
+        console.warn('[ss] microlink failed:', e.message);
       }
     }
-    // Fallback
-    const fallbackUrl = `https://api.screenshotmachine.com/?url=${encodeURIComponent(text)}&dimension=1366x768`;
-    const fallbackBuf = await getBuffer(fallbackUrl, { timeout: 30000 });
-    await devtrust.sendMessage(m.chat, { image: fallbackBuf, caption: `📸 *${text}*` }, { quoted: m });
-  } catch (e) { reply(`❌ Screenshot failed: ${e.message}`); }
+
+    // 3. Thum.io
+    if (!buf) {
+      try {
+        const thumUrl = `https://image.thum.io/get/width/1280/crop/720/${encodeURIComponent(targetUrl)}`;
+        const res = await (typeof fetch === 'function' ? fetch(thumUrl) : null);
+        if (res && res.ok) {
+          const arr = await res.arrayBuffer();
+          if (arr.byteLength > 2000) buf = Buffer.from(arr);
+        }
+      } catch (e) {
+        console.warn('[ss] thum.io failed:', e.message);
+      }
+    }
+
+    if (buf && buf.length > 1000) {
+      return await devtrust.sendMessage(m.chat, { image: buf, caption: `📸 *Website Screenshot*\n🌐 _${targetUrl}_` }, { quoted: m });
+    } else {
+      return reply(`❌ Could not capture screenshot for: ${targetUrl}. Please ensure the website is accessible.`);
+    }
+  } catch (e) {
+    reply(`❌ Screenshot failed: ${e.message}`);
+  }
 }
 break;
 
