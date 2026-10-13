@@ -415,8 +415,16 @@ async function handleCuzReply(sock, msg, body, P) {
     const quotedText = qTexts.join(" ");
     const quotedNorm = quotedText.normalize("NFKD");
 
-    const cuzPattern = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i;
-    const isCuzQuoted = cuzPattern.test(quotedText) || cuzPattern.test(quotedNorm);
+    const isSettingsQuoted = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Tap to toggle|ENABLE|DISABLE/i.test(quotedText) || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Tap to toggle|ENABLE|DISABLE/i.test(quotedNorm);
+    const isSudoQuoted = /SUDO|ACCESS CONTROL/i.test(quotedText) || /SUDO|ACCESS CONTROL/i.test(quotedNorm);
+
+    // Cuz must never intercept replies quoting Settings or Sudo
+    if (isSettingsQuoted || isSudoQuoted) {
+      return false;
+    }
+
+    const cuzPattern = /CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i;
+    const isCuzQuoted = (cuzPattern.test(quotedText) || cuzPattern.test(quotedNorm)) && !isSettingsQuoted && !isSudoQuoted;
 
     const rawInput = String(body || "").trim();
     const norm = rawInput.replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
@@ -424,8 +432,14 @@ async function handleCuzReply(sock, msg, body, P) {
 
     const sess = pendingSessions.get(sessionKey);
 
+    // Cuz must not hijack if user quoted an unrelated message
+    const hasAnyNonCuzQuote = !!rawQ && !isCuzQuoted;
+    if (hasAnyNonCuzQuote) {
+      return false;
+    }
+
     // v39 HARDEN: cuz only reacts when the reply QUOTES the actual cuz card OR there is an active pending session
-    if (!isCuzQuoted && !sess) {
+    if (!isCuzQuoted && !sess && !rawInput.toLowerCase().startsWith("cuz ")) {
       return false;
     }
 

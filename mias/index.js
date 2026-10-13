@@ -3145,29 +3145,33 @@ END:VCARD`;
             const _qNorm = _qJoined.normalize("NFKD");
             const _cleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
 
-            const _isSudoQuoted = /SUDO|ACCESS CONTROL/i.test(_qJoined) || /SUDO|ACCESS CONTROL/i.test(_qNorm);
-            const _isSetQuoted = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qJoined)
+            const _isSudoQuoted = (/SUDO|ACCESS CONTROL/i.test(_qJoined) || /SUDO|ACCESS CONTROL/i.test(_qNorm))
+              && !/SETTINGS|CONFIG|CUSTOMIZ/i.test(_qNorm);
+            const _isSetQuoted = (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qJoined)
               || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qNorm)
-              || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_qJoined);
-            const _isCuzQuoted = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qJoined)
-              || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qNorm);
+              || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_qJoined))
+              && !/SUDO|ACCESS CONTROL|CUSTOMIZ/i.test(_qNorm);
+            const _isCuzQuoted = (/CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qJoined)
+              || /CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qNorm))
+              && !/SETTINGS|CONFIG|SUDO|ACCESS CONTROL/i.test(_qNorm);
 
             // 1. Sudo Card Quote or sudo numeric command (1, 2, 3, sudo 1, .sudo 1)
-            const _sudoMatch = _cleanB.match(/^(?:sudo\s*)?([123])$/i);
+            const _sudoMatch = _cleanB.match(/^(?:(?:[.!#/]?sudo)\s*)?([123])$/i);
             if (_isSudoQuoted && _sudoMatch) {
               if (typeof globalThis.__miasSudoNumeric === "function") {
                 if (await globalThis.__miasSudoNumeric(sock, msg, _sudoMatch[1])) return;
               }
             }
 
-            // 2. Settings Panel Quote or Settings Numeric Option (never steal TikTok/picker replies)
-            const _setMatch = _cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i) || (_cleanB === "0" ? ["0", "0"] : null);
+            // 2. Settings Panel Quote or Settings Numeric Option (accepts 1.1, 1.2, section numbers 1..39, or 0)
+            const _setMatch = _cleanB.match(/^(?:settings?\s*)?(\d{1,2})[.\s](\d{1,2})$/i)
+              || (_cleanB === "0" ? ["0", "0"] : null)
+              || (_isSetQuoted && _cleanB.match(/^(?:settings?\s*)?(\d{1,2})$/i));
             const _isTikTokQ = !_isSetQuoted && /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(_qNorm);
             const _hasPendingP = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(msg.key.remoteJid);
-            const _hasActiveSetSession = !!(settingsSession && settingsSession.get(msg.key.remoteJid));
             if (!_isTikTokQ && !_hasPendingP && (_isSetQuoted && _setMatch)) {
               if (typeof handleSettingsNumericReply === "function") {
-                const _setChoice = _setMatch ? (_setMatch[0] === "0" ? "0" : `${_setMatch[1]}.${_setMatch[2]}`) : _cleanB;
+                const _setChoice = _setMatch[2] !== undefined ? `${_setMatch[1]}.${_setMatch[2]}` : (_setMatch[1] || _cleanB);
                 if (await handleSettingsNumericReply(sock, msg, _setChoice)) return;
               }
             }
@@ -3186,73 +3190,20 @@ END:VCARD`;
             console.error("[master-quoted-card-router]", _earlyQErr?.message || _earlyQErr);
           }
           // ── ZINOX FIX: PICKER REPLIES BEFORE SETTINGS ─────────────────────
-          // The settings menu ("1.1 ... 33.2") and the TikTok picker
-          // ("1.1 ... 3.2") share the same numeric shape, but they live
-          // in DIFFERENT consumers. SETTINGS_MAP therefore contains entries
-          // like "3.1" (Bad Word Guard = delete) that collide with the
-          // TikTok sticker row. Before the settings handler was called
-          // unconditionally here, a `3.1` reply to a TikTok menu triggered
-          // `✅ Bad Word Guard: DELETE` instead of the HD sticker, and the
-          // native "Open Categories" tap (which delivers the rowId as
-          // `paramsJson` like {"id":"BTN:1.3",…} → body becomes ".1.3"
-          // after _extractButtonCommand) was eaten by the same path with
-          // the same dead result. We now let the picker dispatcher fire
-          // FIRST whenever the body looks like a picker choice AND either
-          // a picker is active in this chat OR the tap looks like a
-          // numbered Open-Categories selection.
           try {
             const _incomingBody = typeof body === "string" ? body : "";
             const _pickerChoice = (typeof __miasNormalizeChoice === "function")
               ? __miasNormalizeChoice(_incomingBody) : "";
             const _pickerActive = (typeof __miasHasPendingPicker === "function")
               ? __miasHasPendingPicker(msg.key.remoteJid) : false;
-            // Only fire the picker when it is known to be active for THIS
-            // chat. Bare digit/digit replies without an active picker MUST
-            // fall through to handleSettingsNumericReply, otherwise plain
-            // answers like "6.1" to the settings panel get swallowed by the
-            // ticker flow and the panel looks silent again. The native-flow
-            // tap path (BTN: <id> or naked {…paramsJson…} payload) is already
-            // routed correctly by the sendNativeFlowListMenu rowIds fix a
-            // few lines below (rows are no longer BTN:-prefixed, so they
-            // reach __miasHandleBareNumberReply unchanged).
-            // ── HIGH-PRIORITY QUOTED ROUTER (SUDO, CUZ, SETTINGS) ─────────────
-          try {
-            const _eqTxt = (typeof __ttQuotedText === "function" ? __ttQuotedText(msg) : "") || "";
-            const _eqNorm = _eqTxt.normalize("NFKD");
-            const _eqCleanB = String(body || "").trim().replace(/^[`*_~.#/!]+|[`*_~]+$/g, "").trim();
-            const _isSudoQ = /SUDO|ACCESS CONTROL/i.test(_eqTxt) || /SUDO|ACCESS CONTROL/i.test(_eqNorm) || !!globalThis.__lastSudoPending;
-            const _isCuzQ = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqTxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|Footer|Menu Emoji|Time Format|Date Format|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_eqNorm) ;
-            const _isSetQ = /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqTxt) || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_eqNorm) || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_eqTxt);
 
-            if (_isSudoQ && /^[123]$/.test(_eqCleanB)) {
-              if (typeof globalThis.__miasSudoNumeric === "function") {
-                if (await globalThis.__miasSudoNumeric(sock, msg, body)) return;
-              }
-            }
-            if (_isCuzQ || (/^(?:[1-9]|1[0-7])$/.test(_eqCleanB) && !_isSudoQ)) {
-              try {
-                const cuzMod = require("./features/cuzCustomization.cjs");
-                if (typeof cuzMod.handleCuzReply === "function") {
-                  if (await cuzMod.handleCuzReply(sock, msg, body, { getSettings, saveNow, CONFIG })) return;
-                }
-              } catch (_) {}
-            }
-            const _eqIsTikTok = /TIKTOK|TT DOWNLOAD|PHOTO SLIDE|NO WATERMARK/i.test(_eqNorm);
-            const _eqHasPicker = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(msg.key.remoteJid);
-            if (_isSetQ && !_eqIsTikTok && !_eqHasPicker) {
-              if (typeof handleSettingsNumericReply === "function") {
-                if (await handleSettingsNumericReply(sock, msg, body)) return;
-              }
-            }
-          } catch (_eQErr) {}
-
-          const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
+            const _v32HasQuote = !!(typeof __ttQuotedContext==="function" && __ttQuotedContext(msg)?.quotedMessage);
             const _pQtxt = (typeof __ttQuotedText==="function"?__ttQuotedText(msg):"")||"";
             const _pNorm = String(_pQtxt || "").normalize("NFKD");
-   const _pIsSudoCard = /SUDO|ACCESS CONTROL/i.test(_pQtxt) || /SUDO|ACCESS CONTROL/i.test(_pNorm);
-   const _pIsCuzCard = /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(_pQtxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(_pNorm);
-   const _pIsSettingsPanel = /SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT/i.test(_pNorm);
-   const _pIsProtectedCard = _pIsSettingsPanel || _pIsSudoCard || _pIsCuzCard;
+            const _pIsSudoCard = (/SUDO|ACCESS CONTROL/i.test(_pQtxt) || /SUDO|ACCESS CONTROL/i.test(_pNorm)) && !/SETTINGS|CONFIG|CUSTOMIZ/i.test(_pNorm);
+            const _pIsCuzCard = (/CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(_pQtxt) || /CUSTOMIZ|BRANDING|PRESENTATION|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(_pNorm)) && !/SETTINGS|CONFIG|SUDO|ACCESS CONTROL/i.test(_pNorm);
+            const _pIsSettingsPanel = (/SETTINGS|CONFIG|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ|Tap to toggle|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Chatbot/i.test(_pQtxt) || /SETTINGS|CONFIG|ENABLE|DISABLE|TAP TO TOGGLE|BLOCK CALLS|LINK GUARD|BAD WORD|ANTI DELETE|AUTO REACT|AUTO BLOCK|READ MSGS|VIEW STATUS|WELCOME|ALWAYS ONLINE|CHATBOT/i.test(_pNorm)) && !/SUDO|ACCESS CONTROL|CUSTOMIZ/i.test(_pNorm);
+            const _pIsProtectedCard = _pIsSettingsPanel || _pIsSudoCard || _pIsCuzCard;
             if (!_pIsProtectedCard && _pickerChoice && (_pickerActive || (_v32HasQuote && !/SUDO|ACCESS CONTROL/i.test(_pQtxt) && /reply with the number|reply with 1|reply here with a number|PLAYER/i.test(_pQtxt)))) {
               if (await (globalThis.__miasHandleBareNumberReply || __miasHandleBareNumberReply)(sock, msg, body)) return;
             }
@@ -3518,16 +3469,50 @@ END:VCARD`;
             }
             // [v36 STEP 6] Status auto-send keywords
             const _t = String(body || "").toLowerCase().trim();
-            if (globalThis.V36_STATUS_SEND && ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && /^(send|send pls|send please|share|send boss|send abeg)\b/.test(_t)) {
-              return globalThis.V36_STATUS_SEND(sock, msg, ctx?.quotedMessage);
-            }
-            if (!msg.key.fromMe && ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && /^(send|please send|pls send|send me|send abeg|send boss|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)$/i.test(String(body || "").trim())) {
+            const _isStatusSendKey = /^(send|send pls|send please|share|send boss|send abeg|please send|pls send|send me|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)\b/i.test(_t);
+            if (ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && _isStatusSendKey) {
+              if (typeof globalThis.V36_STATUS_SEND === "function") {
+                return globalThis.V36_STATUS_SEND(sock, msg, ctx.quotedMessage);
+              }
               const q = ctx.quotedMessage;
               const requester = isGroup(msg) ? (msg.key.participant || msg.participant) : msg.key.remoteJid;
-              if (q.imageMessage) {
-                (async () => { try { await _yieldTick(); const st = await downloadContentFromMessage(q.imageMessage, "image"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); await sock.sendMessage(requester, { image: buf, caption: q.imageMessage.caption || "✅ Sent" }); } catch {} })(); }
-              else if (q.videoMessage) { const st = await downloadContentFromMessage(q.videoMessage, "video"); let buf = Buffer.from([]); for await (const c of st) buf = Buffer.concat([buf, c]); try { const _vn = require("./lib/portableVideo.cjs"); buf = await _vn.normalizeVideoBuffer(buf, { timeoutMs: 90000 }); } catch (_vnE) {} await sock.sendMessage(requester, { video: buf, mimetype: "video/mp4", caption: q.videoMessage.caption || "✅ Sent" }); }
-              await react(sock, msg, "✅").catch(() => {}); return;
+              await react(sock, msg, "🌀").catch(() => {});
+              try {
+                if (q.imageMessage) {
+                  const st = await downloadContentFromMessage(q.imageMessage, "image");
+                  let buf = Buffer.from([]);
+                  for await (const c of st) buf = Buffer.concat([buf, c]);
+                  if (typeof enhanceImage === "function") {
+                    try { buf = await enhanceImage(buf); } catch {}
+                  }
+                  await sock.sendMessage(requester, { image: buf, caption: q.imageMessage.caption || "✅ Sent" });
+                } else if (q.videoMessage) {
+                  const st = await downloadContentFromMessage(q.videoMessage, "video");
+                  let buf = Buffer.from([]);
+                  for await (const c of st) buf = Buffer.concat([buf, c]);
+                  // Ultra-fast remux logic: finishes in ~100ms, no freeze or restart
+                  if (typeof globalThis.remuxVideoFast === "function") {
+                    buf = await globalThis.remuxVideoFast(buf);
+                  } else {
+                    const _vn = require("./lib/portableVideo.cjs");
+                    buf = await _vn.normalizeVideoBuffer(buf, { timeoutMs: 5000 });
+                  }
+                  await sock.sendMessage(requester, { video: buf, mimetype: "video/mp4", caption: q.videoMessage.caption || "✅ Sent" });
+                } else if (q.audioMessage) {
+                  const st = await downloadContentFromMessage(q.audioMessage, "audio");
+                  let buf = Buffer.from([]);
+                  for await (const c of st) buf = Buffer.concat([buf, c]);
+                  if (typeof audioToOpus === "function") {
+                    try { buf = await audioToOpus(buf); } catch {}
+                  }
+                  await sock.sendMessage(requester, { audio: buf, mimetype: "audio/ogg; codecs=opus", ptt: true });
+                }
+                await react(sock, msg, "✅").catch(() => {});
+              } catch (err) {
+                console.error("[status-send inline error]", err?.message || err);
+                await react(sock, msg, "❌").catch(() => {});
+              }
+              return;
             }
           } catch {}
 
@@ -44604,7 +44589,13 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       return false;
     }
 
-    const isSudoCard = /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedText) || /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedNorm);
+    // Sudo must NEVER intercept quotes of Settings, Cuz, or Media Pickers
+    if (quotedText && (/SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(quotedText) || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(quotedNorm) || /CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(quotedText) || /CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|\bcuz\b/i.test(quotedNorm))) {
+      return false;
+    }
+
+    const isSudoCard = (/SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedText) || /SUDO|ACCESS CONTROL|GRANT SUDO|REMOVE SUDO/i.test(quotedNorm))
+      && !/SETTINGS|CONFIG|CUSTOMIZ/i.test(quotedNorm);
 
     const pickMatch = raw.match(/^(?:(?:[.!#/]?sudo)\s*)?([123])$/i);
     if (!pickMatch) return false;
@@ -44613,7 +44604,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     const sNum = _cleanNum(getSender(msg));
     const key = sNum + "|" + jid;
 
-    let pend = _sudoPending.get(key) || _sudoPending.get(jid) || _sudoPending.get(sNum) || globalThis.__lastSudoPending;
+    let pend = _sudoPending.get(key) || _sudoPending.get(jid) || _sudoPending.get(sNum);
 
     if (!pend && isSudoCard) {
       let tm = quotedText.match(/(?:\*?Target\*?[:* \t]+|@)(\d{7,15})/i) || quotedText.match(/@(\d{7,15})/) || quotedText.match(/\b(\d{7,15})\b/);
@@ -44627,8 +44618,10 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
     }
 
     if (!pend && !isSudoCard) {
-      // If user typed 1, 2, or 3 without quote and lastSudoPending was within 10 minutes
-      if (globalThis.__lastSudoPending && (Date.now() - globalThis.__lastSudoPending.ts) <= 10 * 60 * 1000) {
+      // Must not quote an unrelated message and session must not be expired (< 3 mins)
+      const hasAnyQuote = _qArr.length > 0;
+      if (hasAnyQuote) return false;
+      if (globalThis.__lastSudoPending && (Date.now() - (globalThis.__lastSudoPending.ts || 0)) <= 3 * 60 * 1000) {
         pend = globalThis.__lastSudoPending;
       }
     }
@@ -44652,15 +44645,22 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       return true;
     }
 
+    const cleanSudoState = () => {
+      _sudoPending.delete(key);
+      _sudoPending.delete(jid);
+      if (tNum) _sudoPending.delete(tNum);
+      if (target) _sudoPending.delete(target);
+      if (sNum) _sudoPending.delete(sNum + "|" + jid);
+      globalThis.__lastSudoPending = null;
+    };
+
     if (pick === "1" || pick === "2") {
       const isVip = pick === "2";
       if (typeof sudoUsers !== "undefined") sudoUsers.add(tNum);
       if (typeof sudoVipUsers !== "undefined") { if (isVip) sudoVipUsers.add(tNum); else sudoVipUsers.delete(tNum); }
       // Persist through the store the bot loads on boot (saveAllData -> sudo.json).
-      // The old code wrote a different file that was never read back.
       try { if (typeof saveNow === "function") saveNow(); } catch {}
-      _sudoPending.delete(key);
-      _sudoPending.delete(jid);
+      cleanSudoState();
       try { await react(sock, msg, "✅"); } catch {}
       await sendReply(sock, msg, `👑 Successfully added @${tNum} as Sudo${isVip ? " VIP" : ""}!\n\n_Access granted._`, [target]);
       return true;
@@ -44668,8 +44668,7 @@ globalThis.__miasSudoNumeric = async (sock, msg, body) => {
       if (typeof sudoUsers !== "undefined") sudoUsers.delete(tNum);
       if (typeof sudoVipUsers !== "undefined") sudoVipUsers.delete(tNum);
       try { if (typeof saveNow === "function") saveNow(); } catch {}
-      _sudoPending.delete(key);
-      _sudoPending.delete(jid);
+      cleanSudoState();
       try { await react(sock, msg, "✅"); } catch {}
       await sendReply(sock, msg, `🗑️ Successfully removed @${tNum} from Sudo list.`, [target]);
       return true;
