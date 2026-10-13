@@ -341,6 +341,25 @@ function installAll(ctx) {
     }
   } catch (e) { result.v37 = false; pbad('precious-fixes-v37 require failed: ' + (e && e.message)); }
 
+  /* [v38] Status vCard opt-in (default OFF), group protections that keep
+     running in private mode, persistent settings toggles, owner-only guard
+     on .setting/.sudo/.cuz/.mode/.self/.public and the real .pin. Loaded
+     LAST so it overrides v36/v37 where they disagree. */
+  try {
+    const v38 = multiRequire('./mias/precious-fixes-v38.cjs');
+    if (v38.mod) {
+      const fn = (typeof v38.mod === 'function') ? v38.mod : v38.mod.install;
+      if (typeof fn === 'function') {
+        try { const r38 = fn(globalThis.__PRECIOUS__ || ctx); result.v38 = true;
+          plog('precious-fixes-v38: INSTALLED (vcard-off|protect-always|persist|owner-guard|real-pin) ' + safeJson(r38 || {})); }
+        catch (e38) { result.v38 = false; pbad('precious-fixes-v38 error: ' + (e38 && e38.message)); }
+      } else { result.v38 = false; pbad('precious-fixes-v38 has no install()'); }
+    } else {
+      result.v38 = false;
+      pbad('precious-fixes-v38 failed to load: ' + (v38.err && v38.err.message));
+    }
+  } catch (e) { result.v38 = false; pbad('precious-fixes-v38 require failed: ' + (e && e.message)); }
+
   const slots = Object.keys(result).length;
   const good  = Object.values(result).filter(Boolean).length;
   const dt    = Date.now() - t0;
