@@ -3151,8 +3151,8 @@ END:VCARD`;
               || /SETTINGS|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Always Online|Meta Badge|Status Reply|Tap to toggle|ENABLE|DISABLE|Chatbot/i.test(_qNorm)
               || /SETTINGS|ᴇɴᴀʙʟᴇ|ᴅɪꜱᴀʙʟᴇ/i.test(_qJoined))
               && !/SUDO|ACCESS CONTROL|CUSTOMIZ/i.test(_qNorm);
-            const _isCuzQuoted = (/CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qJoined)
-              || /CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Reset|\bcuz\b/i.test(_qNorm))
+            const _isCuzQuoted = (/(?:╭━━〔\s*𝐂𝐔𝐒𝐓𝐎𝐌𝐈𝐙𝐄\s*〕━━╮|ℹ️\s*\*?Customization Menu\*?|\bCUSTOMIZ|\bcuzCustomization\b|\b(?:Bot Name|Bot Owner|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer)\b|\bReset\b|\bPrefix\b|\bcuz\b)/i.test(_qJoined)
+              || /(?:╭━━〔\s*𝐂𝐔𝐒𝐓𝐎𝐌𝐈𝐙𝐄\s*〕━━╮|ℹ️\s*\*?Customization Menu\*?|\bCUSTOMIZ|\bcuzCustomization\b|\b(?:Bot Name|Bot Owner|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer)\b|\bReset\b|\bPrefix\b|\bcuz\b)/i.test(_qNorm))
               && !/SETTINGS|CONFIG|SUDO|ACCESS CONTROL/i.test(_qNorm);
 
             // 1. Sudo Card Quote or sudo numeric command (1, 2, 3, sudo 1, .sudo 1)
@@ -4959,8 +4959,9 @@ function shouldSilenceForPrivateMode(msg) {
   if (!msg?.key || msg.key.fromMe) return false;
   const sender = getSender(msg);
   const privileged = isOwner(sender)
-    || (typeof isSudo === "function" && isSudoIn(sender, msg.key.remoteJid))
-    || (typeof isCreator === "function" && isCreator(sender));
+    || (typeof isSudo === "function" && isSudoIn(sender, msg.key.remoteJid));
+  // PER-INSTANCE ISOLATION: isCreator is deliberately NOT privileged here — the
+  // shared MIAS MDX creator allowlist must never unlock someone else's deployed bot.
   if (privileged) return false;
   // ── ALWAYS-PUBLIC COMMANDS — work even in private mode ──
   try {
@@ -5446,14 +5447,12 @@ function _extractButtonCommand(raw) {
      if (isCommandBody(s)) return s;
     if (s.startsWith("BTN:")) {
       const cmd = s.slice(4).trim();
-       return isCommandBody(cmd) || (Array.isArray(CONFIG.PREFIXES) && CONFIG.PREFIXES.length === 0 && typeof commands !== "undefined" && commands?.has?.(cmd.split(/\s+/)[0]?.toLowerCase()))
-         ? cmd
-         : (CONFIG.PREFIX ? `${CONFIG.PREFIX}${cmd}` : cmd);
+      // STRICT PREFIX: no empty-prefix raw fallback — BTN payloads must carry
+      // the prefix or it is added. Plain command names are never promoted raw.
+      return isCommandBody(cmd) ? cmd : (CONFIG.PREFIX ? `${CONFIG.PREFIX}${cmd}` : cmd);
     }
-    const plain = s.replace(/^\/+/, "").trim().toLowerCase();
-    if (plain && typeof commands !== "undefined" && commands?.has?.(plain)) {
-      return `${CONFIG.PREFIX}${plain}`;
-    }
+    // STRICT PREFIX: plain text matching a command name is NOT auto-promoted.
+    // Only aza/send work raw (handled in parseCommandBody). Everything else needs the prefix.
     if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) {
       try {
         const id = _findInteractiveSelectionId(JSON.parse(s));
@@ -5462,12 +5461,10 @@ function _extractButtonCommand(raw) {
            if (isCommandBody(norm)) return norm;
           if (norm.startsWith("BTN:")) {
             const cmd = norm.slice(4).trim();
-             return isCommandBody(cmd) || (Array.isArray(CONFIG.PREFIXES) && CONFIG.PREFIXES.length === 0 && typeof commands !== "undefined" && commands?.has?.(cmd.split(/\s+/)[0]?.toLowerCase()))
-               ? cmd
-               : (CONFIG.PREFIX ? `${CONFIG.PREFIX}${cmd}` : cmd);
+            // STRICT PREFIX: no empty-prefix raw fallback here either.
+            return isCommandBody(cmd) ? cmd : (CONFIG.PREFIX ? `${CONFIG.PREFIX}${cmd}` : cmd);
           }
-          const plain = norm.replace(/^\/+/, "").trim().toLowerCase();
-           if (plain && typeof commands !== "undefined" && commands?.has?.(plain)) return CONFIG.PREFIX ? `${CONFIG.PREFIX}${plain}` : plain;
+          // STRICT PREFIX: interactive ids that are plain command names are NOT auto-promoted either.
         }
       } catch {}
     }
@@ -15787,8 +15784,7 @@ cmd("take", { desc: "Rename sticker — .take <name> | <author>", category: "TOO
     await sendReply(sock, msg,
       `❌ Reply to a sticker with ${CONFIG.PREFIX}take\n\n` +
       `Usage: ${CONFIG.PREFIX}take <pack name> | <author>\n` +
-      `Or: ${CONFIG.PREFIX}take <name>  (sets both pack & author)\n\n` +
-      `Example: ${CONFIG.PREFIX}take MyPack | John`
+      `Default: pack = your username, author = MIAS MDX · bot name`
     );
     return;
   }
@@ -15796,20 +15792,66 @@ cmd("take", { desc: "Rename sticker — .take <name> | <author>", category: "TOO
     const stream = await downloadContentFromMessage(stk, "sticker");
     let buf = Buffer.from([]);
     for await (const c of stream) buf = Buffer.concat([buf, c]);
-    // MIAS MDX TAKE: pack name = the user's username, author = bot name (MIAS MDX).
+    if (!buf || buf.length < 100) throw new Error("Could not download the sticker.");
+
+    // pack name = user's username · author = MIAS MDX · bot name (overridable via args)
     const _tkJid  = String(msg.key.participant || msg.key.remoteJid || "");
     const _tkUser = String(msg.pushName || _tkJid.split("@")[0] || "user").replace(/[\[\]{}()<>|*~_`#]/g, "").trim() || "user";
     const _tkBot  = (typeof CONFIG !== "undefined" && CONFIG.BOT_NAME) ? CONFIG.BOT_NAME : "MIAS MDX";
     const rawText = args.join(" ").trim();
     const parts = rawText.split("|").map(p => p.trim()).filter(Boolean);
-    const packName   = parts[0] || _tkUser;            // package name = user's username
-    const authorName = parts[1] || ("MIAS MDX · " + _tkBot); // author = bot name
-    const exifBuf = buildStickerExif(packName, authorName);
-    const tagged = await injectWebpExif(buf, exifBuf);
-    // Send sticker only — no reply/quote, no text, no reaction
+    const packName   = parts[0] || _tkUser;
+    const authorName = parts[1] || ("MIAS MDX · " + _tkBot);
+
+    // Self-contained, spec-valid WhatsApp sticker EXIF (little-endian TIFF header + JSON payload)
+    const _tkJson = Buffer.from(JSON.stringify({
+      "sticker-pack-id": "com.miasmdx.take." + _tkUser.toLowerCase().replace(/[^a-z0-9]+/g, ""),
+      "sticker-pack-name": packName,
+      "sticker-pack-publisher": authorName,
+      "sticker-pack-publisher-email": "",
+      "sticker-pack-publisher-website": "",
+      "android-app-store-link": "",
+      "ios-app-store-link": "",
+      "emojis": ["✨"]
+    }), "utf8");
+    const _tkHead = Buffer.from([0x49,0x49,0x2A,0x00,0x08,0x00,0x00,0x00,0x01,0x00,0x41,0x57,0x07,0x00]);
+    const _tkLen  = Buffer.alloc(4); _tkLen.writeUInt32LE(_tkJson.length, 0);
+    const exifBuf = Buffer.concat([_tkHead, _tkLen, _tkJson]);
+
+    // RIFF WebP EXIF chunk injection (replaces any existing EXIF chunk, fixes sizes + padding)
+    const _tkInject = (webp, exif) => {
+      try {
+        if (webp.slice(0, 4).toString("latin1") !== "RIFF" || webp.slice(8, 12).toString("latin1") !== "WEBP") return webp;
+        const chunks = [];
+        let off = 12;
+        while (off + 8 <= webp.length) {
+          const id = webp.slice(off, off + 4).toString("latin1");
+          const sz = webp.readUInt32LE(off + 4);
+          const end = off + 8 + sz + (sz % 2);
+          if (id === "VP8X") {
+            const w = Buffer.from(webp.slice(off, end));
+            w[4] = (w[4] | 0x08); // set EXIF flag bit
+            chunks.push(w);
+          } else if (id !== "EXIF") {
+            chunks.push(webp.slice(off, end));
+          }
+          off = end;
+        }
+        const payload = exif.length % 2 ? Buffer.concat([exif, Buffer.from([0])]) : exif;
+        const head = Buffer.alloc(8); head.write("EXIF", 0, "latin1"); head.writeUInt32LE(exif.length, 4);
+        chunks.push(Buffer.concat([head, payload]));
+        const bodyAll = Buffer.concat(chunks);
+        const out = Buffer.concat([Buffer.from("RIFF", "latin1"), Buffer.alloc(4), Buffer.from("WEBP", "latin1"), bodyAll]);
+        out.writeUInt32LE(4 + bodyAll.length, 4);
+        return out;
+      } catch { return webp; }
+    };
+    const tagged = _tkInject(buf, exifBuf);
+    if (!tagged.includes(Buffer.from("EXIF", "latin1"))) throw new Error("EXIF tag injection failed.");
     await sock.sendMessage(msg.key.remoteJid, { sticker: tagged });
   } catch (e) { await sendReply(sock, msg, `❌ Take failed: ${e.message}`); }
 });
+
 cmd(["tourl", "litterbox", "tour"], { desc: "Upload media → URL (catbox / tmpfiles / qu.ax)", category: "UTILITY" }, async (sock, msg) => {
   await react(sock, msg, "🌀").catch(()=>{});
   const unwrapMsg = (m) => {
@@ -19346,6 +19388,10 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
       let buf;
       if (_ttDirectMode?.kind === "slider") {
         buf = await createTikTokSliderVideo({ images: _ttInfo.images, audioUrl: _ttInfo.audio, durationPerSlide: 3 });
+        // REMUX + VALIDATE: run the slider through the same HD remux pipeline as 1.3 HD video,
+        // and NEVER send an empty/tiny buffer (that was the "text arrives, no media" bug).
+        try { buf = await prepareTikTokVideo(buf); } catch (_slx) { throw new Error("Slider remux failed: " + (_slx?.message || _slx)); }
+        if (!buf || buf.length < 8000) throw new Error("Slider render produced no media — please try again.");
       } else {
         try {
           const _res = await axios.get(_ttDirectUrl, { responseType: "arraybuffer", timeout: 90000, headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" }, maxRedirects: 10 });
@@ -23348,6 +23394,12 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         }
       }
       __ttForgetSelection(jid);
+      // SLIDER GUARD: never announce success for a slider with no media —
+      // throw so the catch reports the failure and keeps the picker alive
+      // instead of the false "✅ Here is your TikTok slider video (4.1)."
+      if (ttMode.kind === "slider" && (!Buffer.isBuffer(media) || media.length < 1024)) {
+        throw new Error("Slider video could not be built (empty media). Reply 4.1 to retry — the menu is still active.");
+      }
       await updateTtStatus(`✅ *Here is your ${ttChoiceLabel}* (${ttMode.id}).`);
       await forceReaction(sock, msg, "✅");
     } catch (error) {
@@ -33983,37 +34035,33 @@ const variants = realLastMsgs
       // WhatsApp on current protocol versions (never errors, never pins — the
       // bot said "📌 Message pinned!" but nothing pinned). Try the payloads in
       // the order that actually pins, keep the same success text.
+      // CURRENT PROTOCOL FIX: WhatsApp honours the pin only when pinInChatMessage
+      // is built with the socket's OWN generateWAMessageFromContent and sent via
+      // relayMessage (correct wa version), or via the official sendMessage(jid,
+      // { pin, type, time }) content form. The bare { pinInChat } envelope is
+      // silently dropped. The old code also did require("@whiskeysockets/baileys")
+      // which resolves to NOTHING here (dep is aliased to @itsliaaa/baileys), so
+      // every attempt failed silently and nothing ever pinned.
       let _pinned = false, _pinErr = null;
-      // 2026 protocol: WhatsApp honours pinInChatMessage via generateWAMessageFromContent
-      // + relayMessage. Try the v37 helper first, then the relay payload, then the
-      // official {pin} content, legacy pinInChat envelope last.
       try {
         if (typeof globalThis.__v37PinInChat === "function") {
           const _r = await globalThis.__v37PinInChat(sock, jid, { stanzaId: ctx.stanzaId, participant: ctx.participant, remoteJid: jid, fromMe: ctx.fromMe }, 604800);
           if (_r && _r.ok) _pinned = true;
         }
       } catch (e) { _pinErr = e; }
-      if (!_pinned) {
+      if (!_pinned && typeof generateWAMessageFromContent === "function" && typeof sock.relayMessage === "function") {
         try {
-          const _wm = require("@whiskeysockets/baileys");
-          if (typeof _wm.generateWAMessageFromContent === "function" && typeof sock.relayMessage === "function") {
-            const _pm = _wm.generateWAMessageFromContent(jid, {
-              pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now() },
-              messageContextInfo: { messageAddOnDurationInSecs: 604800 },
-            }, {});
-            await sock.relayMessage(jid, _pm.message, { messageId: _pm.key?.id });
-            _pinned = true;
-          }
+          const _pm = await generateWAMessageFromContent(jid, {
+            pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now() },
+            messageContextInfo: { messageAddOnDurationInSecs: 604800 },
+          }, { userJid: (typeof _nativeFlowUserJid === "function" ? _nativeFlowUserJid(sock) : undefined) || undefined });
+          await sock.relayMessage(jid, _pm.message, { messageId: _pm.key?.id });
+          _pinned = true;
         } catch (e) { _pinErr = e; }
       }
-      if (!_pinned) {
-        for (const _p of [
-          { pin: pinKey, type: 1, time: 604800 },
-          { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), time: 604800 } },
-          { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now() } },
-        ]) {
-          try { await sock.sendMessage(jid, _p); _pinned = true; break; } catch (e) { _pinErr = e; }
-        }
+      if (!_pinned && typeof sock.sendMessage === "function") {
+        try { await sock.sendMessage(jid, { pin: pinKey, type: 1, time: 604800 }); _pinned = true; }
+        catch (e) { _pinErr = e; }
       }
       if (_pinned) await sendReply(sock, msg, "📌 *Message pinned!*");
       else await sendReply(sock, msg, `❌ Pin failed: ${_pinErr?.message || _pinErr}`);
@@ -35388,11 +35436,9 @@ const __miasGst = async (sock, msg, args) => {
         _v10log(".pair fail", target, out.error);
       }
     };
-    for (const n of ["linkme", "selfpair", "ownpair", "pair"]) {
-      const ex = commands.get(n) || { desc: "Pair a WhatsApp number (.linkme <number>)", category: "SESSION" };
-      ex.handler = __miasLinkMeV10;
-      commands.set(n, ex);
-    }
+    // FIX: v10 no longer overrides pair/linkme — the v11 late-patch below is the
+    // single, final owner of these handlers (this was why live pair text edits never showed).
+    // (v10 handler __miasLinkMeV10 intentionally left unregistered.)
 
     // ───────────────────────────────────────────────────────────────────
     // 5) .debug on/off  +  .debugtail

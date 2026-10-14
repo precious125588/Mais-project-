@@ -58,8 +58,10 @@ const MAX_DURATION_SECONDS = 180;
 const RANDOM_EDIT_HASHTAGS = Object.freeze([
   "#animeedit", "#animeedits", "#amv", "#anime", "#edit", "#edits",
   "#4kedit", "#auraedit", "#animeamv", "#otaku", "#weeb",
-  "#narutoedit", "#onepieceedit", "#bleachedit", "#jjkedit",
-  "#demonslayeredit", "#dragonballedit", "#bluelockedit",
+  // trending + quality-boost pool for random status fetches (4k/60/120/360fps)
+  "#trending", "#trendingedit", "#trendinganime", "#viraledit",
+  "#4k", "#4kedits", "#4kanime", "#60fps", "#60fpsedit", "#60fpsanime",
+  "#120fps", "#120fpsedit", "#360fps", "#animeedit4k",
 ]);
 
 // Naruto is intentionally restricted to this TikTok hashtag pool. Do not

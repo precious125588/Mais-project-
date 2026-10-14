@@ -12,7 +12,20 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_DIR = path.join(__dirname, "database");
+// PER-BOT ISOLATION: each paired bot gets its own AUTH_DIR. When one is set,
+// keep this instance's database beside ITS session so sudo lists, settings,
+// private-mode state, bans etc. are NEVER shared with another Mia's MDX
+// instance running from the same repo. No AUTH_DIR → original shared path.
+const DB_DIR = (() => {
+  try {
+    if (process.env.AUTH_DIR) {
+      const d = path.join(path.resolve(process.env.AUTH_DIR), "database");
+      fs.mkdirSync(d, { recursive: true });
+      return d;
+    }
+  } catch {}
+  return path.join(__dirname, "database");
+})();
 
 // Ensure database directory exists
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });

@@ -423,7 +423,7 @@ async function handleCuzReply(sock, msg, body, P) {
       return false;
     }
 
-    const cuzPattern = /CUSTOMIZ|BRANDING|PRESENTATION|cuzCustomization|Prefix|Bot Name|Bot Owner|Pack Name|Author Name|Footer|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Menu Emoji|Time Format|Date Format|Reset|\bcuz\b/i;
+    const cuzPattern = /(?:╭━━〔\s*𝐂𝐔𝐒𝐓𝐎𝐌𝐈𝐙𝐄\s*〕━━╮|ℹ️\s*\*?Customization Menu\*?|\bCUSTOMIZ|\bcuzCustomization\b|\b(?:Bot Name|Bot Owner|Pack Name|Author Name|Welcome Text|Goodbye Text|Menu Header|Menu Footer|Time Format|Date Format)\b|\bReset\b|\bPrefix\b|\bcuz\b)/i;
     const isCuzQuoted = (cuzPattern.test(quotedText) || cuzPattern.test(quotedNorm)) && !isSettingsQuoted && !isSudoQuoted;
 
     const rawInput = String(body || "").trim();
@@ -492,12 +492,10 @@ async function handleCuzReply(sock, msg, body, P) {
       return false;
     }
 
-    // User quoted the cuz card with non-numeric text
-    if (isCuzQuoted) {
-      await sock.sendMessage(jid, {
-        text: `ℹ️ *Customization Menu*\n\nPlease reply with an option number from *1 to ${customizationOptions.length}* to apply your value, or use *.cuz <value>* to start with a new value.`
-      }, { quoted: msg });
-      return true;
+    // Non-numeric replies (like "Rest" or normal conversation quoting a message)
+    // must NEVER trigger menu spam or hijack the conversation.
+    if (!numMatch) {
+      return false;
     }
 
     return false;

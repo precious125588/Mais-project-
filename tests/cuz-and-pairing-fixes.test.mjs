@@ -206,3 +206,67 @@ test("Pairing client uses WhatsApp Web Chrome fingerprint and has notification d
   assert.ok(miasCode.includes('"ss"'), "mias/index.js must support .ss command");
   assert.ok(miasCode.includes("s0.wp.com/mshots"), "mias/index.js must use high-reliability screenshot fallbacks");
 });
+
+test("Replying with text like 'Rest' or 'I don dey download dis one' quoting cuz menu or video NEVER spams", async () => {
+  const cuz = await import("../mias/features/cuzCustomization.cjs");
+  let sentMessages = [];
+  const fakeSock = {
+    sendMessage: async (jid, content) => {
+      sentMessages.push({ jid, content });
+      return { key: { id: "test-reply" } };
+    }
+  };
+
+  const CONFIG = { BOT_NAME: "MIA'S MDX", PREFIX: "." };
+  const jid = "testuser@s.whatsapp.net";
+
+  // Case 1: Video with #presetff hashtag (should not trigger cuzPattern at all)
+  const videoQuotedMsg = {
+    key: { remoteJid: jid },
+    message: {
+      extendedTextMessage: {
+        text: "I don dey download dis one",
+        contextInfo: {
+          quotedMessage: {
+            videoMessage: {
+              caption: "4k 360fps #free_fire #headshots #fresstyle #60fps #highquality #fyp #trend #presetff #..."
+            }
+          }
+        }
+      }
+    }
+  };
+
+  let handled = await cuz.handleCuzReply(
+    fakeSock,
+    videoQuotedMsg,
+    "I don dey download dis one",
+    { getSettings: () => ({}), saveNow: () => {}, CONFIG }
+  );
+  assert.equal(handled, false, "Must return false for video quote with #presetff");
+  assert.equal(sentMessages.length, 0, "No messages should be sent for video quote");
+
+  // Case 2: Quoting Customization Menu with 'Rest'
+  const menuQuotedMsg = {
+    key: { remoteJid: jid },
+    message: {
+      extendedTextMessage: {
+        text: "Rest",
+        contextInfo: {
+          quotedMessage: {
+            conversation: "ℹ️ *Customization Menu*\n\nPlease reply with an option number from *1 to 17* to apply your value, or use *.cuz <value>* to start with a new value."
+          }
+        }
+      }
+    }
+  };
+
+  handled = await cuz.handleCuzReply(
+    fakeSock,
+    menuQuotedMsg,
+    "Rest",
+    { getSettings: () => ({}), saveNow: () => {}, CONFIG }
+  );
+  assert.equal(handled, false, "Must return false for 'Rest' reply quoting menu");
+  assert.equal(sentMessages.length, 0, "No spam message should be sent when quoting menu with 'Rest'");
+});

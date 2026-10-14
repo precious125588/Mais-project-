@@ -156,7 +156,7 @@ async function createSliderVideo({ images = [], audioUrl = null, durationPerSlid
     const outPath = path.join(dir, 'output.mp4');
     const totalDuration = String(downloadedImages.length * durationPerSlide);
     const bin = resolveFfmpeg();
-    const VF = 'scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=24';
+    const VF = 'scale=576:1024:force_original_aspect_ratio=decrease,pad=576:1024:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=24'; // 576x1024: WhatsApp-ready vertical, ~2x faster encode than 720x1280, still clean HD on phones
 
     const ffmpegArgs = [
       '-hide_banner', '-loglevel', 'error', '-y',
@@ -200,6 +200,16 @@ async function createSliderVideo({ images = [], audioUrl = null, durationPerSlid
       await execFileAsync(bin, retryArgs, { timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
     }
     const outputBuffer = await fsp.readFile(outPath);
+    // REMUX PASS (stream copy, no re-encode — finishes in ~1s): rewrites the
+    // MP4 container with clean timestamps and the moov atom at the front so
+    // WhatsApp accepts and renders the slider instantly. Falls back to the
+    // encoded file if remuxing fails.
+    try {
+      const remuxPath = path.join(dir, 'output_remux.mp4');
+      await execFileAsync(bin, ['-hide_banner','-loglevel','error','-y','-i',outPath,'-c','copy','-movflags','+faststart',remuxPath], { timeout: 60000, maxBuffer: 32 * 1024 * 1024 });
+      const remuxBuf = await fsp.readFile(remuxPath);
+      if (remuxBuf.length > 1024) return remuxBuf;
+    } catch (_) {}
     return outputBuffer;
   } finally {
     try { await fsp.rm(dir, { recursive: true, force: true }); } catch (_) {}

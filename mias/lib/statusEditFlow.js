@@ -1,3 +1,4 @@
+import { prepareTikTokVideo } from "../features/ttVideo.js";
 import axios from "axios";
 import { createRequire } from "module";
 import { execFile } from "child_process";
@@ -322,13 +323,24 @@ async function tikwmSearch(query) {
     "https://tikwm.com/api/feed/search/"
   ];
 
+  // Random quality/trending flavour for the edit fetch: sometimes the plain
+  // topic, sometimes topic + trending / 4k / 60fps / 120fps / 360fps. Results
+  // are still gated by matchesQuery(topic), so a Naruto search can NEVER
+  // return JJK unless the hashtags actually relate.
+  const _qualityTags = ["trending", "4k", "60fps", "120fps", "360fps"];
+  const qualityify = (q) => {
+    const base = String(q || "").trim();
+    if (!base) return base;
+    if (Math.random() < 0.45) return base;
+    return `${base} ${_qualityTags[Math.floor(Math.random() * _qualityTags.length)]}`;
+  };
   const fetchForQueries = async (queryList, targetCount = 10) => {
     const list = [];
     for (const keywords of queryList) {
       for (const ep of searchEndpoints) {
         try {
           const data = await tikwmRequest(ep, {
-            keywords,
+            keywords: qualityify(keywords),
             count: 20,
             cursor: 0,
             HD: 1,
@@ -804,9 +816,13 @@ export function createStatusEditFlow({ prefix = ".", animeFlow = null } = {}) {
         }
         for (let index = 0; index < results.length; index += 1) {
           const result = results[index];
+          // Process status edits EXACTLY like the tt 1.3 HD path (same
+          // normalize/remux pipeline) so they arrive playable, fast, in 4:5 HD.
+          let _editBuf = result.buffer;
+          try { _editBuf = await prepareTikTokVideo(result.buffer); } catch (_) {}
           await sock.sendMessage(
             msg.key.remoteJid,
-            buildStatusVideoMessage(result.buffer),
+            buildStatusVideoMessage(_editBuf),
             { quoted: msg },
           );
         }
