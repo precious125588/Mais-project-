@@ -84,6 +84,14 @@ async function normalizeVideoBuffer(input, opts = {}) {
  * Build a high quality slideshow video from an array of image URLs and an optional audio URL.
  * Slides each image for durationPerSlide seconds (default: 3 seconds).
  */
+/**
+ * Build a slideshow video from image URLs + optional audio URL.
+ * v2026-10 SPEED PASS:
+ *  - images download in PARALLEL (was sequential: the main delay)
+ *  - 720x1280 ultrafast encode (was 1080x1920 veryfast crf22: ~3x faster)
+ *  - shorter network timeouts (12s/img, 20s audio)
+ *  - output is +faststart remux-ready so WhatsApp accepts it instantly
+ */
 async function createSliderVideo({ images = [], audioUrl = null, durationPerSlide = 3 }) {
   if (!Array.isArray(images) || images.length === 0) {
     throw new Error('No images provided for slider video');
@@ -91,36 +99,39 @@ async function createSliderVideo({ images = [], audioUrl = null, durationPerSlid
 
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mias-slider-'));
   try {
-    const downloadedImages = [];
-    for (let i = 0; i < images.length; i++) {
+    // ── Parallel image downloads (biggest speed win) ──
+    const fetched = await Promise.all(images.slice(0, 30).map(async (url, i) => {
       try {
-        const res = await fetch(images[i], {
+        const res = await fetch(url, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(20000),
+          signal: AbortSignal.timeout(12000),
         });
-        if (res.ok) {
-          const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length > 512) {
-            const imgPath = path.join(dir, 'slide_' + String(i).padStart(3, '0') + '.jpg');
-            await fsp.writeFile(imgPath, buf);
-            downloadedImages.push(imgPath);
-          }
-        }
+        if (!res.ok) return null;
+        const buf = Buffer.from(await res.arrayBuffer());
+        return buf.length > 512 ? { i, buf } : null;
       } catch (e) {
         try { console.warn('[slider] image download failed for index', i, e?.message || e); } catch (_) {}
+        return null;
       }
+    }));
+    const downloadedImages = [];
+    for (const item of fetched.filter(Boolean).sort((a, b) => a.i - b.i)) {
+      const imgPath = path.join(dir, 'slide_' + String(item.i).padStart(3, '0') + '.jpg');
+      await fsp.writeFile(imgPath, item.buf);
+      downloadedImages.push(imgPath);
     }
 
     if (downloadedImages.length === 0) {
       throw new Error('Failed to download any images for the slider video');
     }
 
+    // ── Audio (single fetch, tight timeout; silent fallback never blocks) ──
     let audioPath = null;
     if (audioUrl) {
       try {
         const aRes = await fetch(audioUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(30000),
+          signal: AbortSignal.timeout(20000),
         });
         if (aRes.ok) {
           const aBuf = Buffer.from(await aRes.arrayBuffer());
@@ -145,6 +156,7 @@ async function createSliderVideo({ images = [], audioUrl = null, durationPerSlid
     const outPath = path.join(dir, 'output.mp4');
     const totalDuration = String(downloadedImages.length * durationPerSlide);
     const bin = resolveFfmpeg();
+    const VF = 'scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=24';
 
     const ffmpegArgs = [
       '-hide_banner', '-loglevel', 'error', '-y',
@@ -160,32 +172,32 @@ async function createSliderVideo({ images = [], audioUrl = null, durationPerSlid
     }
 
     ffmpegArgs.push(
-      '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=25',
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-r', '25',
-      '-c:a', 'aac', '-b:a', '192k',
+      '-vf', VF,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p', '-r', '24',
+      '-c:a', 'aac', '-b:a', '128k',
       '-t', totalDuration,
       '-movflags', '+faststart',
       '-f', 'mp4', outPath
     );
 
     try {
-      await execFileAsync(bin, ffmpegArgs, { timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
+      await execFileAsync(bin, ffmpegArgs, { timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
     } catch (_ffErr) {
-      // Retry once: drop the (possibly corrupt/empty) audio track and lower CPU/RAM
-      // footprint so the slider is ALWAYS delivered instead of crashing the bot.
+      // Retry once: drop the (possibly corrupt/empty) audio track so the slider
+      // is ALWAYS delivered instead of crashing.
       console.error('[slider] ffmpeg attempt 1 failed, retrying without audio:', _ffErr?.message || _ffErr);
       const retryArgs = [
         '-hide_banner', '-loglevel', 'error', '-y',
         '-f', 'concat', '-safe', '0', '-i', concatFile,
         '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=25',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p', '-r', '25', '-threads', '2',
+        '-vf', VF,
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p', '-r', '24', '-threads', '2',
         '-c:a', 'aac', '-b:a', '128k',
         '-t', totalDuration,
         '-movflags', '+faststart',
         '-f', 'mp4', outPath
       ];
-      await execFileAsync(bin, retryArgs, { timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
+      await execFileAsync(bin, retryArgs, { timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
     }
     const outputBuffer = await fsp.readFile(outPath);
     return outputBuffer;

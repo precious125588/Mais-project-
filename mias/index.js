@@ -15796,11 +15796,14 @@ cmd("take", { desc: "Rename sticker — .take <name> | <author>", category: "TOO
     const stream = await downloadContentFromMessage(stk, "sticker");
     let buf = Buffer.from([]);
     for await (const c of stream) buf = Buffer.concat([buf, c]);
+    // MIAS MDX TAKE: pack name = the user's username, author = bot name (MIAS MDX).
+    const _tkJid  = String(msg.key.participant || msg.key.remoteJid || "");
+    const _tkUser = String(msg.pushName || _tkJid.split("@")[0] || "user").replace(/[\[\]{}()<>|*~_`#]/g, "").trim() || "user";
+    const _tkBot  = (typeof CONFIG !== "undefined" && CONFIG.BOT_NAME) ? CONFIG.BOT_NAME : "MIAS MDX";
     const rawText = args.join(" ").trim();
-    const parts = rawText.split("|").map(p => p.trim());
-    // Default: blank pack name/author so no metadata text appears
-    const packName   = parts[0] || "";
-    const authorName = parts[1] || parts[0] || "";
+    const parts = rawText.split("|").map(p => p.trim()).filter(Boolean);
+    const packName   = parts[0] || _tkUser;            // package name = user's username
+    const authorName = parts[1] || ("MIAS MDX · " + _tkBot); // author = bot name
     const exifBuf = buildStickerExif(packName, authorName);
     const tagged = await injectWebpExif(buf, exifBuf);
     // Send sticker only — no reply/quote, no text, no reaction
@@ -23167,6 +23170,10 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       if (ttMode.kind === "slider") {
         await updateTtStatus(`🎞️ *Generating TikTok Slider Video*...\nMerging ${ttPick.info.images.length} images (3s each) with audio.`);
         media = await createTikTokSliderVideo({ images: ttPick.info.images, audioUrl: ttPick.info.audio, durationPerSlide: 3 });
+        // v2026-10 slider delivery fix: never hand WhatsApp an empty/broken file.
+        if (!Buffer.isBuffer(media) || media.length < 2048) throw new Error("Slider video generation returned an empty file");
+        // REMUX fast pass (+faststart, stream copy) so the slider uploads & plays instantly.
+        try { const _rmx = await prepareTikTokVideo(media); if (Buffer.isBuffer(_rmx) && _rmx.length >= 2048) media = _rmx; } catch {}
       } else {
       const candidateUrls = [mediaUrl];
       // A TikWM URL can expire between the preview and the user's choice.
@@ -33970,20 +33977,43 @@ const variants = realLastMsgs
              || msg.message?.imageMessage?.contextInfo
              || msg.message?.videoMessage?.contextInfo
              || msg.message?.documentMessage?.contextInfo;
-    if (ctx?.stanzaId && jid.endsWith("@g.us")) {
+    if (ctx?.stanzaId) { // v2026-10: reply-pin now works in DMs AND groups
       const pinKey = { remoteJid: jid, fromMe: ctx.fromMe || false, id: ctx.stanzaId, participant: ctx.participant || undefined };
       // PRECIOUS v28 FIX: the bare pinInChat envelope is silently ignored by
       // WhatsApp on current protocol versions (never errors, never pins — the
       // bot said "📌 Message pinned!" but nothing pinned). Try the payloads in
       // the order that actually pins, keep the same success text.
       let _pinned = false, _pinErr = null;
-      for (const _p of [
-        { pin: pinKey, type: 1, time: 604800 },
-        { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), time: 604800 } },
-        { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), duration: 604800 } },
-        { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now() } },
-      ]) {
-        try { await sock.sendMessage(jid, _p); _pinned = true; break; } catch (e) { _pinErr = e; }
+      // 2026 protocol: WhatsApp honours pinInChatMessage via generateWAMessageFromContent
+      // + relayMessage. Try the v37 helper first, then the relay payload, then the
+      // official {pin} content, legacy pinInChat envelope last.
+      try {
+        if (typeof globalThis.__v37PinInChat === "function") {
+          const _r = await globalThis.__v37PinInChat(sock, jid, { stanzaId: ctx.stanzaId, participant: ctx.participant, remoteJid: jid, fromMe: ctx.fromMe }, 604800);
+          if (_r && _r.ok) _pinned = true;
+        }
+      } catch (e) { _pinErr = e; }
+      if (!_pinned) {
+        try {
+          const _wm = require("@whiskeysockets/baileys");
+          if (typeof _wm.generateWAMessageFromContent === "function" && typeof sock.relayMessage === "function") {
+            const _pm = _wm.generateWAMessageFromContent(jid, {
+              pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now() },
+              messageContextInfo: { messageAddOnDurationInSecs: 604800 },
+            }, {});
+            await sock.relayMessage(jid, _pm.message, { messageId: _pm.key?.id });
+            _pinned = true;
+          }
+        } catch (e) { _pinErr = e; }
+      }
+      if (!_pinned) {
+        for (const _p of [
+          { pin: pinKey, type: 1, time: 604800 },
+          { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now(), time: 604800 } },
+          { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now() } },
+        ]) {
+          try { await sock.sendMessage(jid, _p); _pinned = true; break; } catch (e) { _pinErr = e; }
+        }
       }
       if (_pinned) await sendReply(sock, msg, "📌 *Message pinned!*");
       else await sendReply(sock, msg, `❌ Pin failed: ${_pinErr?.message || _pinErr}`);

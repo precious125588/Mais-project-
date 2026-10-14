@@ -16,10 +16,15 @@ function readPersistedPrefix() {
   return undefined;
 }
 
+// HARD RULE: prefix is ALWAYS "." unless a REAL custom symbol is set.
+// null / none / off / "" / "no" / "disabled" / "noprefix" / "no-prefix" are ALL
+// mapped to "." — there is no no-prefix mode anymore. Only `aza` and `send`
+// are accepted raw (handled in parseCommand). This kills the permanent
+// null/none prefix-leak for good.
 function normalizePrefix(value) {
-  if (value === null || value === undefined) return null;
+  if (value === null || value === undefined) return ".";
   const text = String(value).trim();
-  if (!text || /^(?:null|none|off)$/i.test(text)) return "."; // STRICT: no-prefix mode disabled — commands ALWAYS require the prefix (aza/send excepted in parseCommand)
+  if (!text || /^(?:null|none|off|no|false|disabled|noprefix|no-prefix)$/i.test(text)) return ".";
   return text.slice(0, 3);
 }
 
@@ -47,6 +52,7 @@ function parseCommand(body, prefix = getConfiguredPrefix()) {
   if (!input) return { isCommand: false, command: "", args: [], text: "" };
 
   const lower = input.toLowerCase();
+  // aza & send are the ONLY commands that also work raw (no prefix).
   for (const exception of ["aza", "send"]) {
     if (new RegExp(`^${exception}(?:\\s|$)`, "i").test(lower)) {
       const tokens = input.split(/\s+/);
@@ -55,7 +61,8 @@ function parseCommand(body, prefix = getConfiguredPrefix()) {
     }
   }
 
-  // An unset prefix must never turn every ordinary message into a command.
+  // Everything else REQUIRES the prefix. An unset prefix defaults to "."
+  // and must never turn every ordinary message into a command.
   const effectivePrefix = typeof prefix === "string" && prefix.length ? prefix : ".";
   if (!input.startsWith(effectivePrefix)) {
     return { isCommand: false, command: "", args: [], text: "" };

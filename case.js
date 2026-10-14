@@ -1988,6 +1988,7 @@ case '__dup_removed_selfpair__':  // moved to mias/index.js
 case '__dup_removed_ownpair__': {  // moved to mias/index.js
   await devtrust.sendMessage(m.chat, { react: { text: '🖇️', key: m.key } });
   try {
+    delete require.cache[require.resolve('./pair.js')]; // v2026-10: always load the LIVE pair.js (no stale pairing text)
     const pairModule = require('./pair.js');
     const startpairing = typeof pairModule === 'function' ? pairModule : pairModule.startpairing;
     const waitForPairingResult = pairModule.waitForPairingResult;
@@ -2044,6 +2045,7 @@ case 'pair': {
       // Non-critical check failure; proceed
     }
 
+    delete require.cache[require.resolve('./pair.js')]; // v2026-10: always load the LIVE pair.js (no stale pairing text)
     const pairModule = require('./pair.js');
     const startpairing = typeof pairModule === 'function' ? pairModule : pairModule.startpairing;
     const waitForPairingResult = pairModule.waitForPairingResult;
@@ -4101,7 +4103,8 @@ case 'getbot': {
                 return reply('❌ The number is not registered on WhatsApp.');
             }
 
-            const pairModule = require('./pair.js');
+            delete require.cache[require.resolve('./pair.js')]; // v2026-10: always load the LIVE pair.js (no stale pairing text)
+    const pairModule = require('./pair.js');
             const startpairing = typeof pairModule === 'function' ? pairModule : pairModule.startpairing;
             if (typeof startpairing !== 'function') throw new Error('Pairing module is not loaded correctly');
 
