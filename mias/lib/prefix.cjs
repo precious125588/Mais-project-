@@ -19,7 +19,7 @@ function readPersistedPrefix() {
 function normalizePrefix(value) {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
-  if (!text || /^(?:null|none|off)$/i.test(text)) return null;
+  if (!text || /^(?:null|none|off)$/i.test(text)) return "."; // STRICT: no-prefix mode disabled — commands ALWAYS require the prefix (aza/send excepted in parseCommand)
   return text.slice(0, 3);
 }
 

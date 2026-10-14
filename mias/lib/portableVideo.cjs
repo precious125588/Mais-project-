@@ -151,7 +151,9 @@ async function createSliderVideo({ images = [], audioUrl = null, durationPerSlid
       '-f', 'concat', '-safe', '0', '-i', concatFile,
     ];
 
-    if (audioPath) {
+    let _audioOk = false;
+    if (audioPath) { try { const _ast = await fsp.stat(audioPath); _audioOk = !!_ast && _ast.size > 100; } catch (_) { _audioOk = false; } }
+    if (_audioOk) {
       ffmpegArgs.push('-stream_loop', '-1', '-i', audioPath);
     } else {
       ffmpegArgs.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
@@ -166,7 +168,25 @@ async function createSliderVideo({ images = [], audioUrl = null, durationPerSlid
       '-f', 'mp4', outPath
     );
 
-    await execFileAsync(bin, ffmpegArgs, { timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
+    try {
+      await execFileAsync(bin, ffmpegArgs, { timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
+    } catch (_ffErr) {
+      // Retry once: drop the (possibly corrupt/empty) audio track and lower CPU/RAM
+      // footprint so the slider is ALWAYS delivered instead of crashing the bot.
+      console.error('[slider] ffmpeg attempt 1 failed, retrying without audio:', _ffErr?.message || _ffErr);
+      const retryArgs = [
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-f', 'concat', '-safe', '0', '-i', concatFile,
+        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=25',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p', '-r', '25', '-threads', '2',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-t', totalDuration,
+        '-movflags', '+faststart',
+        '-f', 'mp4', outPath
+      ];
+      await execFileAsync(bin, retryArgs, { timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
+    }
     const outputBuffer = await fsp.readFile(outPath);
     return outputBuffer;
   } finally {
