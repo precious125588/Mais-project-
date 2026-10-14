@@ -1112,7 +1112,7 @@ function getRuntimeDebugState() {
     credsExists: fs.existsSync(path.join(AUTH_DIR, "creds.json")),
     uptimeSec: Math.floor(process.uptime()),
     memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
-    commandCount: typeof commands !== "undefined" ? commands.size : 0,
+    commandCount: typeof getPrimaryCommandCount === "function" ? getPrimaryCommandCount() : (typeof commands !== "undefined" ? commands.size : 0),
     recentLogs: runtimeLogs.slice(-200),
   };
 }
@@ -1772,13 +1772,13 @@ app.get("/", (_, res) => {
   <div class="logo">🤖</div>
   <h1>MIAS MDX Bot</h1>
   <p>Owner: <strong>${CONFIG.OWNER_NAME}</strong></p>
-  <p>Version: <strong>${CONFIG.VERSION}</strong> | ${commands.size}+ Commands</p>
+  <p>Version: <strong>${CONFIG.VERSION}</strong> | ${getPrimaryCommandCount()}+ Commands</p>
   <p style="margin-top:1rem"><span class="sd"></span>Bot is <strong>${st}</strong></p>
   <div class="badge">⚡ Powered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x</div>
   <p style="margin-top:1rem"><a href="/debug" style="color:#25D366">Open Debug Console</a></p>
   </body></html>`);
 });
-app.get("/health", (_, res) => res.json({ status: "ok", connected: botConnected, bot: CONFIG.BOT_NAME, version: CONFIG.VERSION, giftedAPI: "connected", commands: commands.size, uptime: process.uptime() }));
+app.get("/health", (_, res) => res.json({ status: "ok", connected: botConnected, bot: CONFIG.BOT_NAME, version: CONFIG.VERSION, giftedAPI: "connected", commands: getPrimaryCommandCount(), uptime: process.uptime() }));
 app.get("/debug-api", (_, res) => res.json(getRuntimeDebugState()));
 app.get("/debug", (_, res) => {
   res.send(`<!DOCTYPE html><html><head><title>${CONFIG.BOT_NAME} Debug Console</title>
@@ -2397,7 +2397,7 @@ async function connectToWA(force = false) {
         unauthorizedStreak = 0;
         const me = sock.user?.id || "unknown";
           console.log(`✅ ${CONFIG.BOT_NAME} Connected → ${me}`);
-          console.log(`🤖 ${CONFIG.BOT_NAME} v${CONFIG.VERSION} ready — ${commands.size}+ commands loaded via ${BAILEYS_PACKAGE}.`);
+          console.log(`🤖 ${CONFIG.BOT_NAME} v${CONFIG.VERSION} ready — ${getPrimaryCommandCount()}+ commands loaded via ${BAILEYS_PACKAGE}.`);
           // ── FIX: set owner name immediately from WhatsApp session pushName ───────────
           // Without this, the bot doesn't know the owner's name until the first
           // incoming message. Now it reads sock.user.name right when the socket
@@ -2526,7 +2526,7 @@ async function connectToWA(force = false) {
               (typeof getOwnerName === "function" ? getOwnerName() : null) ||
               CONFIG.OWNER_NAME || "Owner";
             const ownerPhoneNum = _cleanNum(ownerJid);
-            console.log(`✅ MIAS MDX is active | Owner: ${ownerDisplayName} (+${ownerPhoneNum || "unknown"}) | ${commands.size} commands loaded`);
+            console.log(`✅ MIAS MDX is active | Owner: ${ownerDisplayName} (+${ownerPhoneNum || "unknown"}) | ${getPrimaryCommandCount()} commands loaded`);
             await sock.sendMessage(ownerJid, {
               text: `MIAS is ALIVE\n\nBy \ud835\udc77\ud835\udc79\ud835\udc6c\ud835\udc6a\ud835\udc70\ud835\udc76\ud835\udc7c\ud835\udc7a x`,
             });
@@ -7069,15 +7069,59 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
 //  COMMAND REGISTRY
 // ═══════════════════════════════════════════════════════════════════════════════
 const commands = new Map();
+const aliases = new Map(); // alias -> canonical
+
 function cmd(names, opts, handler) {
   // Defensive: a malformed registration must never abort module evaluation.
   if (typeof names === "object" && names !== null && !Array.isArray(names)) {
     handler = opts; opts = names; names = [];
   }
-  for (const n of [].concat(names || [])) {
-    if (typeof n !== "string" || !n.trim()) { console.warn("[cmd] skipped invalid command name:", n, opts && opts.desc); continue; }
-    commands.set(n.toLowerCase(), { ...opts, handler });
+  const list = [].concat(names || []).map(n => typeof n === "string" ? n.trim().toLowerCase() : "").filter(Boolean);
+  if (!list.length) return;
+  const canonical = list[0];
+  for (let i = 0; i < list.length; i++) {
+    const n = list[i];
+    const isAlias = i > 0;
+    if (isAlias) {
+      aliases.set(n, canonical);
+    } else {
+      aliases.delete(n);
+    }
+    commands.set(n, { ...opts, handler, canonical, isAlias });
   }
+}
+
+function getPrimaryCommandCount() {
+  if (typeof commands === "undefined" || !commands || !commands.entries) return 0;
+  let count = 0;
+  for (const [name, cmdObj] of commands.entries()) {
+    if (!cmdObj?.isAlias) count++;
+  }
+  return count;
+}
+
+function isCommandAlias(name) {
+  if (!name) return false;
+  const lower = name.toLowerCase().trim();
+  const entry = typeof commands !== "undefined" && commands ? commands.get(lower) : null;
+  if (entry && typeof entry.isAlias === "boolean") return entry.isAlias;
+  return aliases.has(lower);
+}
+
+function getCategoryPrimaryCommands(cat) {
+  if (!cat || !cat.cmds) return [];
+  const result = [];
+  const seen = new Set();
+  for (const c of cat.cmds) {
+    if (!c) continue;
+    const lower = c.toLowerCase().trim();
+    const entry = typeof commands !== "undefined" && commands ? commands.get(lower) : null;
+    const canon = (entry?.canonical || aliases.get(lower) || lower).toLowerCase();
+    if (seen.has(canon)) continue;
+    seen.add(canon);
+    result.push(canon);
+  }
+  return result;
 }
 
   try {
@@ -7788,23 +7832,23 @@ const MENU_CATEGORIES = [
   { name: "DEBUG",     emoji: "🐛", cmds: ["test","debug"] },
   { name: "DOWNLOAD",  emoji: "📥", cmds: [
     "ytmp3","ytmp4",
-    "tiktok","tt","ttdl",
-    "twitter","twit","xdl","twitter2","xdl2","twitterdl",
-    "spotify","spot","spotdl","spotifyv2","spotdlv2",
-    "facebook","fb","facebookv2","fbv2","fbdl2","metav2",
-    "instagram","ig","igdl","igstory","instastory","ighighlights","instahighlights",
-    "play","play2","ytv","video","yt","ytdl","videodl","viddl",
-    "snapchat","snap","snapdl","capcut","threads","threadsdl","threadsdl2","threadsv2",
-    "music","song","songs","songdoc","savetube","trending","trending2",
-    "pinterest","pin2","pinsearch","pindl","pindlv2","pinterestdl2","pinterest2","pin2dl",
-    "mediafire","mediafiredl","mfdl","mediafire2","mfdl2",
-    "soundcloud","sc","scdl","apk","reddit","redditdl","pdf","aio","alldl","unzip","extract","zipextract","fileextract",
-    "doods","doodsdl","doodsstream","pinterestv2","web2zip","saveweb2zip","websitezip","sfile","sfiledl","sfilemobi",
-    "douyin","douyindl","dy","rednote","xhs","xiaohongshu",
-    "snack","snackdl","snackvideo","snack2","snackvideo2","tera","terabox","teradl",
-    "tgs","tgsticker","tgstickers","universaldl","dlall","cc","ccvid",
-    "gitclone","gitdl","repodl","rndl","playdoc","playlist","gitclone2","clonegit2",
-    "gdrive2","googledrive2","gofile2","apkdl2","apkdownload2","pastebin"] },
+    "tiktok",
+    "twitter","twitter2",
+    "spotify","spotifyv2",
+    "facebook","facebookv2",
+    "instagram","igstory","ighighlights",
+    "play","play2","video",
+    "snapchat","capcut","threads",
+    "savetube","trending",
+    "pinterest","pinterest2","pinterestv2",
+    "mediafire","mediafire2",
+    "soundcloud","apk","reddit","pdf","aio","unzip",
+    "doods","web2zip","sfile",
+    "douyin","rednote",
+    "snack","snack2","terabox",
+    "tgs",
+    "gitclone","playlist","gitclone2",
+    "gdrive2","gofile2","apkdl2","pastebin"] },
   { name: "ECONOMY",   emoji: "💰", cmds: [
     "money","balance","bal","wallet","bank","bankbal",
     "rank","perks","daily","work","crime","beg","fish","hunt","pay","rob","richest","networth","cooldowns","transactions","achievements","grouplb",
@@ -8590,7 +8634,7 @@ function buildMenu(jid, senderName, sender) {
   const hh12 = String(hh % 12 || 12).padStart(2, "0");
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const timeStr = `${hh12}:${mm} ${ampm} — ${months[ngTime.getMonth()]} ${ngTime.getDate()}`;
-  const totalCmds = commands.size;
+  const totalCmds = getPrimaryCommandCount();
   const ramUsed = (mem.rss / 1048576).toFixed(0);
   const greet = hh < 5 ? "🌙 Late Night" : hh < 12 ? "🌅 Good Morning" : hh < 17 ? "☀️ Good Afternoon" : hh < 21 ? "🌆 Good Evening" : "🌙 Good Night";
 
@@ -8612,7 +8656,7 @@ function buildMenu(jid, senderName, sender) {
   t += `━━━━━「 🗂️ *CATEGORIES* 」━━━━━\n\n`;
   for (const cat of MENU_CATEGORIES) {
     if (cat.adult && (!s.adultMode || s.safeMode)) continue;
-    const count = [...new Set(cat.cmds)].length;
+    const count = getCategoryPrimaryCommands(cat).length;
     t += `  ╰➤ ${cat.emoji} *${cat.name}*  ‹${count} cmds›\n`;
   }
   t += `\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -8674,15 +8718,18 @@ cmd(["allmenu", "fullmenu"], {
     const cmdMap = (typeof commands !== 'undefined' && commands) || globalThis.__MIAS_COMMANDS__ || new Map();
     if (cmdMap && cmdMap.entries) {
       for (const [name, cmdObj] of cmdMap.entries()) {
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
+        if (!name) continue;
+        if (cmdObj?.isAlias || isCommandAlias(name)) continue;
+        const canon = (cmdObj?.canonical || name).toLowerCase();
+        if (seen.has(canon)) continue;
+        seen.add(canon);
         const cat = (cmdObj?.category || "OTHER").toUpperCase();
         if (!grouped[cat]) grouped[cat] = [];
-        grouped[cat].push({ name, desc: cmdObj?.desc || "" });
-        cmdList.push(name);
+        grouped[cat].push({ name: canon, desc: cmdObj?.desc || "" });
+        cmdList.push(canon);
       }
     }
-    const totalCount = cmdList.length || cmdMap.size || 0;
+    const totalCount = cmdList.length || getPrimaryCommandCount() || 0;
     const isPublic = Boolean(
       (typeof getSettings === "function" && (getSettings(jid)?.publicMode || getSettings("bot")?.publicMode)) ||
       (typeof getSetting === "function" && getSetting("publicMode")) ||
@@ -8757,7 +8804,7 @@ cmd(["menu", "help", "commands", ".menu", "start"], { desc: "Show full menu", ca
     const cat = MENU_CATEGORIES.find(c => c.name === catName || c.name.startsWith(catName));
     if (!cat) { await sendReply(sock, msg, `❓ Category *${args[0].toUpperCase()}* not found.\nUse ${CONFIG.PREFIX}menu to see all categories.`); return; }
     if (cat.adult && !getSettings(jid).adultMode) { await sendReply(sock, msg, `🔞 Enable adult mode first with ${CONFIG.PREFIX}setting → option 23.1`); return; }
-    const uniq = [...new Set(cat.cmds)];
+    const uniq = getCategoryPrimaryCommands(cat);
     let text = `${cat.emoji} ━━━ *${cat.name}* ━━━ ${uniq.length} cmds\n\n`;
     for (const c of uniq) {
       const info = commands.get(c);
@@ -9667,7 +9714,7 @@ cmd(["debug", "logs", "console"], { desc: "Live debug snapshot — runtime state
 │ ⚙️  Mode: *${state.workMode || "public"}*${state.privateMode ? " / private gate" : ""}
 │ 🗂️  Menu: ${state.buttonsMode ? "interactive" : "plain text"}
 │ 🔣 Prefix: \`${state.prefix || CONFIG.PREFIX || "."}\`
-│ 📦 Commands: *${state.commandCount || commands.size}*
+│ 📦 Commands: *${state.commandCount || getPrimaryCommandCount()}*
 │ 🧠 Memory: ${state.memoryMb || Math.round(process.memoryUsage().rss/1048576)} MB
 │ ⏱️  Uptime: ${upStr}
 │ 🔑 Session: ${state.credsExists ? "creds.json found" : "❌ missing creds.json"}
@@ -10139,7 +10186,7 @@ cmd("owner", { desc: "Show owner info + contact card", category: "MISC" }, async
 📱 *Number:* +${ownerNum}
 🤖 *Bot Name:* ${CONFIG.BOT_NAME}
 🔖 *Version:* v${CONFIG.VERSION}
-⌨️ *Commands:* ${commands.size}+
+⌨️ *Commands:* ${getPrimaryCommandCount()}+
 🔑 *Prefix:* ${CONFIG.PREFIX}
 👤 *Sudo Users:* ${sudoList.length > 0 ? sudoList.length : "None"}
 
@@ -14349,7 +14396,7 @@ cmd("botinfo", { desc: "Bot information — stats, host, commands", category: "I
 👑 *Owner:* ${CONFIG.OWNER_NAME}
 📌 *Version:* v${CONFIG.VERSION}
 🔑 *Prefix:* ${CONFIG.PREFIX}
-⌨️ *Total Commands:* ${commands.size}+
+⌨️ *Total Commands:* ${getPrimaryCommandCount()}+
 ⏱️ *Uptime:* ${up}
 👤 *Sudo Users:* ${sudoCount || "None"}
 
@@ -14372,7 +14419,7 @@ ${topCats}
     } catch { await sendReply(sock, msg, infoText); }
   } else { await sendReply(sock, msg, infoText); }
   try {
-    await sendCTAButtons(sock, msg.key.remoteJid, msg, `⚡ ${CONFIG.BOT_NAME} v${CONFIG.VERSION} — ${commands.size}+ Commands`, [
+    await sendCTAButtons(sock, msg.key.remoteJid, msg, `⚡ ${CONFIG.BOT_NAME} v${CONFIG.VERSION} — ${getPrimaryCommandCount()}+ Commands`, [
       { type: "url",  text: "🌐 Bot Website",    url: CONFIG.BOT_URL || `https://wa.me/${CONFIG.OWNER_NUMBER || ""}` },
       { type: "url",  text: "💬 Contact Owner",  url: `https://wa.me/${CONFIG.OWNER_NUMBER || ""}` },
       { type: "copy", text: "📋 Copy Bot Name",  value: `${CONFIG.BOT_NAME} v${CONFIG.VERSION}`, id: "botinfo_name" },
@@ -15153,7 +15200,7 @@ cmd(["creator", "dev", "developer", "botcreator"], { desc: "Show bot creator inf
 📱 Contact : wa.me/${creatorNum}
 🤖 Bot     : *${CONFIG.BOT_NAME}*
 🔖 Version : *v${CONFIG.VERSION}*
-⚙️ Commands: *${commands.size}+*
+⚙️ Commands: *${getPrimaryCommandCount()}+*
 
 💡 *About MIAS MDX:*
 _A powerful WhatsApp automation bot with 500+ commands, AI-powered chat, media downloads, group management tools, and much more._
@@ -17446,7 +17493,7 @@ cmd("restart", { desc: "Restart bot — saves data first", category: "OWNER", ow
 ━━━━━━━━━━━━━━━━━━━━
 
 ⏱️ *Session Uptime:* ${up}
-⌨️ *Commands Loaded:* ${commands.size}
+⌨️ *Commands Loaded:* ${getPrimaryCommandCount()}
 💾 *Saving data...*
 
 🟡 Bot will be back online in a few seconds.`);
@@ -17613,7 +17660,7 @@ cmd(["eval", "shell", "sysinfo"], { desc: "Owner debug command", category: "OWNE
 
 ⏱️ *System Uptime:* ${_upSys}h
 🤖 *Bot Uptime:* ${_upBot}
-⌨️ *Commands:* ${commands.size}+
+⌨️ *Commands:* ${getPrimaryCommandCount()}+
 🔑 *Prefix:* ${CONFIG.PREFIX}
 📛 *Bot:* ${CONFIG.BOT_NAME} v${CONFIG.VERSION}
 
@@ -17740,7 +17787,7 @@ cmd("deleteplugin", { desc: "Delete a plugin", category: "CREATOR", ownerOnly: t
 });
 cmd("test", { desc: "Test bot", category: "DEBUG" }, async (sock, msg) => {
   await react(sock, msg, "✅");
-  await sendReply(sock, msg, `✅ *Bot is working perfectly!*\n\n🚀 Speed: Fast\n💬 Commands: ${commands.size}\n🌟 Status: All systems go!`);
+  await sendReply(sock, msg, `✅ *Bot is working perfectly!*\n\n🚀 Speed: Fast\n💬 Commands: ${getPrimaryCommandCount()}\n🌟 Status: All systems go!`);
 });
 // ═══════════════════════════════════════════════════════════════════════════
 // CREATOR COMMANDS — writefile · cleandb · setemoji · removeval · listeval · getcmd
@@ -18479,7 +18526,7 @@ cmd(["checkupdate","update"], { desc: "Check for updates + show bot health repor
 ━━━━━━━━━━━━━━━━━━━━
 📊 *RUNTIME STATS*
 ⏱️ *Uptime:* ${up}
-⌨️ *Commands:* ${commands.size}+
+⌨️ *Commands:* ${getPrimaryCommandCount()}+
 🧠 *RAM Used:* ${ram}MB
 👤 *Sudo Users:* ${sudoCount}
 🚫 *Banned Users:* ${banCount}
@@ -21139,7 +21186,7 @@ cmd("addcase", { desc: "Register a new command at runtime — .addcase name | ca
     // v4.9.5: persist source so it survives restarts
     _runtimeCmdSource.set(name, { name, category: usedCat, desc, code: handlerCode, wasWrapped });
     _saveRuntimeCmds();
-    await sendReply(sock, msg, `✅ *Command registered!*\n\n• Name: *${name}*\n• Category: *${usedCat}*\n• Desc: ${desc}\n• Total commands now: *${commands.size}*\n• 💾 Saved to disk — survives restarts!\n\nIt is live in the menu now. Try:\n  ${CONFIG.PREFIX}${name}\n  ${CONFIG.PREFIX}menu ${usedCat.toLowerCase()}\n  ${CONFIG.PREFIX}dropcase ${name}`);
+    await sendReply(sock, msg, `✅ *Command registered!*\n\n• Name: *${name}*\n• Category: *${usedCat}*\n• Desc: ${desc}\n• Total commands now: *${getPrimaryCommandCount()}*\n• 💾 Saved to disk — survives restarts!\n\nIt is live in the menu now. Try:\n  ${CONFIG.PREFIX}${name}\n  ${CONFIG.PREFIX}menu ${usedCat.toLowerCase()}\n  ${CONFIG.PREFIX}dropcase ${name}`);
   } catch (e) {
     await sendReply(sock, msg, `❌ addcase register failed: ${e?.message || e}`);
   }
@@ -44097,9 +44144,12 @@ try {
   const _cardHandler = (typeof _p2ResolveCardRegistrar === "function") ? _p2ResolveCardRegistrar() : null;
   if (_cardHandler) {
     for (const n of ["play", "music", "song"]) {
+      const isAlias = n !== "play";
       const e = commands.get(n) || { desc: "Play song — pick a format from the card", category: "DOWNLOAD" };
       e.handler = _cardHandler; e._origHandler = _cardHandler;
+      e.isAlias = isAlias; e.canonical = "play";
       commands.set(n, e);
+      if (isAlias) aliases.set(n, "play");
     }
   }
 } catch (e) { console.log("[fix] play re-register:", e?.message); }

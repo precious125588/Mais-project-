@@ -66,7 +66,13 @@ function _getMode() {
 function _getCmdCount() {
   try {
     if (typeof globalThis.__MIAS_CMD_COUNT__ === "number") return globalThis.__MIAS_CMD_COUNT__;
-    if (typeof globalThis.__MIAS_COMMANDS__ === "object") return globalThis.__MIAS_COMMANDS__.size;
+    if (typeof globalThis.__MIAS_COMMANDS__ === "object" && globalThis.__MIAS_COMMANDS__?.entries) {
+      let count = 0;
+      for (const [name, cmdObj] of globalThis.__MIAS_COMMANDS__.entries()) {
+        if (!cmdObj?.isAlias) count++;
+      }
+      return count || globalThis.__MIAS_COMMANDS__.size;
+    }
   } catch {}
   return getTotalCommandCount();
 }
