@@ -7381,24 +7381,6 @@ cmd(["thankyou2","thanks2"], { desc: "Thank you message", category: "FUN" }, asy
 
 // ─────────── DOWNLOAD COMMANDS ─────────────────────────────────────────────
 
-cmd(["tiktokv4","ttv4"], { desc: "TikTok Downloader V4", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const url = args.join(" ");
-  if (!_paIsUrl(url)) return await sendReply(sock, msg, `🎵 *TikTok V4*\n\nUsage: ${CONFIG.PREFIX}tiktokv4 <tiktok-url>`);
-  await react(sock, msg, "🎵");
-  await sendReply(sock, msg, '⏳ Downloading TikTok (v4)...');
-  try {
-    const r = await _paGet('/api/download/tiktokdlv4', { url });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const videoUrl = res?.video || res?.nowm || res?.url;
-      if (videoUrl) {
-        await sock.sendMessage(msg.key.remoteJid, { video: { url: videoUrl }, mimetype: 'video/mp4', caption: '🎵 *TikTok V4*' }, { quoted: msg });
-        return await react(sock, msg, '✅');
-      }
-    }
-    await sendReply(sock, msg, `❌ TikTok V4 failed.`);
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
 
 cmd(["fbv2","facebookv2","metav2"], { desc: "Facebook Video Downloader V2", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const url = args.join(" ");
@@ -7554,65 +7536,7 @@ cmd(["spotifyv2","spotdlv2"], { desc: "Spotify Downloader (NexRay primary) — .
     await react(sock, msg, '❌');
   }
 });
-cmd(["ytmp3v2","mp3v2","ytaudiov2"], { desc: "YouTube MP3 via Prince API", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) return await sendReply(sock, msg, `🎵 *YouTube MP3 V2*\n\nUsage: ${CONFIG.PREFIX}ytmp3v2 <url or song name>`);
-  await react(sock, msg, "🎵");
-  await sendReply(sock, msg, '⏳ Downloading YouTube audio...');
-  try {
-    const isUrl = _paIsUrl(query);
-    const r = await _paGet('/api/download/mp3', { url: isUrl ? query : undefined, q: !isUrl ? query : undefined });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const audioUrl = res?.url || res?.audio || res?.download;
-      const title = res?.title || 'YouTube Audio';
-      if (audioUrl) {
-        const buf = await _paBuf(audioUrl, 60000);
-        await sock.sendMessage(msg.key.remoteJid, { audio: buf, mimetype: 'audio/mpeg', ptt: false, fileName: `${title}.mp3` }, { quoted: msg });
-        return await react(sock, msg, '✅');
-      }
-    }
-    const r2 = await _paGet('/api/download/yta', { q: query, url: _paIsUrl(query) ? query : undefined });
-    if (r2.ok && r2.data?.success && r2.data.result) {
-      const res2 = r2.data.result;
-      const audioUrl2 = res2?.url || res2?.audio;
-      if (audioUrl2) {
-        const buf2 = await _paBuf(audioUrl2, 60000);
-        return await sock.sendMessage(msg.key.remoteJid, { audio: buf2, mimetype: 'audio/mpeg', ptt: false, fileName: 'audio.mp3' }, { quoted: msg });
-      }
-    }
-    await sendReply(sock, msg, '❌ YouTube MP3 V2 failed. Try a direct YouTube URL.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
 
-cmd(["ytmp4v2","mp4v2","ytvideov2"], { desc: "YouTube MP4 via Prince API", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) return await sendReply(sock, msg, `🎬 *YouTube MP4 V2*\n\nUsage: ${CONFIG.PREFIX}ytmp4v2 <youtube-url>`);
-  await react(sock, msg, "🎬");
-  await sendReply(sock, msg, '⏳ Downloading YouTube video...');
-  try {
-    const isUrl = _paIsUrl(query);
-    const r = await _paGet('/api/download/mp4', { url: isUrl ? query : undefined, q: !isUrl ? query : undefined });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const videoUrl = res?.url || res?.video || res?.download;
-      const title = res?.title || 'YouTube Video';
-      if (videoUrl) {
-        await sock.sendMessage(msg.key.remoteJid, { video: { url: videoUrl }, mimetype: 'video/mp4', caption: `🎬 *${title}*` }, { quoted: msg });
-        return await react(sock, msg, '✅');
-      }
-    }
-    const r2 = await _paGet('/api/download/dlmp4', { url: isUrl ? query : undefined, q: !isUrl ? query : undefined });
-    if (r2.ok && r2.data?.success && r2.data.result) {
-      const res2 = r2.data.result;
-      const videoUrl2 = res2?.url || res2?.video;
-      if (videoUrl2) {
-        return await sock.sendMessage(msg.key.remoteJid, { video: { url: videoUrl2 }, mimetype: 'video/mp4', caption: `🎬 *${res2?.title || 'YouTube Video'}*` }, { quoted: msg });
-      }
-    }
-    await sendReply(sock, msg, '❌ YouTube MP4 V2 failed. Try a direct YouTube URL.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
 
 cmd(["mediafire2","mfdl2"], { desc: "MediaFire Direct Link", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const url = args.join(" ");
@@ -7863,8 +7787,8 @@ const MENU_CATEGORIES = [
   { name: "CREATOR",   emoji: "👑", cmds: ["eval","removeval","listeval","shell","getcmd","install","deleteplugin","listplugins","writefile","cleandb","sysinfo","setemoji","addcase","dropcase"] },
   { name: "DEBUG",     emoji: "🐛", cmds: ["test","debug"] },
   { name: "DOWNLOAD",  emoji: "📥", cmds: [
-    "ytmp3","ytmp4","ytmp3v2","mp3v2","ytaudiov2","ytmp4v2","mp4v2","ytvideov2",
-    "tiktok","tt","tiktokv2","tiktokv3","tiktokv4","tiktokvideoonly","tiktokslide","tikv2","tikv3","ttv2","ttv3","ttv4","ttdl","ttnomark","ttslide","ttslidedl","ttvideoonly",
+    "ytmp3","ytmp4",
+    "tiktok","tt","ttdl",
     "twitter","twit","xdl","twitter2","xdl2","twitterdl",
     "spotify","spot","spotdl","spotifyv2","spotdlv2",
     "facebook","fb","facebookv2","fbv2","fbdl2","metav2",
@@ -10526,9 +10450,30 @@ async function _p2AudioBuf(meta) {
   // track when the card was built — no second lookup, no drift.
   if (meta.dlUrl) tries.push(async () => meta.dlUrl);
   if (ytUrl) tries.push(async () => {
-    const r = await dcGet('/download/ytmp3', { url: ytUrl }, 30000);
-    const d = r && r.ok ? extractDcPlay(r.data) : null;
-    return d ? (d.dlUrl || d.url || null) : null;
+    // Enhanced DavidCyril ytmp3 endpoints (from dcytmp3)
+    const _dcMp3Eps = ['/download/ytmp3', '/download/ytmp33', '/download/ytmp3v2', '/youtube/mp3', '/youtube/mp33'];
+    for (const _ep of _dcMp3Eps) {
+      try {
+        const r = await dcGet(_ep, { url: ytUrl }, 30000);
+        const d = r && r.ok ? extractDcPlay(r.data) : null;
+        if (d && (d.dlUrl || d.url)) return d.dlUrl || d.url;
+      } catch {}
+    }
+    return null;
+  });
+  if (ytUrl || meta.title) tries.push(async () => {
+    // Prince API audio endpoints (from ytmp3v2)
+    for (const _ep of ['/api/download/mp3', '/api/download/yta']) {
+      try {
+        const r = await _paGet(_ep, { url: ytUrl, q: meta.title });
+        if (r && r.ok && r.data && r.data.success && r.data.result) {
+          const res = r.data.result;
+          const dl = res.download || res.url || res.audio;
+          if (dl) return dl;
+        }
+      } catch {}
+    }
+    return null;
   });
   if (meta.title) tries.push(async () => {
     const r = await dcGet('/play', { query: meta.title }, 30000);
@@ -18756,9 +18701,29 @@ cmd(["ytmp4","ytvideo","yt4","ytv"], { desc: "Download YouTube video as mp4", ca
 
     // 0. PRIMARY: DavidCyril
     async () => {
-      const r = await dcGet("/download/ytmp4", { url }, 40000);
-      const d = r?.ok ? extractDcPlay(r.data) : null;
-      if (d?.dlUrl) return { dl: d.dlUrl, title: d.title || "YouTube Video", src: "davidcyril" };
+      // Enhanced DavidCyril ytmp4 endpoints (from dcytmp4)
+      const _dcMp4Eps = ["/download/ytmp4", "/youtube/mp4", "/download/ytmp444", "/youtube/mp444"];
+      for (const _ep of _dcMp4Eps) {
+        try {
+          const r = await dcGet(_ep, { url }, 40000);
+          const d = r?.ok ? extractDcPlay(r.data) : null;
+          if (d?.dlUrl) return { dl: d.dlUrl, title: d.title || "YouTube Video", src: "davidcyril" };
+        } catch {}
+      }
+    },
+
+    // Prince API (from ytmp4v2)
+    async () => {
+      for (const _ep of ["/api/download/mp4", "/api/download/dlmp4"]) {
+        try {
+          const r = await _paGet(_ep, { url, q: quality });
+          if (r?.ok && r.data?.success && r.data.result) {
+            const res = r.data.result;
+            const dl = res?.download || res?.url || res?.video;
+            if (dl) return { dl, title: res.title || "YouTube Video", src: "prince" };
+          }
+        } catch {}
+      }
     },
 
     // 1. Cobalt (best quality support — passes exact quality number)
@@ -23244,6 +23209,11 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
           async () => (await dcGet("/download/tiktok", { url: ttPick.url }, 30000)).data,
           async () => (await dcGet("/download/tiktokv2", { url: ttPick.url }, 30000)).data,
           async () => (await dcGet("/download/tiktokv3", { url: ttPick.url }, 30000)).data,
+          // Integrated fallback providers (from tiktokv2, tiktokv3, ttvideoonly, tiktokv4)
+          async () => (await prexzyGet("/download/tiktokV2", { url: ttPick.url }, 30000)).data,
+          async () => (await prexzyGet("/download/tiktokV3", { url: ttPick.url }, 30000)).data,
+          async () => (await prexzyGet("/download/tiktokvideo", { url: ttPick.url }, 30000)).data,
+          async () => (await _paGet("/api/download/tiktokdlv4", { url: ttPick.url })).data?.result,
         ];
         for (const provider of providers) {
           try {
@@ -24888,6 +24858,26 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
         title = title || _sfd?.title;
       }
     } catch {}
+  }
+
+  // ── DC AIO fallback (from dcaio) ──
+  if (!dlUrl) {
+    for (const _ep of ["/download/aio", "/download/aiov2", "/download/aiov3"]) {
+      try {
+        const _dcRes = await dcGet(_ep, { url }, 30000);
+        const _dcd = _dcRes.data?.data || _dcRes.data?.result || _dcRes.data;
+        if (Array.isArray(_dcd)) {
+          const _f = _dcd[0];
+          dlUrl = _f?.url || _f?.download || _f?.video || _f?.link;
+        } else if (_dcd) {
+          dlUrl = _dcd?.video || _dcd?.url || _dcd?.download || _dcd?.audio || _dcd?.link;
+        }
+        if (dlUrl) {
+          title = title || _dcd?.title;
+          break;
+        }
+      } catch {}
+    }
   }
 
   // ── Cobalt (YouTube, Twitter, many sites) ──
@@ -26824,114 +26814,12 @@ cmd(["terabox","tera","teradl"], { desc: "Download Terabox file — .terabox <ur
   });
 
 // ── TikTok V2 ────────────────────────────────────────────────────
-cmd(["tiktokv2","ttv2","tikv2"], { desc: "Download TikTok V2 — .tiktokv2 <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-    if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}tiktokv2 <url>*`); return; }
-    await react(sock, msg, "🎵");
-    const url = args[0];
-    const jid = msg.key.remoteJid;
-    const stMsg = await sock.sendMessage(jid, { text: `🎵 *MIAS MDX — TikTok V2*\n\n⬡ Fetching media...\n⬡ Downloading...\n⬡ Sending...` }, { quoted: msg });
-    const stKey = stMsg.key;
-    try {
-      const r = await prexzyGet("/download/tiktokV2", { url }, 35000);
-      const d = r.data;
-      const videoUrl = d?.data?.play || d?.data?.video || d?.data?.url || d?.url || d?.video;
-      const title = d?.data?.title || d?.title || "TikTok V2";
-      if (!r.ok || !videoUrl) { await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V2*\n\n✖ Could not download. Check the URL.`); return; }
-      await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V2*\n\n⬢ Fetching... ✅\n⬡ Downloading...\n⬡ Sending...`);
-      const buf = Buffer.from((await axios.get(videoUrl, { responseType: "arraybuffer", timeout: 90000 })).data);
-      const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
-      await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V2*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
-      const cap = `🎵 *${title}*${sz}\n🌐 TikTok V2`;
-      try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `tiktokv2_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
-      await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V2*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${title}${sz}`);
-      await react(sock, msg, "✅");
-    } catch(e) { await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V2*\n\n❌ Error: ${e.message}`); }
-  });
 
 // ── TikTok V3 ────────────────────────────────────────────────────
-cmd(["tiktokv3","ttv3","tikv3"], { desc: "Download TikTok V3 — .tiktokv3 <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-    if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}tiktokv3 <url>*`); return; }
-    await react(sock, msg, "🎵");
-    const url = args[0];
-    const jid = msg.key.remoteJid;
-    const stMsg = await sock.sendMessage(jid, { text: `🎵 *MIAS MDX — TikTok V3*\n\n⬡ Fetching media...\n⬡ Downloading...\n⬡ Sending...` }, { quoted: msg });
-    const stKey = stMsg.key;
-    try {
-      const r = await prexzyGet("/download/tiktokV3", { url }, 35000);
-      const d = r.data;
-      const videoUrl = d?.data?.play || d?.data?.video || d?.data?.url || d?.url || d?.video;
-      const title = d?.data?.title || d?.title || "TikTok V3";
-      if (!r.ok || !videoUrl) { await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V3*\n\n✖ Could not download. Check the URL.`); return; }
-      await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V3*\n\n⬢ Fetching... ✅\n⬡ Downloading...\n⬡ Sending...`);
-      const buf = Buffer.from((await axios.get(videoUrl, { responseType: "arraybuffer", timeout: 90000 })).data);
-      const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
-      await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V3*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
-      const cap = `🎵 *${title}*${sz}\n🌐 TikTok V3`;
-      try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `tiktokv3_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
-      await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V3*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${title}${sz}`);
-      await react(sock, msg, "✅");
-    } catch(e) { await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — TikTok V3*\n\n❌ Error: ${e.message}`); }
-  });
 
 // ── TikTok Video Only (no watermark) ─────────────────────────────
-cmd(["ttvideoonly","tiktokvideoonly","ttnomark"], { desc: "Download TikTok (Video Only) — .ttvideoonly <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-    if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ttvideoonly <url>*`); return; }
-    await react(sock, msg, "🎥");
-    const url = args[0];
-    const jid = msg.key.remoteJid;
-    const stMsg = await sock.sendMessage(jid, { text: `🎥 *MIAS MDX — TikTok (Video Only)*\n\n⬡ Fetching media...\n⬡ Downloading...\n⬡ Sending...` }, { quoted: msg });
-    const stKey = stMsg.key;
-    try {
-      const r = await prexzyGet("/download/tiktokvideo", { url }, 35000);
-      const d = r.data;
-      const videoUrl = d?.data?.play || d?.data?.video || d?.data?.url || d?.url || d?.video;
-      const title = d?.data?.title || d?.title || "TikTok (Video Only)";
-      if (!r.ok || !videoUrl) { await editMessage(sock, jid, stKey, `🎥 *MIAS MDX — TikTok (Video Only)*\n\n✖ Could not download. Check the URL.`); return; }
-      await editMessage(sock, jid, stKey, `🎥 *MIAS MDX — TikTok (Video Only)*\n\n⬢ Fetching... ✅\n⬡ Downloading...\n⬡ Sending...`);
-      const buf = Buffer.from((await axios.get(videoUrl, { responseType: "arraybuffer", timeout: 90000 })).data);
-      const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
-      await editMessage(sock, jid, stKey, `🎥 *MIAS MDX — TikTok (Video Only)*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
-      const cap = `🎥 *${title}*${sz}\n🌐 TikTok (Video Only)`;
-      try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `ttvideoonly_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
-      await editMessage(sock, jid, stKey, `🎥 *MIAS MDX — TikTok (Video Only)*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${title}${sz}`);
-      await react(sock, msg, "✅");
-    } catch(e) { await editMessage(sock, jid, stKey, `🎥 *MIAS MDX — TikTok (Video Only)*\n\n❌ Error: ${e.message}`); }
-  });
 
 // ── TikTok Slideshow ─────────────────────────────────────────────
-cmd(["tiktokslide","ttslide","ttslidedl"], { desc: "Download TikTok slideshow images — .tiktokslide <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-    if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}tiktokslide <tiktok_slideshow_url>*`); return; }
-    await react(sock, msg, "📸");
-    const url = args[0];
-    const jid = msg.key.remoteJid;
-    const stMsg = await sock.sendMessage(jid, { text: `📸 *MIAS MDX — TikTok Slideshow*\n\n⬡ Fetching slides...\n⬡ Downloading images...\n⬡ Sending...` }, { quoted: msg });
-    const stKey = stMsg.key;
-    try {
-      const r = await prexzyGet("/download/tiktokslide", { url }, 35000);
-      const d = r.data;
-      const images = d?.data?.images || d?.images || d?.data || [];
-      const title = d?.data?.title || d?.title || "TikTok Slideshow";
-      if (!r.ok || !Array.isArray(images) || !images.length) {
-        await editMessage(sock, jid, stKey, `📸 *MIAS MDX — TikTok Slideshow*\n\n✖ Could not get slides. Make sure it's a slideshow post.`);
-        return;
-      }
-      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — TikTok Slideshow*\n\n⬢ Fetching slides... ✅ (${images.length} found)\n⬡ Downloading & sending images...`);
-      let sent = 0;
-      for (const imgUrl of images.slice(0, 10)) {
-        const iUrl = typeof imgUrl === "string" ? imgUrl : imgUrl?.url;
-        if (!iUrl) continue;
-        try {
-          const buf = Buffer.from((await axios.get(iUrl, { responseType: "arraybuffer", timeout: 30000 })).data);
-          await sock.sendMessage(jid, { image: buf, caption: `📸 Slide ${++sent}/${Math.min(images.length, 10)} — *${title}*` }, { quoted: msg });
-        } catch {}
-      }
-      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — TikTok Slideshow*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${sent} slide(s) sent — *${title}*`);
-      await react(sock, msg, "✅");
-    } catch(e) { await editMessage(sock, jid, stKey, `📸 *MIAS MDX — TikTok Slideshow*\n\n❌ Error: ${e.message}`); }
-  });
 
 // ── Facebook V2 ──────────────────────────────────────────────────
 // ── RedNote / Xiaohongshu ────────────────────────────────────────
@@ -30085,86 +29973,8 @@ _Open the link in your browser to download._`);
   } catch(e) { await editMessage(sock, jid, st.key, `❌ Error: ${e.message}`); }
 });
 
-cmd(["dcytmp3","ytmp3dc","youtubeaudiodc"], { desc: "YouTube to MP3 via DC — .dcytmp3 <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}dcytmp3 <YouTube URL>`); return; }
-  await react(sock, msg, "🎵");
-  const url = args[0];
-  const jid = msg.key.remoteJid;
-  const st = await sock.sendMessage(jid, { text: `🎵 *YouTube MP3 (DC)*\n\n⬡ Fetching...\n⬡ Extracting audio...` }, { quoted: msg });
-  try {
-    let dlUrl = null, title = "YouTube Audio";
-    const _eps = ["/download/ytmp3", "/download/ytmp33", "/download/ytmp3v2", "/youtube/mp3", "/youtube/mp33"];
-    for (const ep of _eps) {
-      if (dlUrl) break;
-      try { const r = await dcGet(ep, { url }, 30000); const d = r.data?.data || r.data?.result || r.data; dlUrl = d?.download || d?.url || d?.audio || d?.mp3 || (typeof d === "string" && d.startsWith("http") ? d : null); if (d?.title) title = d.title; } catch {}
-    }
-    if (!dlUrl) { await editMessage(sock, jid, st.key, `❌ Could not extract audio.`); return; }
-    const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000 })).data);
-    await sock.sendMessage(jid, { audio: buf, mimetype: "audio/mpeg", ptt: false, fileName: `${title}.mp3` }, { quoted: msg });
-    await editMessage(sock, jid, st.key, `🎵 *YT MP3 (DC)* — Done! ✅`);
-    await react(sock, msg, "✅");
-  } catch(e) { await editMessage(sock, jid, st.key, `❌ Error: ${e.message}`); }
-});
 
-cmd(["dcytmp4","ytmp4dc","youtubevideodl"], { desc: "YouTube to MP4 via DC — .dcytmp4 <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}dcytmp4 <YouTube URL>`); return; }
-  await react(sock, msg, "🎬");
-  const url = args[0];
-  const jid = msg.key.remoteJid;
-  const st = await sock.sendMessage(jid, { text: `🎬 *YouTube MP4 (DC)*\n\n⬡ Fetching...\n⬡ Extracting video...` }, { quoted: msg });
-  try {
-    let dlUrl = null, title = "YouTube Video";
-    const _eps = ["/download/ytmp4", "/youtube/mp4", "/download/ytmp444", "/youtube/mp444"];
-    for (const ep of _eps) {
-      if (dlUrl) break;
-      try { const r = await dcGet(ep, { url }, 40000); const d = r.data?.data || r.data?.result || r.data; dlUrl = d?.download || d?.url || d?.video || d?.mp4 || (typeof d === "string" && d.startsWith("http") ? d : null); if (d?.title) title = d.title; } catch {}
-    }
-    if (!dlUrl) { await editMessage(sock, jid, st.key, `❌ Could not extract video.`); return; }
-    const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity })).data);
-    const sz = ` (${(buf.length/1048576).toFixed(1)}MB)`;
-    const cap = `🎬 *YouTube Video*${sz}`;
-    try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-    catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `${title}.mp4`, caption: cap }, { quoted: msg }); }
-    await editMessage(sock, jid, st.key, `🎬 *YT MP4 (DC)* — Done!${sz} ✅`);
-    await react(sock, msg, "✅");
-  } catch(e) { await editMessage(sock, jid, st.key, `❌ Error: ${e.message}`); }
-});
 
-cmd(["dcaio","aiodl","allinone"], { desc: "All-in-one downloader via DC — .dcaio <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}dcaio <url>\n\nSupports: TikTok, YouTube, Instagram, Facebook, Twitter, Pinterest, and more.`); return; }
-  await react(sock, msg, "🔽");
-  const url = args[0];
-  const jid = msg.key.remoteJid;
-  const st = await sock.sendMessage(jid, { text: `🔽 *All-in-One DL (DC)*\n\n⬡ Fetching media...` }, { quoted: msg });
-  try {
-    let dlUrl = null, isVid = false, title = "media";
-    const _eps = ["/download/aio", "/download/aiov2", "/download/aiov3"];
-    for (const ep of _eps) {
-      if (dlUrl) break;
-      try {
-        const r = await dcGet(ep, { url }, 35000);
-        const d = r.data?.data || r.data?.result || r.data;
-        if (Array.isArray(d)) { const first = d[0]; dlUrl = first?.url || first?.download; isVid = !!(first?.type?.includes("video")); }
-        else { dlUrl = d?.video || d?.url || d?.download || d?.audio; isVid = !!(d?.video || d?.type?.includes("video")); }
-        if (d?.title) title = d.title;
-      } catch {}
-    }
-    if (!dlUrl) { await editMessage(sock, jid, st.key, `❌ Could not download from that URL.`); return; }
-    const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000 })).data);
-    const sz = ` (${(buf.length/1048576).toFixed(1)}MB)`;
-    if (isVid || dlUrl.includes(".mp4")) {
-      const cap = `🎬 *${title}*${sz}`;
-      try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `${title}.mp4`, caption: cap }, { quoted: msg }); }
-    } else {
-      const mime = dlUrl.includes(".jpg") || dlUrl.includes(".jpeg") || dlUrl.includes(".png") ? "image" : "audio";
-      if (mime === "image") await sock.sendMessage(jid, { image: buf, caption: `🖼️ *${title}*` }, { quoted: msg });
-      else await sock.sendMessage(jid, { audio: buf, mimetype: "audio/mpeg", ptt: false }, { quoted: msg });
-    }
-    await editMessage(sock, jid, st.key, `🔽 *All-in-One DL* — Done!${sz} ✅`);
-    await react(sock, msg, "✅");
-  } catch(e) { await editMessage(sock, jid, st.key, `❌ Error: ${e.message}`); }
-});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BLOCK 5 — DAVIDCYRIL API — SEARCH / STALK
@@ -30545,9 +30355,6 @@ cmd(["dcapi","dcapis","dchelp"], { desc: "List all DavidCyril API commands", cat
 • *${P}dcpinterest* — Pinterest image/video
 • *${P}dcsoundcloud* — SoundCloud track
 • *${P}dcterabox* — Terabox file link
-• *${P}dcytmp3* — YouTube → MP3
-• *${P}dcytmp4* — YouTube → MP4
-• *${P}dcaio* — All-in-one downloader
 
 🔍 *SEARCH / STALK*
 • *${P}dcytsearch* — YouTube search
@@ -42237,7 +42044,6 @@ try {
 
   // ── register (later registrations win in this command map) ───────────────
   // disabled by v21 dedupe: late JINX .play override removed
-cmd(["play_jinx_disabled", "music_jinx_disabled", "song_jinx_disabled"], { desc: "Legacy disabled", category: "DOWNLOAD" }, _JXPlayCard);
   for (const _jn of ["gst_jinx_disabled", "gstatus_jinx_disabled", "groupstatus_jinx_disabled"]) cmd([_jn], { desc: "Legacy disabled", category: "GROUP" }, _JXGst);
 
   console.log("[JINX] fixes active: ping, play card (no emoji numbers, real author, media-only reply), gst confirmation");

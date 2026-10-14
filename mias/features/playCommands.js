@@ -157,7 +157,7 @@ const _p2PlayCardImpl = async (sock, msg, args) => {
 
 // The .play command entry (kept, so help/menu listings still show .play).
 // disabled by v21 dedupe: legacy .play registration removed in favor of precious-fixes-v21
-cmd(["play_legacy_disabled", "music_legacy_disabled", "song_legacy_disabled"], { desc: "Legacy disabled", category: "DOWNLOAD" }, _p2PlayCardImpl);
+// play_legacy_disabled removed during consolidation
 
 // Registrar used by the late re-registration block near the end of the file,
 // which is what actually makes the card handler win over older overrides.

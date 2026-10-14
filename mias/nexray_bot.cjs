@@ -1765,7 +1765,7 @@ module.exports = function registerNexrayCmds(cmd, CONFIG, sendReply, react, down
     } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); await react(sock, msg, '❌'); }
   });
 
-  cmd(['ytmp4'], { desc: 'Download YouTube as MP4', category: 'Nexray-Downloader' }, async (sock, msg, args) => {
+  cmd(['nxytmp4'], { desc: 'Download YouTube as MP4 (NexRay)', category: 'Nexray-Downloader' }, async (sock, msg, args) => {
     if (!args.length) return _noArgs(sock, msg, 'ytmp4 <url>');
     await react(sock, msg, '🎬');
     try {
