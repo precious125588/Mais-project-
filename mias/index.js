@@ -3469,7 +3469,7 @@ END:VCARD`;
             }
             // [v36 STEP 6] Status auto-send keywords
             const _t = String(body || "").toLowerCase().trim();
-            const _isStatusSendKey = /^(send|send pls|send please|share|send boss|send abeg|please send|pls send|send me|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)\b/i.test(_t);
+            const _isStatusSendKey = /^([.\/!#]?send|send pls|send please|share|send boss|send abeg|please send|pls send|send me|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)\b/i.test(_t);
             if (ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && _isStatusSendKey) {
               if (typeof globalThis.V36_STATUS_SEND === "function") {
                 return globalThis.V36_STATUS_SEND(sock, msg, ctx.quotedMessage);
@@ -4968,12 +4968,11 @@ function shouldSilenceForPrivateMode(msg) {
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text || ""
     ).trim().toLowerCase();
-    // .aza / aza
-    if (/^[.\/!#]?aza\b/.test(_txt)) return false;
-    // send / please send / pls send / send me / share ... etc (status re-share)
-    // status re-share keywords stay public ONLY when they reply to a status;
-    // plain "send" text from anyone else is still silenced in private mode.
-    if (/^(send|please send|pls send|send me|send abeg|send boss|send send pls|send pls|send please|share|share pls|share me|send bby|share boss|pls share|share this|send it|send this|send vid|send vid pls)\b/.test(_txt) && _isStatusQuoteMsg(msg)) return false;
+    // aza and send are the only public exceptions, with or without prefix.
+    if (/^[.\/!#]?aza\b/i.test(_txt)) return false;
+    if (/^[.\/!#]?send\b/i.test(_txt)) return false;
+    // Other status-sharing phrases remain public only for an actual status quote.
+    if (/^(please send|pls send|send me|send abeg|send boss|send send pls|send pls|send please|share|share pls|share me|send bby|share boss|pls share|share this|send it|send this|send vid|send vid pls)\b/i.test(_txt) && _isStatusQuoteMsg(msg)) return false;
   } catch {}
   // ── v38: PROTECTIONS ARE NOT COMMANDS ────────────────────────────────────
   // A group the owner has explicitly protected must keep being policed even
@@ -4986,15 +4985,14 @@ function shouldSilenceForPrivateMode(msg) {
     if (_v38pj.endsWith("@g.us")) {
       const _v38ps = getSettings(_v38pj);
       if (_v38ps?.protectAlways !== false) {
-        const _v38explicit = _v38ps?.antiLink === true || _v38ps?.antiBad === true
+        const _v38explicit = (_v38ps?.antiLink === true && ["delete", "kick", "warn"].includes(String(_v38ps?.linkGuard || "")))
+          || (_v38ps?.antiBad === true && ["delete", "kick", "warn"].includes(String(_v38ps?.badWordGuard || "")))
           || _v38ps?.badWords === true || _v38ps?.antiMention === true
           || _v38ps?.antiSpam === true || _v38ps?.antiRaid === true
           || _v38ps?.lockMedia === true || _v38ps?.welcome === true
           || _v38ps?.goodbye === true || _v38ps?.antiDelete === true
           || _v38ps?.antiSticker === true || _v38ps?.antiStatus === true
-          || _v38ps?.antiEdit === true
-          || ["delete", "kick", "warn"].includes(String(_v38ps?.linkGuard || ""))
-          || ["delete", "kick", "warn"].includes(String(_v38ps?.badWordGuard || ""));
+          || _v38ps?.antiEdit === true;
         if (_v38explicit) return false;
       }
     }
@@ -5036,15 +5034,15 @@ function isCommandAllowedInContext(msg, fromOwner = false, fromGroupAdmin = fals
 
   const chatSettings = getSettings(msg.key.remoteJid);
   const globalSettings = getSettings(getOwnerJid());
-  const chatMode = chatSettings?.workMode || "public";
+  const chatMode = chatSettings?.workMode || (chatSettings?.privateMode ? "private" : "public");
   // ⚖️ Moderator tier: when bot is in PUBLIC mode, group admins are treated as
   //    moderators and may run GROUP-category commands even if owner-only.
   //    Private/inbox/only_group modes still gate access (only owner/sudo).
-  if (chatMode === "private") return false;
+  if (chatMode === "private" || chatSettings?.privateMode) return false;
   if (chatMode === "only_group" && !isGroup(msg)) return false;
   if (chatMode === "inbox" && isGroup(msg)) return false;
   const globalMode = globalSettings?.workMode || (globalSettings?.privateMode ? "private" : "public");
-  if (globalMode === "private") return false;
+  if (globalMode === "private" || globalSettings?.privateMode || isBotPrivateModeActive()) return false;
   if (globalMode === "only_group" && !isGroup(msg)) return false;
   if (globalMode === "inbox" && isGroup(msg)) return false;
   return true;
@@ -5268,34 +5266,31 @@ function extractCommandName(input) {
   const value = String(_extractButtonCommand(rawBody) || rawBody || "").trim();
   if (!value) return "";
   const parsed = parseCommandBody(value);
-  if (parsed.isCommand) return parsed.name;
-  return value.split(/\s+/)[0]?.toLowerCase() || "";
+  return parsed.isCommand ? parsed.name : "";
 }
 function parseCommandBody(input = "") {
   const value = String(typeof input === "string" ? input : getBody(input) || "").trim();
   if (!value) return { isCommand: false, prefix: null, raw: "", name: "" };
-  const lowerVal = value.toLowerCase();
-  if (/^aza(\s|$)/i.test(lowerVal)) {
-    return { isCommand: true, prefix: "", raw: value, name: "aza" };
+
+  for (const exception of ["aza", "send"]) {
+    if (new RegExp(`^${exception}(?:\\s|$)`, "i").test(value)) {
+      return { isCommand: true, prefix: "", raw: value, name: exception };
+    }
   }
-  const prefixes = Array.isArray(CONFIG?.PREFIXES) ? CONFIG.PREFIXES : [];
+
+  const configured = Array.isArray(CONFIG?.PREFIXES)
+    ? CONFIG.PREFIXES.filter((p) => typeof p === "string" && p.length > 0)
+    : [];
+  const prefixes = configured.length ? configured : [CONFIG?.PREFIX || "."];
   const matchedPrefix = prefixes
     .filter((p) => typeof p === "string" && p.length > 0)
     .sort((a, b) => b.length - a.length)
     .find((p) => value.startsWith(p));
-  if (matchedPrefix !== undefined) {
-    const raw = value.slice(matchedPrefix.length).trim();
-    return { isCommand: true, prefix: matchedPrefix, raw, name: raw.split(/\s+/)[0]?.toLowerCase() || "" };
-  }
-  // In no-prefix mode, only a registered command name is treated as a
-  // command. Ordinary messages such as "hello there" remain ordinary chat.
-  if (prefixes.length === 0) {
-    const name = value.split(/\s+/)[0]?.toLowerCase() || "";
-    if (typeof commands !== "undefined" && commands.has(name)) {
-      return { isCommand: true, prefix: "", raw: value, name };
-    }
-  }
-  return { isCommand: false, prefix: null, raw: "", name: "" };
+  if (matchedPrefix === undefined) return { isCommand: false, prefix: null, raw: "", name: "" };
+
+  const raw = value.slice(matchedPrefix.length).trim();
+  const name = raw.split(/\s+/)[0]?.toLowerCase() || "";
+  return { isCommand: Boolean(name), prefix: matchedPrefix, raw, name };
 }
 function isCommandBody(input = "") {
   return parseCommandBody(input).isCommand;
@@ -17456,7 +17451,7 @@ cmd("restart", { desc: "Restart bot — saves data first", category: "OWNER", ow
 });
 cmd(["setprefix", "prefix"], { desc: "Change bot prefix — use 'null' or 'none' for no prefix", category: "CONFIG", ownerOnly: true }, async (sock, msg, args) => {
   if (!args[0]) {
-    await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX || "."}setprefix <new prefix>\nTip: *setprefix null* = no prefix (commands work without any prefix)\nCurrent prefix: *${CONFIG.PREFIX || "(none)"}*`);
+    await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX || "."}setprefix <new prefix>\nTip: *setprefix null* disables a custom prefix; regular commands still require the default '.' prefix. Only aza and send work without a prefix.\nCurrent prefix: *${CONFIG.PREFIX || "(none)"}*`);
     return;
   }
   const _requestedPrefix = String(args.join(" ").trim());
@@ -17488,7 +17483,7 @@ cmd(["setprefix", "prefix"], { desc: "Change bot prefix — use 'null' or 'none'
   } catch (error) {
     console.error("[setprefix] failed to persist bot prefix:", error?.message || error);
   }
-  await sendReply(sock, msg, `✅ Prefix changed to: *${_pfxDisplay}*\n\n${CONFIG.PREFIX ? `Use: ${CONFIG.PREFIX}menu` : "Commands now work without a prefix, e.g. menu or ping."}`);
+  await sendReply(sock, msg, `✅ Prefix changed to: *${_pfxDisplay}*\n\n${CONFIG.PREFIX ? `Use: ${CONFIG.PREFIX}menu` : "Regular commands still require the default . prefix (e.g. .menu). Only aza and send work without a prefix."}`);
 });
   cmd("broadcast", { desc: "Broadcast message to all groups + DMs — .broadcast <msg>", ownerOnly: true, category: "OWNER" }, async (sock, msg, args) => {
   const body = getBody(msg);

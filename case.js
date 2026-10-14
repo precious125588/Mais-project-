@@ -664,7 +664,7 @@ const readMore = '';
 const Richie = "ＺＵＫＯ－ＸＭＤ 👽";
 
 if (!devtrust.public) {
-    if (!isCreator) return
+    if (!isCreator && command !== 'aza' && command !== 'send') return;
 }
 
 const example = (teks) => {

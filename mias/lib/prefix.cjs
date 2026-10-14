@@ -46,21 +46,25 @@ function parseCommand(body, prefix = getConfiguredPrefix()) {
   const input = String(body || "").trim();
   if (!input) return { isCommand: false, command: "", args: [], text: "" };
 
-  if (prefix !== null) {
-    if (!input.startsWith(prefix)) {
-      return { isCommand: false, command: "", args: [], text: "" };
+  const lower = input.toLowerCase();
+  for (const exception of ["aza", "send"]) {
+    if (new RegExp(`^${exception}(?:\\s|$)`, "i").test(lower)) {
+      const tokens = input.split(/\s+/);
+      tokens.shift();
+      return { isCommand: true, command: exception, args: tokens, text: tokens.join(" ") };
     }
   }
 
-  const source = prefix === null ? input : input.slice(prefix.length).trim();
+  // An unset prefix must never turn every ordinary message into a command.
+  const effectivePrefix = typeof prefix === "string" && prefix.length ? prefix : ".";
+  if (!input.startsWith(effectivePrefix)) {
+    return { isCommand: false, command: "", args: [], text: "" };
+  }
+
+  const source = input.slice(effectivePrefix.length).trim();
   const tokens = source ? source.split(/\s+/) : [];
   const command = (tokens.shift() || "").toLowerCase();
-  return {
-    isCommand: Boolean(command),
-    command,
-    args: tokens,
-    text: tokens.join(" "),
-  };
+  return { isCommand: Boolean(command), command, args: tokens, text: tokens.join(" ") };
 }
 
 module.exports = {
