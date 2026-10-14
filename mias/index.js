@@ -753,7 +753,7 @@ const LOCKED_OWNER_NAME = process.env.OWNER_NAME || "Bot Owner";
 const NO_PREFIX_VALUES = new Set(["", "null", "none", "no", "off", "false", "disabled", "noprefix", "no-prefix"]);
 function normalizeConfiguredPrefix(value) {
   const raw = String(value ?? "").trim();
-  return NO_PREFIX_VALUES.has(raw.toLowerCase()) ? "" : raw;
+  return NO_PREFIX_VALUES.has(raw.toLowerCase()) ? "." : raw; // STRICT: no-prefix mode disabled - every command requires the prefix (aza/send excepted at parse level)
 }
 function botConfigPath() {
   const authDir = process.env.AUTH_DIR
@@ -3269,7 +3269,7 @@ END:VCARD`;
             if (_stkPay && typeof getStickerHash === 'function') {
               const _sHash = getStickerHash(_stkPay);
               const _sBound = _sHash ? stickerGetCmd(_sHash) : null;
-               if (_sBound) body = CONFIG.PREFIX ? CONFIG.PREFIX + _sBound : _sBound; // override body → cmd dispatch runs it
+               if (_sBound) body = (CONFIG.PREFIX || ".") + _sBound; // ALWAYS prefixed // override body → cmd dispatch runs it
             }
           } catch (_stkErr) {}
           // ── HARD PRIVATE-MODE GATE ────────────────────────────────────────
@@ -4013,7 +4013,7 @@ END:VCARD`;
 
           // ── SETTINGS/UI OWNER-ONLY GATE — nobody but owner/sudo may toggle settings ──
           try {
-            const _setNames = new Set(["settings","setting","set","setprefix","prefix","settheme","config","btnmenu","buttonmenu","buttonsui","listui","listmenuui","interactivelist","flowmenu","flowui","radiomenu","autobio","autoreact","autoview","autolike","antilink","antispam","antiraid","antidelete","antidel","antiedit","antiview","welcome","goodbye","setwelcome","setgoodbye","blockcalls","autoblock","antibroadcast","anticall","autoread","autotyping","autorecording","alwaysonline","chatbot","autochat","mode","workmode","private","public"]);
+            const _setNames = new Set(["settings","setting","set","setprefix","prefix","settheme","config","btnmenu","buttonmenu","buttonsui","listui","listmenuui","interactivelist","flowmenu","flowui","radiomenu","autobio","autoreact","autoview","autolike","antilink","antispam","antiraid","antidelete","antidel","antiedit","antiview","welcome","goodbye","setwelcome","setgoodbye","blockcalls","autoblock","antibroadcast","anticall","autoread","autotyping","autorecording","alwaysonline","chatbot","autochat","mode","workmode","private","public","self","selfmode","ownermode","solobot","publicmode","openbot","goopen","setsudo","delsudo","listsudo","sudo","addsudo","cuz","setcuz","cuzmenu"]);
             const _cmdName = (String(_command.raw||"").split(/\s+/)[0]||"").toLowerCase();
             if (_setNames.has(_cmdName) && !fromOwner) {
               await sendReply(sock, msg, "🔒 *Owner only.* You can't change bot settings.");
@@ -5029,7 +5029,7 @@ function isCommandAllowedInContext(msg, fromOwner = false, fromGroupAdmin = fals
   if (fromOwner) return true;
   try {
     const _cmdCheck = extractCommandName(msg);
-    if (_cmdCheck === "aza") return true;
+    if (_cmdCheck === "aza" || _cmdCheck === "send") return true;
   } catch {}
 
   const chatSettings = getSettings(msg.key.remoteJid);
@@ -6567,6 +6567,18 @@ function saveNow() {
   }, 800);
 }
 globalThis.saveNow = saveNow;
+// Immediate (non-debounced) save — mode/offhere/onhere/self/public use this so the
+// state is on disk BEFORE any restart can happen. Fixes settings lost on restart.
+globalThis.__saveNowImmediate = function () {
+  try { if (_saveNowTimer) { clearTimeout(_saveNowTimer); _saveNowTimer = null; } } catch {}
+  try {
+    saveAllData({
+      economy, settings, warns, bans: bannedUsers, sudo: sudoUsers, sudoVip: sudoVipUsers,
+      badwords: badWords, inventory, relationships, factions,
+      userfaction: userFaction, crypto: cryptoPortfolios, grouprules: groupRules,
+    });
+  } catch (e) { console.error("[saveNow:immediate]", e?.message || e); }
+};
 
 // ─────────────────────────────────────────────────────────────────────
 // SAFE MODE: list of risky cmds blocked when safeMode is ON
@@ -9509,6 +9521,7 @@ installSettingsCommand({
   });
 
 cmd("mode", { desc: "Set public/private mode", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  if (!(msg.key.fromMe || isOwner(getSender(msg)) || isCreator(getSender(msg)))) { await sendReply(sock, msg, "\ud83d\udd12 *Owner only.* Only the bot owner can change the mode."); return; }
   const m = args[0]?.toLowerCase();
   if (!["public", "private"].includes(m)) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}mode public/private\n\nCurrent: *${getSettings(getOwnerJid())?.privateMode ? "PRIVATE 🔒" : "PUBLIC 🌐"}*`); return; }
   // Already-set check
@@ -9524,18 +9537,19 @@ cmd("mode", { desc: "Set public/private mode", category: "OWNER", ownerOnly: tru
   const cs = getSettings(msg.key.remoteJid);
   setWorkModeState(cs, m);
   try { setWorkModeState(getSettings("bot"), m); } catch (_bm) {}
-  saveNow();
+  (globalThis.__saveNowImmediate || saveNow)();
   await sendReply(sock, msg, `${m === "private" ? "🔒" : "🌐"} Mode set to *${m.toUpperCase()}*`);
 });
 
 // ── Hidden .self — owner-only mode instantly (not shown in any menu) ───────────
 cmd(["self","selfmode","ownermode","solobot"], { desc: "", category: "OWNER", ownerOnly: true, hidden: true }, async (sock, msg) => {
+  if (!(msg.key.fromMe || isOwner(getSender(msg)) || isCreator(getSender(msg)))) { await sendReply(sock, msg, "\ud83d\udd12 *Owner only.* Only the bot owner can switch to private."); return; }
   const ownerJid = getOwnerJid();
   const s = getSettings(ownerJid);
   setWorkModeState(s, "private");
   getSettings(msg.key.remoteJid).workMode = "private";
   try { setWorkModeState(getSettings("bot"), "private"); } catch (_sm) {}
-  saveNow();
+  (globalThis.__saveNowImmediate || saveNow)();
   await react(sock, msg, "🔒");
   await sendReply(sock, msg, `🔒 *Self Mode ON*
 
@@ -9546,12 +9560,13 @@ To go public: *${CONFIG.PREFIX}public*`);
 
 // ── Hidden .public — open bot back to everyone instantly (not shown in menu) ───
 cmd(["public","publicmode","openbot","goopen"], { desc: "", category: "OWNER", ownerOnly: true, hidden: true }, async (sock, msg) => {
+  if (!(msg.key.fromMe || isOwner(getSender(msg)) || isCreator(getSender(msg)))) { await sendReply(sock, msg, "\ud83d\udd12 *Owner only.* Only the bot owner can switch to public."); return; }
   const ownerJid = getOwnerJid();
   const s = getSettings(ownerJid);
   setWorkModeState(s, "public");
   getSettings(msg.key.remoteJid).workMode = "public";
   try { setWorkModeState(getSettings("bot"), "public"); } catch (_pm) {}
-  saveNow();
+  (globalThis.__saveNowImmediate || saveNow)();
   await react(sock, msg, "🌐");
   await sendReply(sock, msg, `🌐 *Public Mode ON*
 
@@ -19959,12 +19974,12 @@ cmd("radio", { desc: "Play radio station", category: "AUDIO" }, async (sock, msg
 // ═══════════════════════════════════════════════════════════════════════════════
 cmd("offhere", { desc: "Disable bot in this group", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
   if (!requireGroup(msg)) return;
-  const s = getSettings(msg.key.remoteJid); setWorkModeState(s, "private"); saveNow();
+  const s = getSettings(msg.key.remoteJid); setWorkModeState(s, "private"); (globalThis.__saveNowImmediate || saveNow)();
   await sendReply(sock, msg, `🔇 Bot *disabled* in this group.`);
 });
 cmd("onhere", { desc: "Enable bot in this group", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
   if (!requireGroup(msg)) return;
-  const s = getSettings(msg.key.remoteJid); setWorkModeState(s, "public"); saveNow();
+  const s = getSettings(msg.key.remoteJid); setWorkModeState(s, "public"); (globalThis.__saveNowImmediate || saveNow)();
   await sendReply(sock, msg, `🔊 Bot *enabled* in this group.`);
 });
 cmd("confession", { desc: "Send anonymous confession", category: "GROUP" }, async (sock, msg, args) => {
@@ -24102,7 +24117,8 @@ function _azaKeyFor(msg) { return _cleanNum(getSender(msg)) || _cleanNum(msg?.ke
 function _getAzaFor(msg) { const k = _azaKeyFor(msg); return _azaUsers[k] || _azaUsers._default; }
 // Back-compat shim so older code referencing _azaStore still reads the DEFAULT slot
 const _azaStore = new Proxy(_azaUsers._default, {});
-cmd(["setaza"], { desc: "Set YOUR payment account: .setaza <bank> | <account no> | <name>", category: "INFO" }, async (sock, msg, args) => {
+cmd(["setaza"], { desc: "Set payment account (OWNER ONLY): .setaza <bank> | <account no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+  if (!(msg.key.fromMe || isOwner(getSender(msg)) || isCreator(getSender(msg)))) { await sendReply(sock, msg, "\ud83d\udd12 *Owner only.*"); return; }
   const raw = args.join(" ").trim();
   const parts = raw.split("|").map(v => v.trim()).filter(Boolean);
   if (parts.length < 3) {
@@ -24168,6 +24184,38 @@ try {
   if (_pdfEntry && !commands.has("pdf")) commands.set("pdf", _pdfEntry);
 } catch {}
 
+cmd(["save"], { desc: "Save quoted media (status/photo/video/audio/sticker) to your DM", category: "MEDIA" }, async (sock, msg) => {
+  try { await react(sock, msg, "\ud83c\udf00"); } catch {}
+  try {
+    const grab = globalThis._cmfGrabMedia;
+    const { kind, buf } = (typeof grab === "function")
+      ? await grab(sock, msg).catch(() => ({ kind: null, buf: null }))
+      : { kind: null, buf: null };
+    const target = getSender(msg) || msg.key.remoteJid;
+    if (buf && kind) {
+      const caption = "\u2705 *Saved*";
+      const payload = kind === "image" ? { image: buf, caption }
+        : kind === "video" ? { video: buf, caption }
+        : kind === "audio" ? { audio: buf, mimetype: "audio/mpeg" }
+        : kind === "sticker" ? { sticker: buf }
+        : { document: buf, mimetype: "application/octet-stream", fileName: "saved.bin", caption };
+      await sock.sendMessage(target, payload);
+      try { await react(sock, msg, "\u2705"); } catch {}
+      return;
+    }
+    const qt = (typeof __quotedTextOf === "function" ? __quotedTextOf(msg) : "") || "";
+    if (qt) {
+      await sock.sendMessage(target, { text: "\u2705 *Saved:*\n\n" + qt });
+      try { await react(sock, msg, "\u2705"); } catch {}
+      return;
+    }
+    try { await react(sock, msg, "\u274c"); } catch {}
+    await sendReply(sock, msg, `Reply to a photo, video, audio, sticker or status with *${CONFIG.PREFIX}save* to save it to your DM.`);
+  } catch (e) {
+    try { await react(sock, msg, "\u274c"); } catch {}
+    await sendReply(sock, msg, `\u274c Save failed: ${e?.message || e}`);
+  }
+});
 console.log("[LATE-PATCH] saveContact, setbotpic/botpic, aza/setaza/setazapic, spotifydl, pdf, group-only DM guard loaded.");
 // ════════════════════════════════════════════════════════════════════════
 // END EXTRAS PATCH
@@ -44490,7 +44538,8 @@ cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (soc
   }
   await sendReply(sock, msg, caption);
 });
-cmd(["setaza"], { desc: "Set payment account: .setaza <bank> | <no> | <name>", category: "INFO" }, async (sock, msg, args) => {
+cmd(["setaza"], { desc: "Set payment account (OWNER ONLY): .setaza <bank> | <no> | <name>", category: "INFO", ownerOnly: true }, async (sock, msg, args) => {
+  if (!(msg.key.fromMe || isOwner(getSender(msg)) || isCreator(getSender(msg)))) { await sendReply(sock, msg, "\ud83d\udd12 *Owner only.*"); return; }
   const parts = args.join(" ").split("|").map(v => v.trim()).filter(Boolean);
   if (parts.length < 3) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}setaza Bank | Number | Name*\n\nExample: *${CONFIG.PREFIX}setaza Opay | 8012345678 | Dennis*`); return; }
   const k = _azaKeyFor(msg);
