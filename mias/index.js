@@ -110,6 +110,20 @@ let __buttonMode = false;
 function setButtonMode(value) { __buttonMode = Boolean(value); }
 function isButtonMode() { return __buttonMode; }
 let __miasPortableVideoModule = null;
+async function deliverVideoWithTTHD(sock, jid, buf, { caption = "", fileName = `video_${Date.now()}.mp4`, quoted = null } = {}) {
+  let playBuf = buf;
+  try {
+    playBuf = await prepareTikTokVideo(buf);
+  } catch (_e) {
+    playBuf = buf;
+  }
+  try {
+    return await sock.sendMessage(jid, { video: playBuf, mimetype: "video/mp4", caption }, { quoted });
+  } catch (_vidErr) {
+    return await sock.sendMessage(jid, { document: playBuf, mimetype: "video/mp4", fileName, caption }, { quoted });
+  }
+}
+
 async function __miasNormalizeVideoBuffer(value) {
   if (!Buffer.isBuffer(value) || value.length < 1024) return value;
   try {
@@ -820,7 +834,7 @@ const CONFIG = {
   // The same host serves the real routes: /movies/search?q= and /movies/info?url=
   MYNETNAIJA_API: process.env.MYNETNAIJA_API || "https://apis.davidcyril.name.ng/movies",
   GIFTED_API:   "https://api.giftedtech.co.ke",
-  PREXZY_API:   "https://apis.prexzyvilla.site",
+  PREXZY_API:   process.env.PREXZY_API || "https://prexzyapis.com",
   OWNER_NAME:   process.env.OWNER_NAME || LOCKED_OWNER_NAME,
   BOT_URL:      process.env.BOT_URL      || "",
   BOT_PIC:      process.env.BOT_PIC      || "https://files.catbox.moe/05rqy6.png",
@@ -873,8 +887,21 @@ async function prexzyGet(path, params = {}, timeoutMs = 25000) {
   try {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) qs.set(k, v);
-    const url = `${CONFIG.PREXZY_API}${path}${qs.toString() ? "?" + qs.toString() : ""}`;
-    const { data } = await axios.get(url, { timeout: timeoutMs });
+    const host = CONFIG.PREXZY_API || "https://prexzyapis.com";
+    const url = `${host}${path}${qs.toString() ? "?" + qs.toString() : ""}`;
+    let data;
+    try {
+      const resp = await axios.get(url, { timeout: timeoutMs });
+      data = resp.data;
+    } catch (e1) {
+      if (host !== "https://prexzyapis.com") {
+        const fallbackUrl = `https://prexzyapis.com${path}${qs.toString() ? "?" + qs.toString() : ""}`;
+        const resp2 = await axios.get(fallbackUrl, { timeout: timeoutMs });
+        data = resp2.data;
+      } else {
+        throw e1;
+      }
+    }
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -7453,23 +7480,36 @@ cmd(["twitter", "twitter2", "xdl", "xdl2", "twitterdl", "xdownload"], { desc: "T
   await react(sock, msg, "🐦");
   await sendReply(sock, msg, '⏳ Downloading Twitter/X video...');
   try {
+    let videoUrl = null;
     const r = await _paGet('/api/download/twitter', { url });
     if (r.ok && r.data?.success && r.data.result) {
       const res = r.data.result;
-      const videoUrl = res?.hd || res?.sd || res?.url || (Array.isArray(res?.variants) ? res.variants[0]?.url : null);
-      if (videoUrl) {
-        await sock.sendMessage(msg.key.remoteJid, { video: { url: videoUrl }, mimetype: 'video/mp4', caption: `🐦 *Twitter/X Video*` }, { quoted: msg });
-        return await react(sock, msg, '✅');
+      videoUrl = res?.hd || res?.sd || res?.url || (Array.isArray(res?.variants) ? res.variants[0]?.url : null);
+    }
+    if (!videoUrl) {
+      const r2 = await _paGet('/api/download/twitterv2', { url });
+      if (r2.ok && r2.data?.success && r2.data.result) {
+        const res2 = r2.data.result;
+        videoUrl = res2?.hd || res2?.sd || res2?.url;
       }
     }
-    const r2 = await _paGet('/api/download/twitterv2', { url });
-    if (r2.ok && r2.data?.success && r2.data.result) {
-      const res2 = r2.data.result;
-      const videoUrl2 = res2?.hd || res2?.sd || res2?.url;
-      if (videoUrl2) {
-        await sock.sendMessage(msg.key.remoteJid, { video: { url: videoUrl2 }, mimetype: 'video/mp4', caption: '🐦 *Twitter/X V2*' }, { quoted: msg });
-        return await react(sock, msg, '✅');
-      }
+    if (!videoUrl) {
+      try {
+        const px = await prexzyGet("/download/twitter", { url }, 25000);
+        videoUrl = px?.data?.data?.video || px?.data?.data?.url || px?.data?.video || px?.data?.url;
+      } catch {}
+    }
+    if (!videoUrl && nx?.downloader?.twitter) {
+      try {
+        const nxtw = await nx.downloader.twitter({ url });
+        videoUrl = nxtw?.result?.video || nxtw?.result?.url || (Array.isArray(nxtw?.result) ? nxtw.result[0]?.url : null);
+      } catch {}
+    }
+    if (videoUrl) {
+      const { data: vdata } = await axios.get(videoUrl, { responseType: "arraybuffer", timeout: 60000, headers: { "User-Agent": "Mozilla/5.0" } });
+      const buf = Buffer.from(vdata);
+      await deliverVideoWithTTHD(sock, msg.key.remoteJid, buf, { caption: "🐦 *Twitter/X Video*", fileName: `twitter_${Date.now()}.mp4`, quoted: msg });
+      return await react(sock, msg, '✅');
     }
     await sendReply(sock, msg, '❌ Twitter/X download failed.');
   } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
@@ -11230,6 +11270,45 @@ Hmm, I got nothing 🤔`);
   }
 });
 
+// New AI utilities backed by documented and live-checked provider routes.
+async function runVerifiedAICommand(sock, msg, args, { label, method, system }) {
+  const prompt = args.join(" ").trim();
+  if (!prompt) return sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}${label.toLowerCase().replace(/[^a-z0-9]/g, "")} <text>`);
+  await react(sock, msg, "🤖");
+  const jid = msg.key.remoteJid;
+  const status = await sock.sendMessage(jid, { text: `🤖 *${label}*\n\nWorking on it...` }, { quoted: msg });
+  let answer = "";
+  try {
+    if (nx?.ai?.[method]) {
+      const r = await nx.ai[method]({ text: prompt }).catch(() => null);
+      const d = r?.result || r?.data || r;
+      answer = typeof d === "string" ? d : (d?.corrected || d?.answer || d?.solution || d?.response || d?.message || d?.text || d?.content || "");
+    }
+    if (!answer && method === "grammarcheck") {
+      const r = await nx?.ai?.grammarcheck?.({ text: prompt }).catch(() => null);
+      answer = r?.result?.corrected || "";
+    }
+    if (!answer) {
+      const r = await prexzyGet("/ai/mistral", { prompt: `${system}\n\n${prompt}` }, 25000).catch(() => null);
+      const d = r?.data?.data || r?.data?.result || r?.data;
+      answer = typeof d === "string" ? d : (d?.response || d?.reply || d?.text || d?.answer || "");
+    }
+    if (!answer) answer = await freeAI(`${system}\n\n${prompt}`);
+    answer = normalizeAIText(answer);
+    await editMessage(sock, jid, status.key, answer ? `🤖 *${label}*\n\n${answer}` : `❌ ${label} could not get a response. Please try again.`);
+    await react(sock, msg, answer ? "✅" : "❌");
+  } catch (e) {
+    await editMessage(sock, jid, status.key, `❌ ${label} failed: ${e.message}`);
+    await react(sock, msg, "❌");
+  }
+}
+
+cmd(["grammarcheck", "grammar", "spellcheck"], { desc: "Check and correct grammar", category: "AI" }, async (sock,msg,args) => runVerifiedAICommand(sock,msg,args,{label:"Grammar Check",method:"grammarcheck",system:"Correct spelling, grammar and punctuation. Return the corrected text and brief notes."}));
+cmd(["mathgpt", "solvemath", "mathsolver"], { desc: "Solve a math problem with AI", category: "AI" }, async (sock,msg,args) => runVerifiedAICommand(sock,msg,args,{label:"MathGPT",method:"mathgpt",system:"Solve the math problem accurately and show concise steps."}));
+cmd(["gitagpt", "gitaai", "bhagavadgita"], { desc: "Bhagavad Gita-inspired guidance", category: "AI" }, async (sock,msg,args) => runVerifiedAICommand(sock,msg,args,{label:"GitaGPT",method:"gitagpt",system:"Offer thoughtful guidance inspired by the Bhagavad Gita. Do not invent chapter or verse citations."}));
+cmd(["webpilot", "webai", "pilotai"], { desc: "Research and synthesize an answer", category: "AI" }, async (sock,msg,args) => runVerifiedAICommand(sock,msg,args,{label:"WebPilot",method:"webpilot",system:"Answer using relevant web knowledge. Be clear about uncertainty and avoid claiming live sources unless actually provided."}));
+cmd(["simisimi", "simi"], { desc: "Chat with SimiSimi AI", category: "AI" }, async (sock,msg,args) => runVerifiedAICommand(sock,msg,args,{label:"SimiSimi",method:"simisimi",system:"You are a playful, friendly chat companion. Keep the reply warm and concise."}));
+
 // ── v4.9.5: Auto-chatbot per-chat toggle ──────────────────────────────────
 cmd(["autochat", "autoreply"], { desc: "Toggle auto-chatbot for this chat — .autochat on/off", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
   const chatS = getSettings(msg.key.remoteJid);
@@ -12856,12 +12935,8 @@ Examples:
     } else if (fmt === "videonote" || fmt === "round") {
       await sock.sendMessage(jid, { video: vidBuf, ptv: true, caption: cap }, { quoted: msg });
     } else {
-      // Default: try as inline video, fall back to document on any failure
-      try {
-        await sock.sendMessage(jid, { video: vidBuf, mimetype: _vMime, caption: cap }, { quoted: msg });
-      } catch {
-        await sock.sendMessage(jid, { document: vidBuf, fileName: `${safeName}${_vExt}`, mimetype: _vMime, caption: cap }, { quoted: msg });
-      }
+      // Default: deliver via TT 1.3 HD processing and delivery workflow
+      await deliverVideoWithTTHD(sock, jid, vidBuf, { caption: cap, fileName: `${safeName}${_vExt}`, quoted: msg });
     }
     await editMessage(sock, jid, sKey, `📹 *MIAS MDX Video*\n\n✅ Found: *${title}* ✅\n⬢ Downloaded ✅\n⬢ Sent as ${fmt === "doc" ? "document" : fmt === "videonote" ? "video note" : "video"} ✅`);
   } catch (e) { await editMessage(sock, jid, sKey, `📹 *MIAS MDX Video*\n\n❌ Error: ${e?.message || "Download failed"}`).catch(() => {}); }
@@ -17935,11 +18010,7 @@ cmd(["ytmp4","ytvideo","yt4","ytv"], { desc: "Download YouTube video as mp4", ca
       const cap = `🎬 *${result.title || "YouTube Video"}*\n📺 *Quality: ${_qDisp}*${_mismatch}\n📦 *Size: ${_sizeMB} MB*`;
       await editMessage(sock, jid, vidKey, `🎬 Sending ${_qDisp}... ⚡`);
       const _ytBufWm = await _addVideoWatermark(Buffer.from(buf.data), "YT");
-      try {
-        await sock.sendMessage(jid, { video: _ytBufWm, mimetype: "video/mp4", caption: cap }, { quoted: msg });
-      } catch {
-        await sock.sendMessage(jid, { document: _ytBufWm, mimetype: "video/mp4", fileName: `${(result.title || "video").slice(0,50)}_${_qDisp}.mp4`, caption: cap }, { quoted: msg });
-      }
+      await deliverVideoWithTTHD(sock, jid, _ytBufWm, { caption: cap, fileName: `${(result.title || "video").slice(0,50)}_${_qDisp}.mp4`, quoted: msg });
       await editMessage(sock, jid, vidKey, `✅ *${_qDisp} — Done!* 🎬\n📦 ${_sizeMB} MB`);
       await react(sock, msg, "✅");
       gotResult = true;
@@ -17959,6 +18030,13 @@ cmd(["ytmp4","ytvideo","yt4","ytv"], { desc: "Download YouTube video as mp4", ca
 // Universal downloader with fallback chain
 async function universalDownload(url, platform) {
   const apis = [
+    // Nexray AIO
+    async () => {
+      if (!nx?.downloader?.aio) return;
+      const res = await nx.downloader.aio({ url }).catch(() => null);
+      const dl = res?.result?.url || res?.result?.video || res?.result?.download_url || (Array.isArray(res?.result) ? res.result[0]?.url : null) || res?.result;
+      if (typeof dl === "string" && dl.startsWith("http")) return { dl, title: res?.result?.title || platform };
+    },
     // Prexzyvilla AIO (primary — works for all social platforms)
     async () => {
       const r = await prexzyGet("/download/aio", { url }, 30000);
@@ -18147,6 +18225,15 @@ for (const _a of ["fbv2", "facebookv2", "metav2"]) { const _c = commands.get("fa
       } catch {}
     }
 
+    // Nexray Facebook fallback
+    if (!result && nx?.downloader?.facebook) {
+      try {
+        const nxfb = await nx.downloader.facebook({ url });
+        const dl = (mode === "hd" ? (nxfb?.result?.hd || nxfb?.result?.sd) : (nxfb?.result?.sd || nxfb?.result?.hd)) || nxfb?.result?.video || nxfb?.result?.url;
+        if (dl) result = { dl, title: nxfb?.result?.title || "Facebook Video" };
+      } catch {}
+    }
+
     // 4) universalDownload chain (cobalt, siputzx, ryzendesu, etc.)
     if (!result) result = await universalDownload(url, "facebook").catch(() => null);
 
@@ -18160,12 +18247,7 @@ for (const _a of ["fbv2", "facebookv2", "metav2"]) { const _c = commands.get("fa
       } else if (mode === "doc" || mode === "document") {
         await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `facebook_${Date.now()}.mp4`, caption: cap }, { quoted: msg });
       } else {
-        // Try video; fall back to document if send fails
-        try {
-          await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg });
-        } catch {
-          await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `facebook_${Date.now()}.mp4`, caption: cap }, { quoted: msg });
-        }
+        await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `facebook_${Date.now()}.mp4`, quoted: msg });
       }
       await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*`);
       await react(sock, msg, "✅");
@@ -18404,6 +18486,18 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
       let _ttDirectUrl = _ttDirectMode ? selectTikTokUrl(_ttInfo, _ttDirectMode) : null;
       if (!_ttDirectUrl && _ttDirectMode?.kind !== "slider") {
         _ttDirectUrl = _ttInfo.videoHd || _ttInfo.videoSd || _ttInfo.play || _ttInfo.videoWatermark || _ttInfo.video || null;
+      }
+      if (!_ttDirectUrl && _ttDirectMode?.kind !== "slider") {
+        try {
+          const _nxTt = await nx?.downloader?.tiktok?.({ url });
+          _ttDirectUrl = _nxTt?.result?.video || _nxTt?.result?.url || _nxTt?.result?.hdplay || _nxTt?.result?.play;
+        } catch {}
+      }
+      if (!_ttDirectUrl && _ttDirectMode?.kind !== "slider") {
+        try {
+          const _pxTt = await prexzyGet("/download/tiktok", { url }, 25000);
+          _ttDirectUrl = _pxTt?.data?.data?.video || _pxTt?.data?.data?.url || _pxTt?.data?.video || _pxTt?.data?.url;
+        } catch {}
       }
       if (!_ttDirectUrl && _ttDirectMode?.kind !== "slider") {
         await sendReply(sock, msg, `❌ ${_ttDirectMode?.id || "This format"} is not available for this TikTok, so nothing was sent.`);
@@ -18653,6 +18747,7 @@ cmd(["instagram","ig","igdl"], { desc: "Download Instagram post/reel", category:
     const stKey = stMsg.key;
     try {
       let dlUrl = null;
+      if (!dlUrl && nx?.downloader?.instagram) { try { const res = await nx.downloader.instagram({ url }); dlUrl = res?.result?.video || res?.result?.url || (Array.isArray(res?.result) ? res.result[0]?.url : null); } catch {} }
       if (!dlUrl) { const r = await prexzyGet("/download/instagram", { url }); const d = r.data; if (r.ok && d) dlUrl = d?.data?.[0]?.url || d?.data?.url || d?.url; }
       if (!dlUrl) { const r = await prexzyGet("/download/ig2", { url }); const d = r.data; if (r.ok && d) dlUrl = d?.data?.[0]?.url || d?.data?.video || d?.url; }
       if (!dlUrl) { try { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/igdl?url=${encodeURIComponent(url)}`, { timeout: 20000 }); dlUrl = data?.data?.[0]?.url || data?.url; } catch {} }
@@ -18665,7 +18760,7 @@ cmd(["instagram","ig","igdl"], { desc: "Download Instagram post/reel", category:
       await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n⬢ Fetching post... ✅\n⬢ Downloading media... ✅\n⬡ Sending...`);
       const isVideo = dlUrl.includes(".mp4") || dlUrl.includes("video");
       const cap = `📸 *Instagram*${sz}`;
-      if (isVideo) { try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); } catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `ig_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); } }
+      if (isVideo) { await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `ig_${Date.now()}.mp4`, quoted: msg }); }
       else { await sock.sendMessage(jid, { image: buf, caption: cap }, { quoted: msg }); }
       await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*${sz}`);
       await react(sock, msg, "✅");
@@ -18681,6 +18776,12 @@ cmd(["snapchat","snap","snapdl"], { desc: "Download Snapchat spotlight/story", c
     const stKey = stMsg.key;
     try {
       let dlUrl = null;
+      if (!dlUrl && nx?.downloader?.reddit) {
+        try {
+          const res = await nx.downloader.reddit({ url });
+          dlUrl = res?.result?.video || res?.result?.url;
+        } catch {}
+      }
       try { const r = await prexzyGet("/download/aio", { url }, 30000); const d = r.data; if (r.ok && d) dlUrl = d?.data?.[0]?.url || d?.data?.video || d?.data?.url || d?.url; } catch {}
       if (!dlUrl) dlUrl = await _cobaltDl(url, { downloadMode: "auto" });
       if (!dlUrl) { try { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/snap?url=${encodeURIComponent(url)}`, { timeout: 20000 }); dlUrl = data?.data?.video || data?.url; } catch {} }
@@ -18690,8 +18791,7 @@ cmd(["snapchat","snap","snapdl"], { desc: "Download Snapchat spotlight/story", c
       const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
       await editMessage(sock, jid, stKey, `👻 *MIAS MDX — Snapchat*\n\n⬢ Fetching media... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
       const cap = `👻 *Snapchat*${sz}`;
-      try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `snap_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+      await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `snap_${Date.now()}.mp4`, quoted: msg });
       await editMessage(sock, jid, stKey, `👻 *MIAS MDX — Snapchat*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*${sz}`);
       await react(sock, msg, "✅");
     } catch(e) { await editMessage(sock, jid, stKey, `👻 *MIAS MDX — Snapchat*\n\n❌ Error: ${e.message}`); }
@@ -18706,6 +18806,12 @@ cmd(["capcut","cc","ccvid"], { desc: "Download CapCut video", category: "DOWNLOA
     const stKey = stMsg.key;
     try {
       let dlUrl = null;
+      if (!dlUrl && nx?.downloader?.capcut) {
+        try {
+          const res = await nx.downloader.capcut({ url });
+          dlUrl = res?.result?.video || res?.result?.url || res?.result?.download_url;
+        } catch {}
+      }
       const r = await prexzyGet("/download/capcut", { url });
       const d = r.data;
       if (r.ok && d) dlUrl = d?.data?.video || d?.data?.url || d?.url;
@@ -18717,8 +18823,7 @@ cmd(["capcut","cc","ccvid"], { desc: "Download CapCut video", category: "DOWNLOA
       const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
       await editMessage(sock, jid, stKey, `✂️ *MIAS MDX — CapCut*\n\n⬢ Fetching media... ✅\n⬢ Downloading video... ✅\n⬡ Sending...`);
       const cap = `✂️ *CapCut*${sz}`;
-      try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `capcut_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+      await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `capcut_${Date.now()}.mp4`, quoted: msg });
       await editMessage(sock, jid, stKey, `✂️ *MIAS MDX — CapCut*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*${sz}`);
       await react(sock, msg, "✅");
     } catch(e) { await editMessage(sock, jid, stKey, `✂️ *MIAS MDX — CapCut*\n\n❌ Error: ${e.message}`); }
@@ -18733,6 +18838,12 @@ cmd(["threads","threadsdl"], { desc: "Download Threads/Meta video", category: "D
     const stKey = stMsg.key;
     try {
       let dlUrl = null;
+      if (!dlUrl && nx?.downloader?.threads) {
+        try {
+          const res = await nx.downloader.threads({ url });
+          dlUrl = res?.result?.video || res?.result?.url || (Array.isArray(res?.result) ? res.result[0]?.url : null);
+        } catch {}
+      }
       const r = await prexzyGet("/download/threads", { url });
       const d = r.data;
       if (r.ok && d) dlUrl = d?.data?.video || d?.data?.url || d?.url;
@@ -18743,8 +18854,7 @@ cmd(["threads","threadsdl"], { desc: "Download Threads/Meta video", category: "D
       const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
       await editMessage(sock, jid, stKey, `🧵 *MIAS MDX — Threads*\n\n⬢ Fetching media... ✅\n⬢ Downloading video... ✅\n⬡ Sending...`);
       const cap = `🧵 *Threads*${sz}`;
-      try { await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `threads_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+      await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `threads_${Date.now()}.mp4`, quoted: msg });
       await editMessage(sock, jid, stKey, `🧵 *MIAS MDX — Threads*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*${sz}`);
       await react(sock, msg, "✅");
     } catch(e) { await editMessage(sock, jid, stKey, `🧵 *MIAS MDX — Threads*\n\n❌ Error: ${e.message}`); }
@@ -18802,8 +18912,7 @@ cmd(["reddit","redditdl"], { desc: "Download Reddit post/video", category: "DOWN
       const mime = dlUrl.includes(".mp4") ? "video/mp4" : dlUrl.includes(".mp3") ? "audio/mpeg" : "image/jpeg";
       const cap = `🤖 *Reddit*${sz}`;
       if (mime === "video/mp4") {
-        try { await sock.sendMessage(jid, { video: buf, mimetype: mime, caption: cap }, { quoted: msg }); }
-        catch { await sock.sendMessage(jid, { document: buf, mimetype: mime, fileName: `reddit_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+        await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `reddit_${Date.now()}.mp4`, quoted: msg });
       } else if (mime === "audio/mpeg") {
         await sock.sendMessage(jid, { audio: buf, mimetype: mime, ptt: false }, { quoted: msg });
       } else {
@@ -21846,6 +21955,10 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
           async () => (await prexzyGet("/download/tiktokV3", { url: ttPick.url }, 30000)).data,
           async () => (await prexzyGet("/download/tiktokvideo", { url: ttPick.url }, 30000)).data,
           async () => (await _paGet("/api/download/tiktokdlv4", { url: ttPick.url })).data?.result,
+          async () => (await nx?.downloader?.tiktok?.({ url: ttPick.url }))?.result,
+          async () => (await nx?.downloader?.aio?.({ url: ttPick.url }))?.result,
+          async () => (await prexzyGet("/download/aio", { url: ttPick.url }, 30000)).data,
+          async () => (await prexzyGet("/download/videodropper", { url: ttPick.url }, 30000)).data,
         ];
         for (const provider of providers) {
           try {
@@ -23442,6 +23555,15 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
     } catch {}
   }
 
+  // ── Generic AIO: Nexray /downloader/aio ──
+  if (!dlUrl && nx?.downloader?.aio) {
+    try {
+      const nxaio = await nx.downloader.aio({ url });
+      const d = nxaio?.result || nxaio?.data;
+      dlUrl = d?.url || d?.video || d?.download_url || (Array.isArray(d) ? d[0]?.url : null);
+      title = title || d?.title;
+    } catch {}
+  }
   // ── Generic AIO: prexzy /download/aio catches YouTube, Twitter, Reddit, Threads, etc. ──
   if (!dlUrl) {
     try {
@@ -23583,10 +23705,7 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
         await sock.sendMessage(jid, { document: buf, mimetype: "audio/mpeg", fileName: `${(title||"audio").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp3`, caption: cap }, { quoted: msg });
       }
     } else if (isVideo) {
-      let vBuf = buf;
-      try { vBuf = await __miasNormalizeVideoBuffer(buf); } catch (_) {}
-      try { await sock.sendMessage(jid, { video: vBuf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: vBuf, mimetype: "video/mp4", fileName: `${(title||"video").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp4`, caption: cap }, { quoted: msg }); }
+      await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `${(title||"video").replace(/[^a-zA-Z0-9 ]/g,"").slice(0,60)}.mp4`, quoted: msg });
     } else {
       try { await sock.sendMessage(jid, { image: buf, caption: cap }, { quoted: msg }); }
       catch { await sock.sendMessage(jid, { document: buf, mimetype: "application/octet-stream", fileName: "download", caption: cap }, { quoted: msg }); }
@@ -25239,7 +25358,13 @@ cmd(["douyin","douyindl","dy"], { desc: "Download Douyin — .douyin <url>", cat
     try {
       const r = await prexzyGet("/download/douyin", { url }, 35000);
       const d = r.data;
-      const videoUrl = d?.data?.play || d?.data?.video || d?.data?.url || d?.url || d?.video;
+      let videoUrl = d?.data?.play || d?.data?.video || d?.data?.url || d?.url || d?.video;
+      if (!videoUrl && nx?.downloader?.douyin) {
+        try {
+          const res = await nx.downloader.douyin({ url });
+          videoUrl = res?.result?.video || res?.result?.url || res?.result?.play;
+        } catch {}
+      }
       const title = d?.data?.title || d?.title || "Douyin";
       if (!r.ok || !videoUrl) { await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — Douyin*\n\n✖ Could not download. Check the URL.`); return; }
       await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — Douyin*\n\n⬢ Fetching... ✅\n⬡ Downloading...\n⬡ Sending...`);
@@ -25247,8 +25372,7 @@ cmd(["douyin","douyindl","dy"], { desc: "Download Douyin — .douyin <url>", cat
       const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
       await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — Douyin*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
       const cap = `🎵 *${title}*${sz}\n🌐 Douyin`;
-      try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `douyin_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+      await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `douyin_${Date.now()}.mp4`, quoted: msg });
       await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — Douyin*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${title}${sz}`);
       await react(sock, msg, "✅");
     } catch(e) { await editMessage(sock, jid, stKey, `🎵 *MIAS MDX — Douyin*\n\n❌ Error: ${e.message}`); }
@@ -25270,7 +25394,13 @@ cmd(["snack", "snack2", "snackvideo", "snackvideo2", "snackdl"], { desc: "Downlo
     try {
       const r = await prexzyGet("/download/snackvideo", { url }, 35000);
       const d = r.data;
-      const videoUrl = d?.data?.play || d?.data?.video || d?.data?.url || d?.url || d?.video;
+      let videoUrl = d?.data?.play || d?.data?.video || d?.data?.url || d?.url || d?.video;
+      if (!videoUrl && nx?.downloader?.snackvideo) {
+        try {
+          const res = await nx.downloader.snackvideo({ url });
+          videoUrl = res?.result?.video || res?.result?.url || res?.result?.play;
+        } catch {}
+      }
       const title = d?.data?.title || d?.title || "SnackVideo";
       if (!r.ok || !videoUrl) { await editMessage(sock, jid, stKey, `🎬 *MIAS MDX — SnackVideo*\n\n✖ Could not download. Check the URL.`); return; }
       await editMessage(sock, jid, stKey, `🎬 *MIAS MDX — SnackVideo*\n\n⬢ Fetching... ✅\n⬡ Downloading...\n⬡ Sending...`);
@@ -25278,8 +25408,7 @@ cmd(["snack", "snack2", "snackvideo", "snackvideo2", "snackdl"], { desc: "Downlo
       const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
       await editMessage(sock, jid, stKey, `🎬 *MIAS MDX — SnackVideo*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
       const cap = `🎬 *${title}*${sz}\n🌐 SnackVideo`;
-      try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
-      catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `snack_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+      await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `snack_${Date.now()}.mp4`, quoted: msg });
       await editMessage(sock, jid, stKey, `🎬 *MIAS MDX — SnackVideo*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${title}${sz}`);
       await react(sock, msg, "✅");
     } catch(e) { await editMessage(sock, jid, stKey, `🎬 *MIAS MDX — SnackVideo*\n\n❌ Error: ${e.message}`); }
@@ -25334,7 +25463,13 @@ cmd(["rednote","xiaohongshu","xhs","rndl"], { desc: "Download RedNote/Xiaohongsh
     try {
       const r = await prexzyGet("/download/rednote", { url }, 35000);
       const d = r.data;
-      const videoUrl = d?.data?.video || d?.data?.play || d?.data?.url || d?.url || d?.video;
+      let videoUrl = d?.data?.video || d?.data?.play || d?.data?.url || d?.url || d?.video;
+      if (!videoUrl && nx?.downloader?.rednote) {
+        try {
+          const res = await nx.downloader.rednote({ url });
+          videoUrl = res?.result?.video || res?.result?.url || res?.result?.play;
+        } catch {}
+      }
       const images = d?.data?.images || d?.images || [];
       const title = d?.data?.title || d?.title || "RedNote Post";
       if (!r.ok || (!videoUrl && !images.length)) { await editMessage(sock, jid, stKey, `📕 *MIAS MDX — RedNote*\n\n✖ Could not download. The post may be private.`); return; }
@@ -25343,8 +25478,7 @@ cmd(["rednote","xiaohongshu","xhs","rndl"], { desc: "Download RedNote/Xiaohongsh
         const buf = Buffer.from((await axios.get(videoUrl, { responseType: "arraybuffer", timeout: 90000 })).data);
         const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
         const cap = `📕 *${title}*${sz}\n🌐 RedNote`;
-        try { await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg }); }
-        catch { await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `rednote_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+        await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `rednote_${Date.now()}.mp4`, quoted: msg });
         await editMessage(sock, jid, stKey, `📕 *MIAS MDX — RedNote*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${title}${sz}`);
       } else {
         let cnt = 0;
@@ -43061,13 +43195,16 @@ cmd(["hd", "remini", "enhance", "upscale"], { desc: "Enhance image/video quality
       await new Promise((res, rej) => execFile(ff, ["-y", "-i", inp, "-vf", "scale=iw*2:ih*2:flags=lanczos", "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-c:a", "copy", "-movflags", "faststart", outp], { timeout: 600000 }, e => e ? rej(e) : res()));
       const sz = fs.statSync(outp).size;
       const vidBuf = fs.readFileSync(outp);
-      const payload = sz > 64 * 1024 * 1024
-        ? { document: vidBuf, mimetype: "video/mp4", fileName: `hd_${Date.now()}.mp4`, caption: "✨ *HD Enhanced* (sent as file — too big for inline play)" }
-        : { video: vidBuf, mimetype: "video/mp4", caption: "✨ *HD Enhanced*" };
-      await sock.sendMessage(jid, payload, { quoted: msg });
-      // delivered → wipe from disk AND memory immediately
-      try { fs.unlinkSync(inp); } catch {}
-      try { fs.unlinkSync(outp); } catch {}
+      try {
+        await deliverVideoWithTTHD(sock, jid, vidBuf, {
+          caption: "✨ *HD Enhanced*",
+          fileName: `hd_${Date.now()}.mp4`,
+          quoted: msg,
+        });
+      } finally {
+        try { fs.unlinkSync(inp); } catch {}
+        try { fs.unlinkSync(outp); } catch {}
+      }
     }
     await _done("✨ *HD Enhancement complete!* ✅");
     await react(sock, msg, "✅");

@@ -469,6 +469,49 @@ async function searchCandidates(query, platform = DEFAULT_PLATFORM) {
   const primary = await tikwmSearch(query).catch(() => []);
   const all = [...primary];
 
+  if (uniqueCandidates(all).length < 5) {
+    try {
+      const { data: pxData } = await axios.get("https://prexzyapis.com/search/tiktoksearch", {
+        params: { q: query },
+        timeout: 20000,
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      const pxRows = pxData?.data || pxData?.result || [];
+      for (const r of Array.isArray(pxRows) ? pxRows : []) {
+        const u = r?.url || r?.play || r?.video;
+        if (u && !all.some((it) => it.sourceUrl === u)) {
+          all.push(candidate(u, {
+            platform: "tiktok",
+            title: r?.title || `${query} viral edit`,
+            downloadUrl: r?.play || r?.video || u,
+            qualityScore: 70,
+          }));
+        }
+      }
+    } catch {}
+  }
+  if (uniqueCandidates(all).length < 5) {
+    try {
+      const { data: nxData } = await axios.get("https://api.nexray.eu.cc/search/tiktok", {
+        params: { q: query },
+        timeout: 20000,
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      const nxRows = nxData?.result || nxData?.data || [];
+      for (const r of Array.isArray(nxRows) ? nxRows : []) {
+        const u = r?.url || r?.play || r?.video || (r?.id ? `https://www.tiktok.com/@user/video/${r.id}` : null);
+        if (u && !all.some((it) => it.sourceUrl === u)) {
+          all.push(candidate(u, {
+            platform: "tiktok",
+            title: r?.title || `${query} viral edit`,
+            downloadUrl: r?.play || r?.video || u,
+            qualityScore: 70,
+          }));
+        }
+      }
+    } catch {}
+  }
+
   // Search-engine scraping is only a fallback now, and every scraped link is
   // checked against the topic before it can be delivered.
   if (uniqueCandidates(all).length < 5) {
@@ -489,16 +532,31 @@ async function prexzyDownload(sourceUrl, platform) {
   const endpointByPlatform = { tiktok: "/download/tiktok" };
   const endpoint = endpointByPlatform[platform];
   if (!endpoint) return "";
+  const hosts = [
+    process.env.PREXZY_API || "https://prexzyapis.com",
+    "https://apis.prexzyvilla.site",
+  ];
+  for (const host of hosts) {
+    try {
+      const response = await axios.get(`${host}${endpoint}`, {
+        params: { url: sourceUrl },
+        timeout: 35000,
+        headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+      });
+      const u = deepUrl(response.data);
+      if (u) return u;
+    } catch {}
+  }
   try {
-    const response = await axios.get(`https://apis.prexzyvilla.site${endpoint}`, {
+    const { data } = await axios.get("https://api.nexray.eu.cc/downloader/tiktok", {
       params: { url: sourceUrl },
       timeout: 35000,
       headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
     });
-    return deepUrl(response.data);
-  } catch {
-    return "";
-  }
+    const u = deepUrl(data);
+    if (u) return u;
+  } catch {}
+  return "";
 }
 
 async function tikwmDownload(sourceUrl) {
