@@ -49,7 +49,6 @@ export const MENU_CATEGORIES = [
     label: "⬇️ Downloads",
     cmds: [
       { name: "play",       desc: "Play / download a song",        wizard: true },
-      { name: "song",       desc: "Download song as audio",        wizard: true },
       { name: "video",      desc: "Download a YouTube video",      wizard: true },
       { name: "ytmp3",      desc: "YouTube → MP3 audio",           wizard: true },
       { name: "ytmp4",      desc: "YouTube → MP4 video",           wizard: true },
@@ -61,7 +60,6 @@ export const MENU_CATEGORIES = [
       { name: "mediafire",  desc: "MediaFire downloader",          wizard: true },
       { name: "soundcloud", desc: "SoundCloud downloader",         wizard: true },
       { name: "twitter",    desc: "Twitter / X downloader",        wizard: true },
-      { name: "xdownload",  desc: "X (Twitter) post downloader",   wizard: true },
       { name: "apk",        desc: "Search and download APK",       wizard: true },
     ],
   },
@@ -88,7 +86,6 @@ export const MENU_CATEGORIES = [
       { name: "google",    desc: "Google web search",          wizard: true },
       { name: "youtube",   desc: "YouTube search",             wizard: true },
       { name: "wiki",      desc: "Wikipedia lookup",           wizard: true },
-      { name: "wikipedia", desc: "Wikipedia search",           wizard: true },
       { name: "weather",   desc: "Weather for a city",         wizard: true },
       { name: "news",      desc: "Latest news headlines",      wizard: true },
     ],
@@ -177,18 +174,6 @@ export const MENU_CATEGORIES = [
     ],
   },
   {
-    id: "cat_account",
-    label: "💰 Account",
-    cmds: [
-      { name: "premium",  desc: "View premium status",            wizard: false },
-      { name: "register", desc: "Register your account",          wizard: false },
-      { name: "balance",  desc: "Check your balance",             wizard: false },
-      { name: "buy",      desc: "Purchase premium",               wizard: true  },
-      { name: "refer",    desc: "Referral system",                wizard: false },
-      { name: "limit",    desc: "Check daily usage limit",        wizard: false },
-    ],
-  },
-  {
     id: "cat_games",
     label: "🎮 Games",
     cmds: [
@@ -196,7 +181,6 @@ export const MENU_CATEGORIES = [
       { name: "truth",     desc: "Truth or dare — truth",         wizard: false },
       { name: "dare",      desc: "Truth or dare — dare",          wizard: false },
       { name: "8ball",     desc: "Magic 8-ball",                  wizard: true  },
-      { name: "joke",      desc: "Random joke",                   wizard: false },
       { name: "quote",     desc: "Inspirational quote",           wizard: false },
       { name: "riddle",    desc: "Riddle challenge",              wizard: false },
     ],

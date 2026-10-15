@@ -7284,18 +7284,7 @@ cmd(["flirt2","flirtline2"], { desc: "Random flirt line (Prince API)", category:
   await sendReply(sock, msg, `😍 *Flirt Line*\n\n_${res || '❌ No flirt line.'}_`);
 });
 
-cmd(["joke2","jokes2"], { desc: "Random joke (Prince API)", category: "FUN" }, async (sock, msg) => {
-  await react(sock, msg, "😂");
-  try {
-    const r = await _paGet('/api/fun/jokes');
-    if (r.ok && r.data?.success) {
-      const res = r.data.result;
-      if (res?.setup && res?.punchline) return await sendReply(sock, msg, `😂 *Joke*\n\n${res.setup}\n\n_${res.punchline}_`);
-      return await sendReply(sock, msg, `😂 *Joke*\n\n${typeof res === 'string' ? res : JSON.stringify(res)}`);
-    }
-    await sendReply(sock, msg, '❌ Could not fetch a joke.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
+
 
 cmd(["love2","lovemsg"], { desc: "Love message (Prince API)", category: "FUN" }, async (sock, msg) => {
   await react(sock, msg, "❤️");
@@ -7426,30 +7415,7 @@ cmd(["thankyou2","thanks2"], { desc: "Thank you message", category: "FUN" }, asy
 // ─────────── DOWNLOAD COMMANDS ─────────────────────────────────────────────
 
 
-cmd(["fbv2","facebookv2","metav2"], { desc: "Facebook Video Downloader V2", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const url = args.join(" ");
-  if (!_paIsUrl(url)) return await sendReply(sock, msg, `📘 *Facebook V2*\n\nUsage: ${CONFIG.PREFIX}fbv2 <facebook-video-url>`);
-  await react(sock, msg, "📘");
-  await sendReply(sock, msg, '⏳ Downloading Facebook video (v2)...');
-  try {
-    const r = await _paGet('/api/download/facebookv2', { url });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const videoUrl = res?.hd || res?.sd || res?.url;
-      if (videoUrl) {
-        await sock.sendMessage(msg.key.remoteJid, { video: { url: videoUrl }, mimetype: 'video/mp4', caption: '📘 *Facebook Video V2*' }, { quoted: msg });
-        return await react(sock, msg, '✅');
-      }
-    }
-    await sendReply(sock, msg, `❌ Facebook V2 failed. Try ${CONFIG.PREFIX}fb.`);
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
 
-  // ── FALLBACK ENDPOINTS (merged from duplicate cmd registrations) ──
-  // fallback prexzy: prexzyGet('/download/facebookv2', args)
-  // fallback prexzy: prexzyGet('/download/rednote', args)
-  // fallback prexzy: prexzyGet('/download/threadsV2', args)
-  // fallback prexzy: prexzyGet('/anime/animekill-home', args)
-});
 
 cmd(["igstory","instastory"], { desc: "Instagram Story Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const uname = (args.join(" ") || "").replace(/https?:\/\/(www\.)?instagram\.com\//i, '').replace(/\//g, '').trim();
@@ -7481,7 +7447,7 @@ cmd(["igstory","instastory"], { desc: "Instagram Story Downloader", category: "D
   } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
 });
 
-cmd(["twitter2","xdl2","twitterdl"], { desc: "Twitter/X Video Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
+cmd(["twitter", "twitter2", "xdl", "xdl2", "twitterdl", "xdownload"], { desc: "Twitter/X Video Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const url = args.join(" ");
   if (!_paIsUrl(url)) return await sendReply(sock, msg, `🐦 *Twitter/X Downloader*\n\nUsage: ${CONFIG.PREFIX}twitter2 <tweet-url>`);
   await react(sock, msg, "🐦");
@@ -7509,94 +7475,14 @@ cmd(["twitter2","xdl2","twitterdl"], { desc: "Twitter/X Video Downloader", categ
   } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
 });
 
-cmd(["pinterest2","pin2dl"], { desc: "Pinterest Media Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const url = args.join(" ");
-  if (!_paIsUrl(url)) return await sendReply(sock, msg, `📌 *Pinterest*\n\nUsage: ${CONFIG.PREFIX}pinterest2 <pin-url>`);
-  await react(sock, msg, "📌");
-  await sendReply(sock, msg, '⏳ Downloading Pinterest...');
-  try {
-    const r = await _paGet('/api/download/pinterestdl', { url });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const mediaUrl = res?.video || res?.image || res?.url;
-      if (mediaUrl) {
-        if (/\.(mp4|mov|webm)/i.test(mediaUrl) || res?.video) {
-          await sock.sendMessage(msg.key.remoteJid, { video: { url: mediaUrl }, mimetype: 'video/mp4', caption: '📌 *Pinterest Video*' }, { quoted: msg });
-        } else {
-          await sock.sendMessage(msg.key.remoteJid, { image: { url: mediaUrl }, caption: '📌 *Pinterest Image*' }, { quoted: msg });
-        }
-        return await react(sock, msg, '✅');
-      }
-    }
-    await sendReply(sock, msg, '❌ Pinterest download failed.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
-
-cmd(["snack2","snackvideo2"], { desc: "SnackVideo Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const url = args.join(" ");
-  if (!_paIsUrl(url)) return await sendReply(sock, msg, `🎬 *SnackVideo*\n\nUsage: ${CONFIG.PREFIX}snack2 <url>`);
-  await react(sock, msg, "🎬");
-  await sendReply(sock, msg, '⏳ Downloading SnackVideo...');
-  try {
-    const r = await _paGet('/api/download/snackdl', { url });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const videoUrl = res?.video || res?.url || res?.nowm;
-      if (videoUrl) {
-        await sock.sendMessage(msg.key.remoteJid, { video: { url: videoUrl }, mimetype: 'video/mp4', caption: '🎬 *SnackVideo*' }, { quoted: msg });
-        return await react(sock, msg, '✅');
-      }
-    }
-    await sendReply(sock, msg, '❌ SnackVideo download failed.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
-
-cmd(["spotifyv2","spotdlv2"], { desc: "Spotify Downloader (NexRay primary) — .spotifyv2 <spotify URL>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const url = (args.join(" ") || "").trim();
-  if (!url || !/spotify\.com/i.test(url)) return await sendReply(sock, msg, `🎧 *Spotify Downloader*\n━━━━━━━━━━━━━━━━━━━━\nUsage: ${CONFIG.PREFIX}spotifyv2 <spotify track URL>\nExample: ${CONFIG.PREFIX}spotifyv2 https://open.spotify.com/track/...`);
-  await react(sock, msg, "🎧");
-  const _spJid = msg.key.remoteJid;
-  const _spSt  = await sock.sendMessage(_spJid, { text: `🎧 *Spotify*\n\n⏳ Processing...` }, { quoted: msg });
-  try {
-    if (!nx) throw new Error('NexRay module not loaded');
-    const _nr = await nx.downloader.spotify({ url });
-    const _nd = _nr?.result || _nr?.data || _nr || {};
-    const _nt = _nd?.title||_nd?.name||_nd?.track||'Spotify Track';
-    const _na = _nd?.artist||_nd?.artists||_nd?.author||'';
-    const _nc = _nd?.cover||_nd?.thumbnail||_nd?.image||_nd?.artwork||'';
-    const _nu = _nd?.download||_nd?.url||_nd?.audio||_nd?.mp3||_nd?.link;
-    if (!_nu) throw new Error('No download URL in NexRay response');
-    await sock.sendMessage(_spJid, { text: `🎧 *Spotify*\n\n⬇️ Downloading *${_nt}*...`, edit: _spSt.key });
-    const _aud = Buffer.from((await axios.get(_nu, { responseType: 'arraybuffer', timeout: 120000 })).data);
-    if (_aud.length < 1000) throw new Error('Downloaded file too small');
-    const _pl = { audio: _aud, mimetype: 'audio/mpeg', ptt: false, fileName: `${_nt.replace(/[^a-zA-Z0-9 ]/g,'')}.mp3` };
-    if (_nc) { try { const _tb=Buffer.from((await axios.get(_nc,{responseType:'arraybuffer',timeout:12000})).data); if(_tb.length>500) _pl.contextInfo={externalAdReply:{title:_nt,body:_na,thumbnail:_tb,mediaType:1,renderLargerThumbnail:true}}; } catch {} }
-    await sock.sendMessage(_spJid, _pl, { quoted: msg });
-    try { await sock.sendMessage(_spJid, { delete: _spSt.key }); } catch {}
-    return await react(sock, msg, '✅');
-  } catch (e) {
-    try { const _r2=await _paGet('/api/download/spotifydlv2',{url}); if(_r2.ok&&_r2.data?.result){const _res2=_r2.data.result;const _au2=_res2?.url||_res2?.audio||_res2?.download;const _tl2=_res2?.title||_res2?.name||'Spotify Track';if(_au2){const _buf2=await _paBuf(_au2,60000);await sock.sendMessage(_spJid,{audio:_buf2,mimetype:'audio/mpeg',ptt:false,fileName:`${_tl2}.mp3`},{quoted:msg});try{await sock.sendMessage(_spJid,{delete:_spSt.key});}catch{};return await react(sock,msg,'✅');}}} catch {}
-    await sock.sendMessage(_spJid,{text:`❌ *Spotify Error:* ${e.message}`,edit:_spSt.key}).catch(()=>sendReply(sock,msg,`❌ Spotify failed: ${e.message}`));
-    await react(sock, msg, '❌');
-  }
-});
 
 
-cmd(["mediafire2","mfdl2"], { desc: "MediaFire Direct Link", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const url = args.join(" ");
-  if (!_paIsUrl(url)) return await sendReply(sock, msg, `☁️ *MediaFire*\n\nUsage: ${CONFIG.PREFIX}mediafire2 <mediafire-url>`);
-  await react(sock, msg, "☁️");
-  try {
-    const r = await _paGet('/api/download/mediafire', { url });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const dlUrl = res?.url || res?.download || res?.direct;
-      const name = res?.filename || res?.name || 'file';
-      if (dlUrl) return await sendReply(sock, msg, `☁️ *MediaFire Download*\n\n📄 *File:* ${name}\n📦 *Size:* ${res?.size || 'Unknown'}\n\n🔗 ${dlUrl}`);
-    }
-    await sendReply(sock, msg, '❌ MediaFire download failed.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
+
+
+
+
+
+
 
 cmd(["gdrive2","googledrive2"], { desc: "Google Drive Direct Link", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const url = args.join(" ");
@@ -7628,53 +7514,9 @@ cmd(["gofile2"], { desc: "GoFile Downloader", category: "DOWNLOAD" }, async (soc
   } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
 });
 
-cmd(["apkdl2","apkdownload2"], { desc: "APK Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const q = args.join(" ");
-  if (!q) return await sendReply(sock, msg, `📦 *APK Downloader*\n\nUsage: ${CONFIG.PREFIX}apkdl2 <app name or package>`);
-  await react(sock, msg, "📦");
-  await sendReply(sock, msg, '⏳ Searching APK...');
-  try {
-    const r = await _paGet('/api/download/apkdl', { q });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const dlUrl = res?.url || res?.download || res?.apkUrl;
-      if (dlUrl && /^https?:\/\//i.test(String(dlUrl))) {
-        // Stream to disk with a hard 5GB cap, then deliver as a document.
-        // Buffer-free download = no RAM spike, no OOM, no bot restart.
-        const ax = require("axios");
-        const os2 = require("os"), path2 = require("path"), fs2 = require("fs");
-        const MAX = 5 * 1024 * 1024 * 1024;
-        const tmpFile = path2.join(os2.tmpdir(), "apk2_" + Date.now() + ".apk");
-        let received = 0;
-        try {
-          const { data: stream } = await ax.get(dlUrl, { responseType: "stream", timeout: 15 * 60 * 1000, maxRedirects: 5, headers: { "User-Agent": "Mozilla/5.0" }, validateStatus: (c) => c >= 200 && c < 400 });
-          await new Promise((resolve, reject) => {
-            const writer = fs2.createWriteStream(tmpFile);
-            stream.on("data", (chunk) => { received += chunk.length; if (received > MAX) { writer.destroy(); reject(new Error("APK is larger than the 5GB safety cap.")); } });
-            stream.on("error", (e) => { writer.destroy(); reject(e); });
-            stream.pipe(writer);
-            writer.on("finish", () => resolve());
-            writer.on("error", (e) => reject(e));
-          });
-          if (received === 0) throw new Error("Empty APK stream.");
-          const buf = fs2.readFileSync(tmpFile);
-          await sock.sendMessage(msg.key.remoteJid, {
-            document: buf,
-            fileName: (String(res?.name || q).replace(/[\\/:*?"<>|\n\r\t]/g, "_").trim() || q) + ".apk",
-            mimetype: "application/vnd.android.package-archive",
-            caption: `📦 *${res?.name || q}*\n💾 Size: ${(received / 1048576).toFixed(1)} MB`
-          }, { quoted: msg });
-          await react(sock, msg, "✅");
-        } catch (e2) { await sendReply(sock, msg, `❌ APK download failed: ${e2.message}`); }
-        finally { try { fs2.unlinkSync(tmpFile); } catch {} }
-        return;
-      }
-    }
-    await sendReply(sock, msg, '❌ APK not found.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
 
-cmd(["gitclone2","clonegit2"], { desc: "GitHub Repo Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
+
+cmd(["gitclone", "gitclone2", "clonegit", "clonegit2"], { desc: "GitHub Repo Downloader", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const url = args.join(" ");
   if (!_paIsUrl(url)) return await sendReply(sock, msg, `🐙 *Git Clone*\n\nUsage: ${CONFIG.PREFIX}gitclone2 <github-repo-url>`);
   await react(sock, msg, "🐙");
@@ -7691,63 +7533,13 @@ cmd(["gitclone2","clonegit2"], { desc: "GitHub Repo Downloader", category: "DOWN
 
 // ─────────── TOOLS COMMANDS ────────────────────────────────────────────────
 
-cmd(["qr2","createqr2","genqr2"], { desc: "QR Code Generator (Prince API)", category: "TOOLS" }, async (sock, msg, args) => {
-  const text = args.join(" ");
-  if (!text) return await sendReply(sock, msg, `🔲 *QR Generator*\n\nUsage: ${CONFIG.PREFIX}qr2 <text or url>`);
-  await react(sock, msg, "🔲");
-  try {
-    const r = await _paGet('/api/tools/createqr', { text });
-    if (r.ok && r.data?.success && r.data.result) {
-      const qrUrl = typeof r.data.result === 'string' ? r.data.result : r.data.result?.url || r.data.result?.image;
-      if (qrUrl) {
-        const buf = await _paBuf(qrUrl, 20000);
-        return await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: `🔲 *QR Code*\n_${text.slice(0,60)}_` }, { quoted: msg });
-      }
-    }
-    const fallbackUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(text)}`;
-    const fallbackBuf = await _paBuf(fallbackUrl, 20000);
-    await sock.sendMessage(msg.key.remoteJid, { image: fallbackBuf, caption: `🔲 *QR Code*\n_${text.slice(0,80)}_` }, { quoted: msg });
-  } catch (e) { await sendReply(sock, msg, `❌ QR Error: ${e.message}`); }
-});
 
-cmd(["fancy2","fancytext2"], { desc: "Fancy Text Generator (Prince API)", category: "TOOLS" }, async (sock, msg, args) => {
-  const text = args.join(" ");
-  if (!text) return await sendReply(sock, msg, `🅰️ *Fancy Text*\n\nUsage: ${CONFIG.PREFIX}fancy2 <text>`);
-  await react(sock, msg, "🅰️");
-  try {
-    const r = await _paGet('/api/tools/fancy', { text });
-    if (r.ok && r.data?.success && (r.data.result || r.data.results)) {
-      const items = r.data.results || (Array.isArray(r.data.result) ? r.data.result : [{ name: 'Fancy', result: r.data.result }]);
-      let msg2 = `🅰️ *Fancy Text: ${text}*\n\n`;
-      for (const item of items.slice(0, 12)) msg2 += `*${item.name}:* ${item.result}\n`;
-      return await sendReply(sock, msg, msg2.trim());
-    }
-    await sendReply(sock, msg, '❌ Fancy text failed.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
 
-cmd(["define2","dictionary2","meaning2"], { desc: "Dictionary/Definition (Prince API)", category: "TOOLS" }, async (sock, msg, args) => {
-  const word = args.join(" ");
-  if (!word) return await sendReply(sock, msg, `📖 *Dictionary*\n\nUsage: ${CONFIG.PREFIX}define2 <word>`);
-  await react(sock, msg, "📖");
-  try {
-    const r = await _paGet('/api/tools/define', { term: word.split(' ')[0], word: word.split(' ')[0] });
-    if (r.ok && r.data?.success && r.data.result) {
-      const res = r.data.result;
-      const def = typeof res === 'string' ? res : res?.definition || res?.meaning || JSON.stringify(res).slice(0, 400);
-      return await sendReply(sock, msg, `📖 *${word.split(' ')[0].toUpperCase()}*\n\n${def}`);
-    }
-    const dictRes = await axios.get(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word.split(' ')[0])}`, { timeout: 10000 });
-    const entry = dictRes.data?.[0];
-    if (entry) {
-      const meanings = entry.meanings?.map(m2 => `*${m2.partOfSpeech}:* ${m2.definitions[0]?.definition}`).join('\n') || 'No definition found';
-      return await sendReply(sock, msg, `📖 *${entry.word.toUpperCase()}*\n\n${meanings}`);
-    }
-    await sendReply(sock, msg, '❌ Word not found.');
-  } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
-});
 
-cmd(["encrypt2","encrypttext"], { desc: "Text Encryptor (Prince API)", category: "TOOLS" }, async (sock, msg, args) => {
+
+
+
+cmd(["encrypt", "encrypt2", "encrypttext"], { desc: "Text Encryptor (Prince API)", category: "TOOLS" }, async (sock, msg, args) => {
   const text = args.join(" ");
   if (!text) return await sendReply(sock, msg, `🔐 *Encrypt*\n\nUsage: ${CONFIG.PREFIX}encrypt2 <text>`);
   await react(sock, msg, "🔐");
@@ -7765,7 +7557,7 @@ cmd(["encrypt2","encrypttext"], { desc: "Text Encryptor (Prince API)", category:
   } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
 });
 
-cmd(["ebase2","base64enc"], { desc: "Base64 Encode (Prince API)", category: "TOOLS" }, async (sock, msg, args) => {
+cmd(["ebase", "ebase2", "base64enc", "b64encode", "encode64"], { desc: "Base64 Encode", category: "TOOLS" }, async (sock, msg, args) => {
   const text = args.join(" ");
   if (!text) return await sendReply(sock, msg, `📦 *Base64 Encode*\n\nUsage: ${CONFIG.PREFIX}ebase2 <text>`);
   await react(sock, msg, "📦");
@@ -7776,7 +7568,7 @@ cmd(["ebase2","base64enc"], { desc: "Base64 Encode (Prince API)", category: "TOO
   } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
 });
 
-cmd(["dbase2","base64dec"], { desc: "Base64 Decode (Prince API)", category: "TOOLS" }, async (sock, msg, args) => {
+cmd(["dbase", "dbase2", "base64dec", "b64decode", "decode64"], { desc: "Base64 Decode", category: "TOOLS" }, async (sock, msg, args) => {
   const text = args.join(" ");
   if (!text) return await sendReply(sock, msg, `📦 *Base64 Decode*\n\nUsage: ${CONFIG.PREFIX}dbase2 <base64-text>`);
   await react(sock, msg, "📦");
@@ -7833,39 +7625,28 @@ const MENU_CATEGORIES = [
   { name: "DOWNLOAD",  emoji: "📥", cmds: [
     "ytmp3","ytmp4",
     "tiktok",
-    "twitter","twitter2",
-    "spotify","spotifyv2",
-    "facebook","facebookv2",
+    "twitter",
+    "spotify",
+    "facebook",
     "instagram","igstory","ighighlights",
-    "play","play2","video",
+    "play","video",
     "snapchat","capcut","threads",
     "savetube","trending",
-    "pinterest","pinterest2","pinterestv2",
-    "mediafire","mediafire2",
+    "pinterest",
+    "mediafire",
     "soundcloud","apk","reddit","pdf","aio","unzip",
     "doods","web2zip","sfile",
     "douyin","rednote",
-    "snack","snack2","terabox",
+    "snack","terabox",
     "tgs",
-    "gitclone","playlist","gitclone2",
-    "gdrive2","gofile2","apkdl2","pastebin"] },
-  { name: "ECONOMY",   emoji: "💰", cmds: [
-    "money","balance","bal","wallet","bank","bankbal",
-    "rank","perks","daily","work","crime","beg","fish","hunt","pay","rob","richest","networth","cooldowns","transactions","achievements","grouplb",
-    "deposit","dep","withdraw","with","interest","assets","buyasset","collect","buy","upgrade","hireworker","sellasset","shop","inventory","inv","shopadd","shopdel",
-    "coinflip","dice","slots","roulette","blackjack","gamble","crash","highlow","wheel","cups","scratch","scratchcard","numberguess","russianroulette","horserace","rockpaperscissors","rps","lottery","gambstats",
-    "market","sell","marketbuy","unsell","gift","claim","leaderboard","lb2",
-    "addcoins","removecoins","setcoins","setlevel","addlevel","addbank","ecoreset",
-    "hospital","nerve","energy","status","autoshield","tornhelp","train","stats","battlelb","attack","attacklog","cities","travel","travelstatus","abroad","buyitem","sellitems","mybag",
-    "crypto","buyc","sellc","portfolio","cryptolb","drugs","buydrg","usedrg","drugstatus",
-    "createfaction","joinfaction","leavefaction","faction","fmembers","fvault","fdeposit","fwithdraw","finvite","fkick","fopen","fwar","factions",
-    "bounties","setbounty","mybounty","petshop","buypet","mypet","carepet","renamepet","petleaderboard","petreward","profile"] },
+    "gitclone","playlist",
+    "gdrive2","gofile2","pastebin"] },
   { name: "FUN",       emoji: "🎉", cmds: [
     "confess","birthday","engage","accept","reject","divorce","signdivorcepaper","contestdivorce","date","breakup","crush","mixedfeelings","ecobio","relstatus","duel","acceptduel",
-    "joke","truth","dare","advice","line","insult","adopt","adoptlist","unadopt","vibecheck","emojiart","shout","rate","fakechat","gaycheck","lescheck","hack","repeat",
+    "truth","dare","advice","line","insult","adopt","adoptlist","unadopt","vibecheck","emojiart","shout","rate","fakechat","gaycheck","lescheck","hack","repeat",
     "meme","meme2","memegen","makememe","memetext","memetxt","textmeme","spongymeme","spongebobmeme","sbob",
     "pickup","pickupline","rizz","mybio","setmybio",
-    "padv","princadvice","flirt2","flirtline2","joke2","jokes2","love2","lovemsg","motivation2","motivate2","quote2","quotes2",
+    "padv","princadvice","flirt2","flirtline2","love2","lovemsg","motivation2","motivate2","quote2","quotes2",
     "pickupline2","pickup2","truth2","dare2","dares2","heartbreak2","shayari2","gn2","goodnight2","gratitude2","thankful2",
     "friendship2","friendquote2","newyear2","happynewyear2","christmas2","xmas2","halloween2","valentine2","valentines2",
     "roseday2","mothersday2","happymothersday2","fathersday2","happyfathersday2","boyfriendsday2","girlfriendsday2","thankyou2","thanks2"] },
@@ -7922,59 +7703,37 @@ const MENU_CATEGORIES = [
     "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",
     "safemode"] },
     
-  { name: "RANDOM",    emoji: "🎲", cmds: ["koreangirl","japangirl","malaysiagirl","indonesiagirl","chinagirl","vietnamgirl","thaigirl","hijabgirl","randomgirl","pfp","boypic","randomcat2","randomdog2","randomcar","waifu2","loli2","bluearchive","tiktokgirl","randomsfw","randommoe","randomai"] },
   { name: "SEARCH",    emoji: "🔍", cmds: [
-    "define","wiki","ud","google","gsearch",
-    "tiksearch","ttsearch","spotisearch","spotifysearch2","spotisearch2","spoti","spoti2",
-    "ytsearch","ytinfo","youtubeinfo","ytmeta","youtubecheck","ytmonetize","yts",
-    "img","hdwallpaper","wall","wallpaper","pinterestsearch","pintrest",
-    "lyrics","lyrics2","weather","currency",
-    "github","githubuser","ghuser","guser","githubrepo","grepo","ghrepos","githubissues","ghissues","gissue","githubcode","ghcode",
-    "news","sportsnews","sports2","football","basketball","basketballscore","nba","othersports",
-    "imdbsearch","imdb2","movieinfo","filmdetail","filmfind","filmrec",
-    "ftball","recommend",
-    "apksearch","apkfind","android1","fdroidsearch","fdroidapp",
-    "scsearch","scloud","soundcloudsearch","sc2",
-    "igsearch","igsearch2","instasearch",
-    "telegramchan","tgchan","tgsearch","wagroupsearch","wags","findwagroup",
-    "amusic","applemusic","itunessearch",
-    "nik","nikcheck","nikparse",
-    "trending2","trendings","ytmonet"] },
+    "define","wiki","ud","google",
+    "tiksearch","spotisearch",
+    "ytsearch","ytinfo","ytmonetize",
+    "img","wallpaper","pinterestsearch",
+    "lyrics","weather","currency",
+    "github","githubrepo","githubissues","githubcode",
+    "news","sportsnews","football","basketball","othersports",
+    "imdbsearch","recommend",
+    "apksearch","fdroidsearch",
+    "scsearch","igsearch",
+    "telegramchan","wagroupsearch",
+    "applemusic","nik","trending2"] },
   { name: "SESSION",   emoji: "🔑", cmds: ["pair","pair1","pair2","getbot","pair4","paircode","pairlink","pairpop","sm1","listpair","validate","validate2"] },
   { name: "SETTINGS",  emoji: "⚙️",  cmds: ["getprivacy","setprivacy","setpp","setpfp","setbotpic","botpic","setbio","setabout","setname","setbotname","fulldp","setfulldp","setfullpp","setting","settings","config2"] },
   { name: "STALK",     emoji: "🕵️", cmds: ["igstalk","stalkinsta","instainfo","ttstalk","stalktiktok","ttinfo","twitterstalk","twitterinfo","xstalk","stalktw","ytstalk","stalkyoutube","ytinfo2","ffstalk","stalkff","freefire","githubstalk","ghstalk","gstalk","npmstalk","npmpkg","npminfo"] },
-  { name: "TEXT",      emoji: "📝", cmds: ["say","fancy","fancylist",
-    "allstyles","circledtext","circlednegtext","fullwidthtext","mathboldtext","mathboldfraktur","mathbolditalic","mathboldscript","mathdoublestruck",
-    "mathmonospace","mathsanstext","mathsansbold","mathsansbolditalic","mathsansitalic","parenthesized","regionalindicator","squaredtext","squarednegtext",
-    "tagtext","acutetext","cjkthaitext","curvy1text","curvy2text","curvy3text","fauxcyrillic","fauxethiopic","mathfraktur","rockdotstext","smallcapstext",
-    "strokedtext","subscripttext","superscripttext","invertedtext","reversedtext"] },
   { name: "TEXTMAKER", emoji: "✏️", cmds: ["glitchtext","watercolortext","neonglitch","glowingtext","luxurygold","underwatertext","gradienttext","galaxyneon","royaltext","cartoonstyle","papercutstyle","summerbeach","3dhologram","galaxystyle","typographytext","pixelglitch","advancedglow","deletetext","blackpinkstyle","effectclouds","multicolorneon","style1917","greenlight","glasswrites","ttp2","spongebobmeme"] },
   { name: "TOOLS",     emoji: "🔧", cmds: [
     "afk","unafk","calc","note","price","fetch","schedule","schedules","cancelschedule","shazam",
-    "sticker","take","shorten","shortenurl2","qr","ss","ss2","screenshot2","webshot2","html2img","htmltoimg","htmlrender","t2image","textimage","textpic","giftext","textgif","textmp4","texttomp4",
-    "ip","myip","getmyip","ipinfo","iplookup","geoip","siteinfo","webinfo","hostinfo","hostcheck","domaincheck",
-    "trt","uuid","save","time","rmwm","vv","vv2","calendar",
+    "sticker","take","shorten","qr","ss","html2img","textimage","textgif","textmp4",
+    "ip","myip","webinfo","trt","uuid","save","time","rmwm","vv","vv2","calendar",
     "ebinary","debinary","ebase","dbase",
-    "truecaller","truecallerlookup",
-    "emojiencrypt","emojidecrypt","encryptemoji","decryptemoji","encrypt","decrypt",
-    "encfile","decfile","htmlenc","htmldecode","htmlencode","htmlecnc","htmlobfuscate",
-    "fdroid","fdroidsearch","fdroidapp",
-    "jsobfuscate","jsprotect","obfuscatejs",
+    "truecaller","emojiencrypt","emojidecrypt","encrypt","decrypt",
+    "encfile","decfile","htmlencrypt",
+    "fdroid","jsobfuscate",
     "entoid","idtoen","jatoid","kotoid","zhtoid","artoid",
-    "detectlanguage","langdetect","whatlang",
-    "yttranscript","youtubetranscript","ytsubs","tktranscript","tiktoktranscript","tiktranscript","tttranscript",
-    "tinube","tinubeshorten","tinubeurl",
-    "spooemoji","emojishorten","randomshort","spoo","spoourl","spoome","spooemojiurl",
-    "dagd","dagdshort","vgd","vgdshort","pshorten","randomurl","randshorten","urlshort2","urlinfo",
-    "smscountries","sms24countries","sms24msg","sms24num",
-    "vnum","vnummsg","veepcountries","veepnum","veepmsg","vnumbers","vnumcountries","vnummessages","veepcountry","veepncountries","veepnmessages","veepnmsg","veepnsms","veepnumbers",
-    "codecompile","codecompile2","compile","compile2","runcode","checksyntax","checkcode","codecheck","syntax","syntaxcheck","codeconverter","codeconvert","convertcode","convertcode2",
-    "anonmail","sendemail","emailsend",
-    "fetchfile","fromurl","getfile","tourl","dl",
-    "bcheck","geoip","tiktoktext","ttcaption","ttgif","ttimage","ttmp4","ttpen",
-    "htmlencrypt","prompttocode","detectbugs",
-    "qr2","createqr2","genqr2","fancy2","fancytext2","define2","dictionary2","meaning2",
-    "encrypt2","encrypttext","ebase2","base64enc","dbase2","base64dec"] },
+    "detectlanguage",
+    "yttranscript","tktranscript",
+    "codecompile","syntaxcheck","codeconverter",
+    "sendemail","getfile",
+    "prompttocode","detectbugs"] },
   { name: "TTS",       emoji: "🔊", cmds: ["ttslist","listvoices"] },
   { name: "UTILITY",   emoji: "🛠️", cmds: ["fakeid","leakcheck","tempmail","checkmail","readmail","remind","tourl","litterbox","timezone","tz","countdown","cd","genpass","password","pw","choose","pick","decide","pm","pickmenu","pmlist","showmenu","menulist","wc","wordcount","charcount","b64encode","encode64","b64decode","decode64"] },
   { name: "WHATSAPP",  emoji: "📱", cmds: [
@@ -7988,7 +7747,7 @@ const MENU_CATEGORIES = [
 MENU_CATEGORIES.splice(
   0,
   MENU_CATEGORIES.length,
-  ...MENU_CATEGORIES.filter(({ name }) => !["AI", "PANEL"].includes(name)),
+  ...MENU_CATEGORIES.filter(({ name }) => !["AI", "PANEL", "ECONOMY", "RANDOM", "TEXT"].includes(name)),
 );
 
 // ── Robust bot picture fetcher with validation + fallbacks ──────────────────
@@ -11933,7 +11692,7 @@ async function sendAnimeGif(sock, msg, type) {
   await sendReply(sock, msg, `🎌 *${type.toUpperCase()}*\n\n_(Could not load — all APIs failed, try again!)_`);
 }
 cmd("anime", { desc: "Random anime image", category: "ANIME" }, async (s, m) => sendAnimeGif(s, m, "neko"));
-cmd("define", { desc: "Define a word", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["define", "define2", "dictionary", "dictionary2", "meaning", "meaning2"], { desc: "Define a word", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}define <word>`); return; }
   await react(sock, msg, "📖");
   try {
@@ -11959,7 +11718,7 @@ cmd("define", { desc: "Define a word", category: "SEARCH" }, async (sock, msg, a
       );
     } catch {}
   } catch { await sendReply(sock, msg, `❌ No definition found for: *${args[0]}*`); }
-});cmd("wiki", { desc: "Wikipedia search", category: "SEARCH" }, async (sock, msg, args) => {
+});cmd(["wiki", "wikipedia"], { desc: "Wikipedia search", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}wiki <topic>`); return; }
   const jid = msg.key.remoteJid;
   const q = args.join(" ");
@@ -12071,7 +11830,7 @@ cmd("news", { desc: "Latest news", category: "SEARCH" }, async (sock, msg) => {
     await sendReply(sock, msg, `📰 *News*\n\n🔗 https://news.google.com\n🔗 https://bbc.com/news`);
   }
 });
-cmd("google", { desc: "Google search", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["google", "gsearch", "dcgooglesearch", "googlesearchdc", "dcgoogle"], { desc: "Google search", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}google <query>`); return; }
   await react(sock, msg, "🔍");
   const q = args.join(" ");
@@ -12282,7 +12041,7 @@ cmd(["image", "img"], { desc: "Send up to five Pinterest images — .image <quer
   await react(sock, msg, "✅");
 });
 
-cmd("lyrics", { desc: "Song lyrics", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["lyrics", "lyrics2", "dclyrics", "lyricsdc", "dcsonglyrics"], { desc: "Song lyrics", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}lyrics <song name>`); return; }
   await react(sock, msg, "🎶");
   const jid = msg.key.remoteJid;
@@ -12437,45 +12196,7 @@ cmd("lyrics", { desc: "Song lyrics", category: "SEARCH" }, async (sock, msg, arg
     } catch { await sendReply(sock, msg, _lyrErr); }
   }
 });
-cmd("lyrics2", { desc: "Alt lyrics search", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}lyrics2 <song>`); return; }
-  await react(sock, msg, "🎶");
-  const q = args.join(" ");
-  const lyricsApis2 = [
-    async () => {
-      const r = await prexzyGet("/search/lyrics", { title: q }, 15000);
-      const d = r.data;
-      if (d?.data?.lyrics) return { lyrics: d.data.lyrics, title: d.data.title || q, artist: d.data.artist || "Unknown" };
-    },
-    async () => {
-      const { data } = await axios.get(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, { timeout: 12000, headers: { "User-Agent": "MIAS-MDX-Bot/4.9.9" } });
-      const hit = Array.isArray(data) ? data.find(x => x?.plainLyrics) : null;
-      if (hit?.plainLyrics) return { lyrics: hit.plainLyrics, title: hit.trackName || q, artist: hit.artistName || "Unknown" };
-    },
-    async () => {
-      const { data } = await axios.get(`https://some-random-api.com/others/lyrics?title=${encodeURIComponent(q)}`, { timeout: 10000 });
-      if (data?.lyrics) return { lyrics: data.lyrics, title: data.title || q, artist: data.author || "Unknown" };
-    },
-    async () => {
-      const words = q.trim().split(" ");
-      const artist = words[0], title2 = words.slice(1).join(" ") || words[0];
-      const { data } = await axios.get(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title2)}`, { timeout: 12000 });
-      if (data?.lyrics) return { lyrics: data.lyrics, title: title2, artist };
-    },
-    async () => {
-      const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/search/lyrics?apikey=${CONFIG.GIFTED_KEY}&q=${encodeURIComponent(q)}`, { timeout: 12000 });
-      if (data?.lyrics || data?.result?.lyrics) { const r = data.result || data; return { lyrics: r.lyrics, title: r.title || q, artist: r.artist || "Unknown" }; }
-    },
-  ];
-  let found = null;
-  for (const tryFn of lyricsApis2) {
-    try { found = await tryFn(); if (found?.lyrics) break; } catch {}
-  }
-  if (found?.lyrics) {
-    const lyrics = found.lyrics.length > 3000 ? found.lyrics.slice(0, 3000) + "..." : found.lyrics;
-    await sendReply(sock, msg, `🎶 *${found.title}*\n🎤 ${found.artist}\n\n${lyrics}`);
-  } else { await sendReply(sock, msg, `❌ No lyrics found for: *${q}*`); }
-});
+
 cmd("currency", { desc: "Currency converter", category: "SEARCH" }, async (sock, msg, args) => {
   if (args.length < 3) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}currency <amount> <from> <to>\nExample: ${CONFIG.PREFIX}currency 100 USD NGN`); return; }
   const amount = parseFloat(args[0]), from = args[1].toUpperCase(), to = args[2].toUpperCase();
@@ -12494,7 +12215,7 @@ cmd("currency", { desc: "Currency converter", category: "SEARCH" }, async (sock,
     } catch {}
   } catch { await sendReply(sock, msg, "❌ Currency conversion failed. Check currency codes."); }
 });
-cmd("github", { desc: "GitHub user info — multi-API fallback", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["github", "githubuser", "ghuser", "guser"], { desc: "GitHub user info — multi-API fallback", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}github <username>`); return; }
   const user = args[0].replace(/^@/, "").trim();
   await react(sock, msg, "🐙");
@@ -12788,63 +12509,7 @@ cmd(["movie"], { desc: "Search & download movies", category: "SEARCH" }, async (
     await sendReply(sock, msg, `❌ No movies found for: *${q}*\n\n🔗 https://www.imdb.com/find?q=${encodeURIComponent(q)}`);
   }
 });
-cmd("movieinfo", { desc: "Get movie details", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}movieinfo <title or ID>`); return; }
-  await react(sock, msg, "🎬");
-  const query = args.join(" ");
-  let m = null;
-  if (/^(tt\d+|\d+)$/i.test(query)) {
-    try {
-      const r = await prexzyGet("/detail", { id: query }, 20000);
-      const d = r.data?.data || r.data;
-      if (r.ok && d?.title) m = d;
-    } catch {}
-  }
-  if (!m) {
-    try {
-      const r = await prexzyGet("/search/imdb", { query }, 20000);
-      const d = r.data?.data || r.data;
-      const list = Array.isArray(d) ? d : (d?.results || d?.result || (d?.title ? [d] : []));
-      if (r.ok && list.length) m = list[0];
-    } catch {}
-  }
-  if (!m) {
-    try {
-      const r = await prexzyGet("/moviedetail", { title: query }, 20000);
-      const d = r.data?.data || r.data;
-      if (r.ok && d?.title) m = d;
-    } catch {}
-  }
-  if (!m) {
-    try {
-      const { data } = await axios.get(`${CONFIG.MOVIE_API}/info/${query}`, { headers: { Authorization: `Bearer ${CONFIG.GIFTED_KEY}` }, timeout: 15000 });
-      if (data?.result) m = data.result;
-    } catch {}
-  }
-  if (!m) { await sendReply(sock, msg, `❌ Movie not found: *${query}*\n\n🔗 https://www.imdb.com/find?q=${encodeURIComponent(query)}`); return; }
-  const title = m.title || m.name || m.Title || query;
-  const year = m.year || m.Year || m.release_date?.slice(0, 4) || "N/A";
-  const rating = m.rating || m.imdbRating || m.vote_average || "N/A";
-  const genre = m.genre || m.genres || m.Genre || "";
-  const synopsis = m.synopsis || m.overview || m.plot || m.Plot || m.description || "No synopsis.";
-  const posterRaw = m.poster || m.poster_path || m.thumbnail || m.image || m.Poster || "";
-  const poster = posterRaw && posterRaw.startsWith("/") ? `https://image.tmdb.org/t/p/w500${posterRaw}` : posterRaw;
-  const director = m.director || m.Director || (Array.isArray(m.directors) ? m.directors.join(", ") : "");
-  const duration = m.duration || m.runtime || m.Runtime || "";
-  let t = `🎬 *${title}* (${year})\n\n`;
-  if (rating && rating !== "N/A") t += `⭐ *Rating:* ${rating}\n`;
-  if (genre) t += `📌 *Genre:* ${Array.isArray(genre) ? genre.join(", ") : genre}\n`;
-  if (director) t += `🎥 *Director:* ${director}\n`;
-  if (duration) t += `⏱ *Duration:* ${duration}\n`;
-  t += `\n📝 *Synopsis:*\n${(typeof synopsis === "string" ? synopsis : "").slice(0, 400)}...`;
-  if (poster && String(poster).startsWith("http")) {
-    try {
-      const buf = Buffer.from((await axios.get(poster, { responseType: "arraybuffer", timeout: 15000 })).data);
-      await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: t }, { quoted: msg }); return;
-    } catch {}
-  }
-  await sendReply(sock, msg, t);
-});
+
 cmd(["moviedl"], { desc: "Get movie download links — .moviedl <title or IMDB ID>", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args[0]) { await sendReply(sock, msg, `📥 *Movie Download*\n\nUsage: ${CONFIG.PREFIX}moviedl <title or IMDB ID>\nExample: ${CONFIG.PREFIX}moviedl Avengers Endgame`); return; }
   await react(sock, msg, "📥");
@@ -13231,7 +12896,7 @@ cmd("trending", { desc: "Trending movies", category: "SEARCH" }, async (sock, ms
     await sendReply(sock, msg, `❌ No trending data.\n\n🔗 https://www.imdb.com/chart/popular`);
   }
 });
-cmd(["ytsearch", "yts"], { desc: "YouTube search — returns real results", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["ytsearch", "yts", "youtube", "dcytsearch", "ytsearchdc", "yttitles"], { desc: "YouTube search — returns real results", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ytsearch <query>`); return; }
   await react(sock, msg, "🔴");
   const q = args.join(" ");
@@ -13349,7 +13014,7 @@ cmd(["tiksearch", "ttsearch"], { desc: "TikTok search", category: "SEARCH" }, as
   // fallback URL: https://api.siputzx.my.id/api/s/tiktok?query=${encodeURIComponent(q)}`
 });
 
-cmd(["spotisearch", "spoti"], { desc: "Spotify search", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["spotisearch", "spoti", "spotisearch2", "spotifysearch2", "spoti2", "dcspotifysearch", "spotifysearchdc"], { desc: "Spotify search", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}spotisearch <query>`); return; }
   await react(sock, msg, "🟢");
   const q = args.join(" ");
@@ -13408,7 +13073,7 @@ cmd(["spotisearch", "spoti"], { desc: "Spotify search", category: "SEARCH" }, as
   }
 });
 
-cmd(["ftball", "football"], { desc: "Football/soccer news & scores", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["football", "ftball"], { desc: "Football/soccer news & scores", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ftball <team/query>`); return; }
   await react(sock, msg, "⚽");
   const q = args.join(" ");
@@ -13452,561 +13117,7 @@ cmd(["ftball", "football"], { desc: "Football/soccer news & scores", category: "
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ECONOMY COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
-cmd(["money", "wallet", "bal", "balance"], { desc: "Check wallet & stats", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const xpNeeded = e.level * 100;
-  const xpFill = Math.min(10, Math.floor((e.xp / xpNeeded) * 10));
-  const xpBar = "█".repeat(xpFill) + "░".repeat(10 - xpFill);
-  const walletText =
-`💰 *WALLET — @${jid.split("@")[0]}*
-━━━━━━━━━━━━━━━━━━━━
 
-💵 Wallet  : *${e.wallet.toLocaleString()} coins*
-🏦 Bank    : *${e.bank.toLocaleString()} coins*
-💎 Net     : *${(e.wallet + e.bank).toLocaleString()} coins*
-⭐ Level   : *${e.level}*  •  XP: ${e.xp}/${xpNeeded}
-📊 Progress: [${xpBar}]`;
-  await sendReply(sock, msg, walletText);
-  try {
-    await sendNativeFlowButtons(sock, msg.key.remoteJid, msg, "Quick actions:", [
-      { text: "💼 Work",      id: `${CONFIG.PREFIX}work` },
-      { text: "🎁 Daily",     id: `${CONFIG.PREFIX}daily` },
-      { text: "🏦 Deposit",   id: `${CONFIG.PREFIX}deposit all` },
-      { text: "🎰 Gamble 50", id: `${CONFIG.PREFIX}gamble 50` },
-    ]);
-  } catch {}
-});
-cmd(["daily", "claim"], { desc: "Claim daily coins", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const cd = cdCheck(lastDaily, jid, 24 * 60 * 60 * 1000);
-  if (cd) { await sendReply(sock, msg, `⏳ Daily cooldown: *${Math.floor(cd / 3600)}h ${Math.floor((cd % 3600) / 60)}m* left.`); return; }
-  const amount = Math.floor(Math.random() * 500) + 500;
-  addWallet(jid, amount); addXP(jid, 50);
-  await sendReply(sock, msg, `🎁 *Daily Claimed!*\n\n+${amount} coins! 💰\nCome back in 24 hours!\n\n💵 Balance: ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("work", { desc: "Work for coins", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const cd = cdCheck(lastWork, jid, 2 * 60 * 60 * 1000);
-  if (cd) { await sendReply(sock, msg, `⏳ Work cooldown: *${Math.floor(cd / 60)}m* left.`); return; }
-  const jobs = ["👨‍💻 Coded a website", "👷 Built a house", "📦 Delivered packages", "🍕 Delivered pizza", "🚗 Drove Uber", "📚 Tutored students", "🎵 Played at a gig"];
-  const amount = Math.floor(Math.random() * 200) + 100;
-  addWallet(jid, amount); addXP(jid, 20);
-  await sendReply(sock, msg, `💼 *Worked!*\n\n${random(jobs)}\nEarned: *+${amount} coins*\n\n💵 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("crime", { desc: "Commit crime for coins", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const cd = cdCheck(lastCrime, jid, 3 * 60 * 60 * 1000);
-  if (cd) { await sendReply(sock, msg, `⏳ Crime cooldown: *${Math.floor(cd / 60)}m* left.`); return; }
-  const crimes = ["🏦 Robbed a bank", "💊 Sold contraband", "💻 Hacked a server", "🚗 Stole a car", "💎 Jewel heist"];
-  const success = Math.random() > 0.35;
-  const amount = Math.floor(Math.random() * 500) + 200;
-  if (success) { addWallet(jid, amount); addXP(jid, 30); }
-  else { addWallet(jid, -Math.floor(amount / 2)); }
-  await sendReply(sock, msg, `🔫 *Crime!*\n\n${random(crimes)}\n\n${success ? `✅ Success! +${amount} coins` : `❌ Caught! -${Math.floor(amount / 2)} coins (fine)`}\n💵 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("beg", { desc: "Beg for coins", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const cd = cdCheck(lastBeg, jid, 30 * 60 * 1000);
-  if (cd) { await sendReply(sock, msg, `⏳ Beg cooldown: *${Math.floor(cd / 60)}m* left.`); return; }
-  const amount = Math.floor(Math.random() * 50) + 5;
-  addWallet(jid, amount);
-  const givers = ["A kind stranger", "An old lady", "A billionaire", "Your mom", "A random passerby"];
-  await sendReply(sock, msg, `🙏 *Begging...*\n\n${random(givers)} gave you *${amount} coins*\n💵 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("fish", { desc: "Go fishing", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const cd = cdCheck(lastFish, jid, 60 * 60 * 1000);
-  if (cd) { await sendReply(sock, msg, `⏳ Fishing cooldown: *${Math.floor(cd / 60)}m* left.`); return; }
-  if (!hasItem(jid, "fishing_rod")) { await sendReply(sock, msg, `❌ Buy a fishing rod first: ${CONFIG.PREFIX}shop`); return; }
-  const catches = [
-    { name: "🐟 Common Fish", value: 50 }, { name: "🐠 Tropical Fish", value: 120 },
-    { name: "🐡 Pufferfish", value: 80 }, { name: "🦈 Shark!", value: 500 },
-    { name: "🦀 Crab", value: 200 }, { name: "💀 Old Boot", value: 0 },
-  ];
-  const caught = random(catches);
-  if (caught.value > 0) addWallet(jid, caught.value);
-  await sendReply(sock, msg, `🎣 *Fishing!*\n\nYou caught: *${caught.name}*\n${caught.value > 0 ? `+${caught.value} coins!` : "Nothing useful 😅"}\n💵 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("hunt", { desc: "Go hunting", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const cd = cdCheck(lastHunt, jid, 90 * 60 * 1000);
-  if (cd) { await sendReply(sock, msg, `⏳ Hunting cooldown: *${Math.floor(cd / 60)}m* left.`); return; }
-  if (!hasItem(jid, "gun")) { await sendReply(sock, msg, `❌ Buy a gun first: ${CONFIG.PREFIX}shop`); return; }
-  const animals = [
-    { name: "🐇 Rabbit", value: 100 }, { name: "🦌 Deer", value: 300 },
-    { name: "🐗 Boar", value: 250 }, { name: "🦁 Lion!", value: 800 },
-    { name: "🐦 Bird", value: 50 }, { name: "💨 Nothing", value: 0 },
-  ];
-  const killed = random(animals);
-  if (killed.value > 0) addWallet(jid, killed.value);
-  await sendReply(sock, msg, `🏹 *Hunting!*\n\nYou hunted: *${killed.name}*\n${killed.value > 0 ? `+${killed.value} coins!` : "Missed 😅"}\n💵 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("pay", { desc: "Pay coins to someone", category: "ECONOMY" }, async (sock, msg, args) => {
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  const amount = parseInt(args.find(a => !isNaN(a))) || 0;
-  if (!mentions.length || amount <= 0) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}pay @user <amount>`); return; }
-  const from = getSender(msg), to = mentions[0];
-  const eFrom = getEco(from);
-  if (eFrom.wallet < amount) { await sendReply(sock, msg, "❌ Not enough coins!"); return; }
-  addWallet(from, -amount); addWallet(to, amount);
-  await sendReply(sock, msg, `✅ *Payment Sent!*\n\n💸 ${amount} coins → @${to.split("@")[0]}\n💵 Your balance: ${eFrom.wallet.toLocaleString()}`, [to]);
-});
-cmd("rob", { desc: "Rob someone", category: "ECONOMY" }, async (sock, msg) => {
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  if (!mentions.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}rob @user`); return; }
-  const from = getSender(msg), to = mentions[0];
-  const eTo = getEco(to);
-  if (eTo.wallet < 100) { await sendReply(sock, msg, `❌ @${to.split("@")[0]} is too broke to rob!`, [to]); return; }
-  const success = Math.random() > 0.4;
-  const stolen = success ? Math.floor(eTo.wallet * (Math.random() * 0.3 + 0.1)) : 0;
-  if (success) { addWallet(from, stolen); addWallet(to, -stolen); }
-  else { addWallet(from, -100); }
-  await sendReply(sock, msg, `🔫 *Robbery!*\n\n${success ? `✅ Robbed @${to.split("@")[0]}!\n+${stolen} coins!` : `❌ Failed! Lost 100 coins (caught)`}\n💵 Your balance: ${getEco(from).wallet.toLocaleString()}`, [to]);
-});
-cmd(["deposit", "dep"], { desc: "Deposit to bank", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const amount = args[0] === "all" ? e.wallet : parseInt(args[0]);
-  if (!amount || amount <= 0 || e.wallet < amount) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}deposit <amount|all>`); return; }
-  addWallet(jid, -amount); addBank(jid, amount);
-  await sendReply(sock, msg, `🏦 *Deposited!*\n\n+${amount} → Bank\n💵 Wallet: ${e.wallet.toLocaleString()}\n🏦 Bank: ${e.bank.toLocaleString()}`);
-});
-cmd(["withdraw", "with"], { desc: "Withdraw from bank", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const amount = args[0] === "all" ? e.bank : parseInt(args[0]);
-  if (!amount || amount <= 0 || e.bank < amount) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}withdraw <amount|all>`); return; }
-  addBank(jid, -amount); addWallet(jid, amount);
-  await sendReply(sock, msg, `💵 *Withdrawn!*\n\n+${amount} → Wallet\n💵 Wallet: ${e.wallet.toLocaleString()}\n🏦 Bank: ${e.bank.toLocaleString()}`);
-});
-cmd(["bankbal", "bank"], { desc: "Check bank balance", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg) || msg.key.remoteJid);
-  await sendReply(sock, msg, `🏦 *Bank Balance*\n\n💵 Wallet: ${e.wallet.toLocaleString()}\n🏦 Bank: ${e.bank.toLocaleString()}`);
-});
-cmd("shop", { desc: "View shop & buy items", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  let t = `🏪 *MIAS MDX SHOP*\n━━━━━━━━━━━━━━━━━━━━\n\n💵 Your balance: *${e.wallet.toLocaleString()} coins*\n\n`;
-  const quickBuy = [];
-  for (const [id, item] of shopItems) {
-    const owned = hasItem(jid, id);
-    const canAfford = e.wallet >= item.price;
-    const icon = owned ? "✅" : canAfford ? "🛒" : "❌";
-    t += `${icon} *${id}*\n   📝 ${item.desc}\n   💰 *${item.price.toLocaleString()} coins*${owned ? " *(owned)*" : ""}\n\n`;
-    if (!owned && canAfford && quickBuy.length < 3) quickBuy.push({ text: `🛒 Buy ${id}`, id: `${CONFIG.PREFIX}buy ${id}` });
-  }
-  t += `Usage: *${CONFIG.PREFIX}buy <item>*`;
-  await sendReply(sock, msg, t);
-  if (quickBuy.length) {
-    try { await sendNativeFlowButtons(sock, msg.key.remoteJid, msg, "You can afford these items:", quickBuy); } catch {}
-  }
-});
-cmd(["buyasset", "buy"], { desc: "Buy item — .buy <item>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const item = args.join("_").toLowerCase();
-  const si = shopItems.get(item);
-  if (!si) { await sendReply(sock, msg, `❌ Item not found. Use ${CONFIG.PREFIX}shop to see items.`); return; }
-  if (e.wallet < si.price) { await sendReply(sock, msg, `❌ Need ${si.price} coins. You have ${e.wallet}.`); return; }
-  addWallet(jid, -si.price); addItem(jid, item);
-  await sendReply(sock, msg, `✅ *Bought ${item}!*\n\n-${si.price} coins\n💵 ${e.wallet.toLocaleString()}`);
-});
-cmd(["inventory", "inv", "mybag"], { desc: "Check inventory", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const inv = getInv(jid);
-  if (!inv.size) { await sendReply(sock, msg, `🎒 *Empty inventory!*\nBuy items: ${CONFIG.PREFIX}shop`); return; }
-  let t = `🎒 *Inventory*\n\n`;
-  for (const [item, qty] of inv) if (qty > 0) t += `• *${item}* x${qty}\n`;
-  await sendReply(sock, msg, t + ``);
-});
-cmd(["richest", "leaderboard", "lb"], { desc: "Richest users", category: "ECONOMY" }, async (sock, msg) => {
-  const sorted = [...economy.entries()].sort((a, b) => (b[1].wallet + b[1].bank) - (a[1].wallet + a[1].bank)).slice(0, 10);
-  let t = `💎 *Top 10 Richest*\n\n`;
-  sorted.forEach(([jid, e], i) => t += `${i + 1}. @${jid.split("@")[0]}\n   💰 ${(e.wallet + e.bank).toLocaleString()} coins\n\n`);
-  await sendReply(sock, msg, t + ``);
-});
-cmd("rank", { desc: "Check your rank", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const sorted = [...economy.entries()].sort((a, b) => (b[1].wallet + b[1].bank) - (a[1].wallet + a[1].bank));
-  const rank = sorted.findIndex(([j]) => j === jid) + 1;
-  await sendReply(sock, msg, `🏆 *Your Rank*\n\n#${rank} globally\n⭐ Level: ${e.level}\n💰 Net: ${(e.wallet + e.bank).toLocaleString()}`);
-});
-cmd("networth", { desc: "Net worth", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg) || msg.key.remoteJid);
-  await sendReply(sock, msg, `💎 *Net Worth*\n\n💵 Wallet: ${e.wallet.toLocaleString()}\n🏦 Bank: ${e.bank.toLocaleString()}\n💎 Total: *${(e.wallet + e.bank).toLocaleString()} coins*`);
-});
-
-// Gambling commands
-cmd("coinflip", { desc: "Coinflip — .coinflip heads/tails <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const choice = args[0]?.toLowerCase(), bet = parseInt(args[1]) || 100;
-  if (!["heads", "tails"].includes(choice) || e.wallet < bet) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}coinflip heads/tails <bet>`); return; }
-  addWallet(jid, -bet);
-  const result = Math.random() > 0.5 ? "heads" : "tails";
-  if (result === choice) addWallet(jid, bet * 2);
-  await sendReply(sock, msg, `🪙 *Coin Flip!*\n\nResult: *${result === "heads" ? "🪙 Heads" : "⚫ Tails"}*\nYour guess: *${choice}*\n\n${result === choice ? `🎉 Won! +${bet} coins` : `❌ Lost -${bet} coins`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("slots", { desc: "Slots — .slots <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const bet = parseInt(args[0]) || 100;
-  if (bet < 10 || e.wallet < bet) { await sendReply(sock, msg, `❌ Min 10 coins. Have: ${e.wallet}`); return; }
-  addWallet(jid, -bet);
-  const symbols = ["🍒", "🍊", "🍋", "🍇", "⭐", "💎", "7️⃣"];
-  const s = [random(symbols), random(symbols), random(symbols)];
-  let prize = 0;
-  if (s[0] === s[1] && s[1] === s[2]) {
-    prize = s[0] === "💎" ? bet * 50 : s[0] === "7️⃣" ? bet * 20 : bet * 10;
-  } else if (s[0] === s[1] || s[1] === s[2]) {
-    prize = bet * 2;
-  }
-  if (prize > 0) addWallet(jid, prize);
-  await sendReply(sock, msg, `🎰 *Slots!*\n\n[ ${s.join(" | ")} ]\n\n${prize > 0 ? `🎉 WIN! +${prize} coins!` : `❌ No match. Lost ${bet} coins.`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("dice", { desc: "Dice — .dice <bet> [sides]", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const bet = parseInt(args[0]) || 100, sides = parseInt(args[1]) || 6;
-  if (bet < 10 || e.wallet < bet) { await sendReply(sock, msg, `❌ Min 10. Have: ${e.wallet}`); return; }
-  addWallet(jid, -bet);
-  const roll = Math.floor(Math.random() * sides) + 1;
-  const won = roll === sides;
-  if (won) addWallet(jid, bet * sides);
-  await sendReply(sock, msg, `🎲 *Dice Roll!*\n\nRolled: *${roll}* / ${sides}\n\n${won ? `🎉 MAX! +${bet * (sides - 1)} coins!` : `❌ Lost ${bet} coins.`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("roulette", { desc: "Roulette — .roulette red/black/green <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const choice = args[0]?.toLowerCase(), bet = parseInt(args[1]) || 100;
-  if (!["red", "black", "green"].includes(choice) || e.wallet < bet) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}roulette red/black/green <bet>`); return; }
-  addWallet(jid, -bet);
-  const r = Math.random(); let result, win = 0;
-  if (r < 0.026) { result = "green"; win = bet * 14; }
-  else if (r < 0.513) { result = "red"; win = bet * 2; }
-  else { result = "black"; win = bet * 2; }
-  if (result === choice) addWallet(jid, win); else win = 0;
-  await sendReply(sock, msg, `🎡 *Roulette!*\n\nBall: *${result === "red" ? "🔴 Red" : result === "black" ? "⚫ Black" : "💚 Green"}*\n\n${result === choice ? `🎉 Won +${win} coins!` : `❌ Lost ${bet} coins.`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("blackjack", { desc: "Blackjack — .blackjack <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const bet = parseInt(args[0]) || 100;
-  if (bet < 10 || e.wallet < bet) { await sendReply(sock, msg, `❌ Min 10. Have: ${e.wallet}`); return; }
-  const draw = () => Math.min(Math.floor(Math.random() * 13) + 1, 10);
-  const p = draw() + draw(), d = draw() + draw();
-  addWallet(jid, -bet);
-  let result, win = 0;
-  if (p > 21) { result = "❌ Bust! You went over 21."; }
-  else if (d > 21 || p > d) { result = "🎉 You win!"; win = bet * 2; addWallet(jid, win); }
-  else if (p === d) { result = "🤝 Push! Tie."; addWallet(jid, bet); win = bet; }
-  else { result = "❌ Dealer wins!"; }
-  await sendReply(sock, msg, `🃏 *Blackjack!*\n\nYour hand: *${p}*\nDealer: *${d}*\n\n${result}\n${win > 0 ? `+${win} coins` : `-${bet} coins`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("gamble", { desc: "Gamble — .gamble <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const bet = parseInt(args[0]) || 100;
-  if (bet < 10 || e.wallet < bet) { await sendReply(sock, msg, `❌ Min 10. Have: ${e.wallet}`); return; }
-  addWallet(jid, -bet);
-  const win = Math.random() > 0.5;
-  if (win) addWallet(jid, bet * 2);
-  await sendReply(sock, msg, `🎲 *Gamble!*\n\n${win ? `🎉 You doubled! +${bet} coins` : `❌ You lost -${bet} coins`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("crash", { desc: "Crash game — .crash <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const bet = parseInt(args[0]) || 100;
-  if (bet < 10 || e.wallet < bet) { await sendReply(sock, msg, `❌ Min 10. Have: ${e.wallet}`); return; }
-  addWallet(jid, -bet);
-  const multiplier = (Math.random() * 4 + 1).toFixed(2);
-  const crashAt = (Math.random() * 3 + 0.5).toFixed(2);
-  const won = parseFloat(multiplier) > parseFloat(crashAt);
-  if (won) addWallet(jid, Math.floor(bet * parseFloat(multiplier)));
-  await sendReply(sock, msg, `🚀 *Crash!*\n\nRocket: *${multiplier}x*\nCrashed at: *${crashAt}x*\n\n${won ? `🎉 Won ${Math.floor(bet * parseFloat(multiplier))} coins!` : `❌ Crashed! Lost ${bet}.`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("lottery", { desc: "Enter lottery", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  if (e.wallet < 100) { await sendReply(sock, msg, "❌ Need 100 coins to enter."); return; }
-  addWallet(jid, -100);
-  const win = Math.random() < 0.1;
-  const prize = Math.floor(Math.random() * 5000) + 1000;
-  if (win) addWallet(jid, prize);
-  await sendReply(sock, msg, `🎟️ *Lottery!*\n\n${win ? `🎉 YOU WON! +${prize} coins!` : `❌ No luck. Lost 100 coins.`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("highlow", { desc: "High or Low — .highlow high/low <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const choice = args[0]?.toLowerCase(), bet = parseInt(args[1]) || 50;
-  if (!["high", "low"].includes(choice) || e.wallet < bet) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}highlow high/low <bet>`); return; }
-  addWallet(jid, -bet);
-  const num = Math.floor(Math.random() * 10) + 1;
-  const correct = (choice === "high" && num >= 6) || (choice === "low" && num <= 5);
-  if (correct) addWallet(jid, bet * 2);
-  await sendReply(sock, msg, `🎯 *High or Low!*\n\nNumber: *${num}*\n\n${correct ? `🎉 Correct! +${bet} coins` : `❌ Wrong! -${bet} coins`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("russianroulette", { desc: "Russian roulette — .russianroulette <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const bet = parseInt(args[0]) || 500;
-  if (bet < 50 || e.wallet < bet) { await sendReply(sock, msg, `❌ Min 50. Have: ${e.wallet}`); return; }
-  addWallet(jid, -bet);
-  const dead = Math.random() < (1 / 6);
-  if (!dead) addWallet(jid, bet * 5);
-  await sendReply(sock, msg, `🔫 *Russian Roulette!*\n\n${dead ? `💀 BANG! You died!\nLost ${bet} coins.` : `😅 *Click* — Lucky! +${bet * 4} coins`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("horserace", { desc: "Horse race — .horserace <1-4> <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const horse = parseInt(args[0]), bet = parseInt(args[1]) || 100;
-  if (![1, 2, 3, 4].includes(horse) || e.wallet < bet) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}horserace <1-4> <bet>`); return; }
-  addWallet(jid, -bet);
-  const horses = ["🐴 Thunder", "🐴 Lightning", "🐴 Blaze", "🐴 Storm"];
-  const winner = Math.floor(Math.random() * 4) + 1;
-  if (horse === winner) addWallet(jid, bet * 4);
-  await sendReply(sock, msg, `🏇 *Horse Race!*\n\nWinner: *${horses[winner - 1]}* (#${winner})\nYour pick: *${horses[horse - 1]}*\n\n${horse === winner ? `🎉 Won! +${bet * 3} coins` : `❌ Lost ${bet}.`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd(["rockpaperscissors", "rps"], { desc: "Rock Paper Scissors — .rps rock/paper/scissors <bet>", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const choice = args[0]?.toLowerCase(), bet = parseInt(args[1]) || 50;
-  if (!["rock", "paper", "scissors"].includes(choice) || e.wallet < bet) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}rps rock/paper/scissors <bet>`); return; }
-  addWallet(jid, -bet);
-  const choices = ["rock", "paper", "scissors"], emj = { rock: "🪨", paper: "📄", scissors: "✂️" };
-  const bot = random(choices);
-  let result = "draw";
-  if ((choice === "rock" && bot === "scissors") || (choice === "paper" && bot === "rock") || (choice === "scissors" && bot === "paper")) result = "win";
-  else if (choice !== bot) result = "lose";
-  if (result === "win") addWallet(jid, bet * 2);
-  else if (result === "draw") addWallet(jid, bet);
-  await sendReply(sock, msg, `✊ *Rock Paper Scissors!*\n\nYou: ${emj[choice]} *${choice}*\nBot: ${emj[bot]} *${bot}*\n\n${result === "win" ? `🎉 Win! +${bet}` : result === "draw" ? `🤝 Draw!` : `❌ Lose! -${bet}`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd("numberguess", { desc: "Guess number 1-10", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const guess = parseInt(args[0]), bet = parseInt(args[1]) || 50;
-  if (!guess || guess < 1 || guess > 10 || e.wallet < bet) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}numberguess <1-10> <bet>`); return; }
-  addWallet(jid, -bet);
-  const num = Math.floor(Math.random() * 10) + 1;
-  if (guess === num) addWallet(jid, bet * 10);
-  await sendReply(sock, msg, `🎯 *Number Guess!*\n\nThe number: *${num}*\nYour guess: *${guess}*\n\n${guess === num ? `🎉 CORRECT! +${bet * 9}!` : `❌ Wrong! -${bet}`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd(["scratch", "scratchcard"], { desc: "Scratch card", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  if (e.wallet < 50) { await sendReply(sock, msg, "❌ Need 50 coins."); return; }
-  addWallet(jid, -50);
-  const emjs = ["⭐", "🍒", "💎", "🍀", "🎰", "❌"];
-  const slots = Array.from({ length: 9 }, () => random(emjs));
-  const wins = {};
-  slots.forEach(s => { wins[s] = (wins[s] || 0) + 1; });
-  let prize = 0;
-  if ((wins["💎"] || 0) >= 3) prize = 5000;
-  else if ((wins["⭐"] || 0) >= 3) prize = 1000;
-  else if ((wins["🍀"] || 0) >= 3) prize = 500;
-  else if ((wins["🍒"] || 0) >= 3) prize = 200;
-  if (prize) addWallet(jid, prize);
-  const grid = `${slots.slice(0, 3).join(" ")}\n${slots.slice(3, 6).join(" ")}\n${slots.slice(6, 9).join(" ")}`;
-  await sendReply(sock, msg, `🎟️ *Scratch Card!*\n\n${grid}\n\n${prize ? `🎉 You won ${prize} coins!` : `❌ No luck! (-50)`}\n💰 ${getEco(jid).wallet.toLocaleString()}`);
-});
-cmd(["crypto", "portfolio", "cryptolb"], { desc: "Crypto simulation", category: "ECONOMY" }, async (sock, msg) => {
-  const coins = [
-    { name: "Bitcoin", sym: "BTC", price: Math.floor(60000 + Math.random() * 10000) },
-    { name: "Ethereum", sym: "ETH", price: Math.floor(3000 + Math.random() * 1000) },
-    { name: "BNB", sym: "BNB", price: Math.floor(300 + Math.random() * 100) },
-    { name: "Solana", sym: "SOL", price: Math.floor(100 + Math.random() * 50) },
-    { name: "PEPE", sym: "PEPE", price: Math.random().toFixed(6) },
-  ];
-  let t = "📈 *Crypto Market*\n\n";
-  coins.forEach(c => t += `*${c.sym}*: $${Number(c.price).toLocaleString()} ${Math.random() > 0.5 ? "📈" : "📉"}\n`);
-  t += ``;
-  await sendReply(sock, msg, t);
-});
-cmd(["buyc", "sellc"], { desc: "Buy/sell crypto", category: "ECONOMY" }, async (sock, msg) => {
-  await sendReply(sock, msg, `💹 *Crypto Trading*\n\nCheck prices: ${CONFIG.PREFIX}crypto`);
-});
-cmd(["perks", "achievements"], { desc: "Your achievements", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg) || msg.key.remoteJid);
-  await sendReply(sock, msg, `🏆 *Achievements*\n\n${e.level >= 5 ? "✅" : "❌"} Level 5 Reached\n${e.wallet >= 10000 ? "✅" : "❌"} 10K Coins\n${e.bank >= 5000 ? "✅" : "❌"} 5K Banked\n${e.level >= 10 ? "✅" : "❌"} Level 10 Master\n\n⭐ Level: ${e.level}`);
-});
-cmd("profile", { desc: "Full profile", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid, e = getEco(jid);
-  const rel = relationships.get(jid);
-  const pet = petStore.get(jid);
-  await sendReply(sock, msg, `👤 *Profile*\n\n📱 ID: ${jid.split("@")[0]}\n⭐ Level: ${e.level} (XP: ${e.xp}/${e.level * 100})\n💰 Wallet: ${e.wallet.toLocaleString()}\n🏦 Bank: ${e.bank.toLocaleString()}\n💎 Net: ${(e.wallet + e.bank).toLocaleString()}\n💘 Status: ${rel?.partner ? "In a relationship 💕" : "Single 💔"}\n🐾 Pet: ${pet ? pet.name + " " + pet.type : "None"}`);
-});
-
-// Economy stubs
-// Real economy sub-commands
-cmd("cooldowns", { desc: "Check command cooldowns", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg) || msg.key.remoteJid;
-  const now = Date.now();
-  const cds = [
-    ["🎁 Daily",  lastDaily.get(jid), 24 * 60 * 60 * 1000],
-    ["💼 Work",   lastWork.get(jid),  2 * 60 * 60 * 1000],
-    ["🔫 Crime",  lastCrime.get(jid), 3 * 60 * 60 * 1000],
-    ["🙏 Beg",    lastBeg.get(jid),   30 * 60 * 1000],
-    ["🎣 Fish",   lastFish.get(jid),  60 * 60 * 1000],
-    ["🏹 Hunt",   lastHunt.get(jid),  90 * 60 * 1000],
-  ];
-  let t = "⏰ *Command Cooldowns*\n━━━━━━━━━━━━━━━━━━━━\n\n";
-  for (const [name, last, cd] of cds) {
-    if (!last) { t += `${name}: ✅ *Ready*\n`; continue; }
-    const left = Math.max(0, cd - (now - last));
-    if (left <= 0) { t += `${name}: ✅ *Ready*\n`; }
-    else {
-      const h = Math.floor(left / 3600000), m = Math.floor((left % 3600000) / 60000), s = Math.floor((left % 60000) / 1000);
-      const timeStr = h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
-      t += `${name}: ⏳ *${timeStr}* remaining\n`;
-    }
-  }
-  await sendReply(sock, msg, t + "");
-});
-cmd("interest", { desc: "Collect bank interest", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg), e = getEco(jid);
-  const interest = Math.floor(e.bank * 0.01);
-  if (interest < 1) { await sendReply(sock, msg, "❌ Need at least 100 coins in bank for interest."); return; }
-  addBank(jid, interest);
-  await sendReply(sock, msg, `🏦 *Interest Collected!*\n\n+${interest} coins (1% of bank)\n🏦 Bank: ${e.bank.toLocaleString()}`);
-});
-cmd("gift", { desc: "Gift item to someone", category: "ECONOMY" }, async (sock, msg, args) => {
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  const item = args.filter(a => !a.startsWith("@")).join("_").toLowerCase();
-  if (!mentions.length || !item) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}gift @user <item>`); return; }
-  const from = getSender(msg), to = mentions[0];
-  if (!hasItem(from, item)) { await sendReply(sock, msg, "❌ You don't have that item!"); return; }
-  removeItem(from, item); addItem(to, item);
-  await sendReply(sock, msg, `🎁 Gifted *${item}* to @${to.split("@")[0]}!`, [to]);
-});
-cmd(["addcoins","removecoins","setcoins","setlevel","addlevel","addbank","ecoreset"], { desc: "Admin economy", category: "ECONOMY", ownerOnly: true }, async (sock, msg, args) => {
-  const c = extractCommandName(msg);
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  const amount = parseInt(args.find(a => !a.startsWith("@"))) || 0;
-  if (!mentions.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}${c} @user <amount>`); return; }
-  const target = mentions[0], e = getEco(target);
-  if (c === "addcoins") { addWallet(target, amount); await sendReply(sock, msg, `✅ Added ${amount} coins to @${target.split("@")[0]}`, [target]); }
-  else if (c === "removecoins") { addWallet(target, -amount); await sendReply(sock, msg, `✅ Removed ${amount} coins from @${target.split("@")[0]}`, [target]); }
-  else if (c === "setcoins") { e.wallet = amount; await sendReply(sock, msg, `✅ Set @${target.split("@")[0]} wallet to ${amount}`, [target]); }
-  else if (c === "setlevel") { e.level = amount; await sendReply(sock, msg, `✅ Set @${target.split("@")[0]} level to ${amount}`, [target]); }
-  else if (c === "addlevel") { e.level += amount; await sendReply(sock, msg, `✅ Added ${amount} levels to @${target.split("@")[0]}`, [target]); }
-  else if (c === "addbank") { addBank(target, amount); await sendReply(sock, msg, `✅ Added ${amount} to @${target.split("@")[0]} bank`, [target]); }
-  else if (c === "ecoreset") { economy.delete(target); await sendReply(sock, msg, `✅ Reset @${target.split("@")[0]} economy`, [target]); }
-});
-// Economy advanced commands — implemented
-cmd("transactions", { desc: "View recent transactions", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg), e = getEco(jid);
-  const txns = e.transactions || [];
-  let txt = "💳 *Recent Transactions*\n\n";
-  if (txns.length) { txns.slice(-10).reverse().forEach((t, i) => { txt += `${i+1}. ${t}\n`; }); }
-  else { txt += "No transactions yet. Start earning!"; }
-  await sendReply(sock, msg, txt + ``);
-});
-cmd("grouplb", { desc: "Group leaderboard", category: "ECONOMY" }, async (sock, msg) => {
-  if (!msg.key.remoteJid.endsWith("@g.us")) { await sendReply(sock, msg, "👥 Group only."); return; }
-  try {
-    const meta = await sock.groupMetadata(msg.key.remoteJid);
-    const memberEcos = meta.participants.map(p => ({ jid: p.id, total: (getEco(p.id).wallet || 0) + (getEco(p.id).bank || 0) })).sort((a, b) => b.total - a.total).slice(0, 10);
-    let txt = "🏆 *Group Leaderboard*\n\n";
-    memberEcos.forEach((m, i) => { txt += `${["🥇","🥈","🥉"][i] || `${i+1}.`} @${m.jid.split("@")[0]} — ${m.total.toLocaleString()} coins\n`; });
-    await sendReply(sock, msg, txt + ``, memberEcos.map(m => m.jid));
-  } catch { await sendReply(sock, msg, "❌ Could not fetch group data."); }
-});
-cmd("stats", { desc: "Your economy stats", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg), e = getEco(jid);
-  const total = (e.wallet || 0) + (e.bank || 0);
-  await sendReply(sock, msg, `📊 *Your Stats*\n\n💰 Wallet: ${(e.wallet||0).toLocaleString()}\n🏦 Bank: ${(e.bank||0).toLocaleString()}\n💎 Net Worth: ${total.toLocaleString()}\n⭐ Level: ${e.level || 1}\n✨ XP: ${e.xp || 0}\n🎰 Games Played: ${e.gamesPlayed || 0}\n🏆 Games Won: ${e.gamesWon || 0}`);
-});
-cmd("sell", { desc: "Sell an item", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}sell <item>`); return; }
-  const jid = getSender(msg), e = getEco(jid);
-  const item = args.join("_").toLowerCase();
-  const inv = e.inventory || [];
-  const idx = inv.indexOf(item);
-  if (idx === -1) { await sendReply(sock, msg, `❌ You don't have *${item}* in your inventory!`); return; }
-  const price = Math.floor(Math.random() * 500) + 50;
-  inv.splice(idx, 1);
-  addWallet(jid, price);
-  await sendReply(sock, msg, `💰 *Sold!*\n\nSold ${item} for ${price} coins!`);
-});
-cmd("sellasset", { desc: "Sell an asset", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}sellasset <asset>`); return; }
-  const jid = getSender(msg), e = getEco(jid);
-  const item = args.join("_").toLowerCase();
-  const inv = e.inventory || [];
-  const idx = inv.indexOf(item);
-  if (idx === -1) { await sendReply(sock, msg, `❌ You don't own *${item}*!`); return; }
-  const price = Math.floor(Math.random() * 2000) + 500;
-  inv.splice(idx, 1);
-  addWallet(jid, price);
-  await sendReply(sock, msg, `🏠 *Asset Sold!*\n\nSold ${item} for ${price} coins!`);
-});
-cmd("assets", { desc: "View your assets", category: "ECONOMY" }, async (sock, msg) => {
-  const jid = getSender(msg), e = getEco(jid);
-  const inv = e.inventory || [];
-  await sendReply(sock, msg, `🏠 *Your Assets*\n\n${inv.length ? inv.map((i, idx) => `${idx+1}. ${i}`).join("\n") : "No assets. Buy from the shop!"}`);
-});
-cmd("wheel", { desc: "Spin the wheel", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg), e = getEco(jid);
-  const bet = parseInt(args[0]) || 100;
-  if (e.wallet < bet) { await sendReply(sock, msg, "❌ Not enough coins!"); return; }
-  const prizes = [0, bet*2, bet*3, 0, bet, bet*5, 0, bet*2];
-  const result = random(prizes);
-  addWallet(jid, result - bet);
-  await sendReply(sock, msg, `🎡 *Wheel of Fortune!*\n\n🔄 Spinning...\n\n${result > 0 ? `🎉 You won *${result}* coins!` : "💀 You lost! Better luck next time."}\n\n💰 Balance: ${e.wallet.toLocaleString()}`);
-});
-cmd("cups", { desc: "Cup shuffle game", category: "ECONOMY" }, async (sock, msg, args) => {
-  const jid = getSender(msg), e = getEco(jid);
-  const bet = parseInt(args[0]) || 100;
-  const pick = parseInt(args[1]) || 1;
-  if (e.wallet < bet) { await sendReply(sock, msg, "❌ Not enough coins!"); return; }
-  if (pick < 1 || pick > 3) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}cups <bet> <1-3>`); return; }
-  const winning = Math.ceil(Math.random() * 3);
-  const won = pick === winning;
-  addWallet(jid, won ? bet * 2 : -bet);
-  const cups = [1,2,3].map(n => n === winning ? "🏆" : "💀");
-  await sendReply(sock, msg, `☕ *Cup Game*\n\n${cups.join(" ")}\nYou picked cup ${pick}\nBall was under cup ${winning}\n\n${won ? `🎉 You won ${bet * 2} coins!` : `💀 You lost ${bet} coins!`}`);
-});
-// Economy commands that need more complex systems — show helpful messages
-const econInfoCmds = {
-  collect: "📦 Collect your daily rewards with .daily instead!",
-  upgrade: "⬆️ Upgrades are automatic as you level up!",
-  hireworker: "👷 Workers feature — use .work to earn coins!",
-  shopadd: "🏪 Admin only: Add items to the shop. Use .shop to browse.",
-  shopdel: "🏪 Admin only: Remove items from the shop.",
-  gambstats: "🎰 Your gambling stats are shown in .stats!",
-  market: "📈 Player marketplace — list items with .sell!",
-  marketbuy: "🛒 Buy from player market — use .shop for now!",
-  unsell: "↩️ Remove your item from the market.",
-  hospital: "🏥 Heal yourself after battles. Costs 100 coins.",
-  nerve: "⚡ Your nerve bar — affects crime success rate.",
-  energy: "🔋 Your energy level — recharges over time.",
-  autoshield: "🛡️ Auto-shield protects you from robberies for 1 hour.",
-  tornhelp: "📖 RPG help guide — use .menu for all commands!",
-  train: "🏋️ Train to increase your stats! Costs energy.",
-  battlelb: "⚔️ Battle leaderboard — top fighters!",
-  attack: "⚔️ Attack another player! Use .duel instead.",
-  attacklog: "📋 View your attack history.",
-  cities: "🌆 Available cities to travel to.",
-  travel: "✈️ Travel to a city — unlocks new opportunities!",
-  travelstatus: "📍 Your current location.",
-  abroad: "🌍 Overseas activities while traveling.",
-  sellitems: "💰 Sell items from your inventory with .sell!",
-  drugs: "💊 Underground market (roleplay only!).",
-  buydrg: "💊 Buy from underground market.",
-  usedrg: "💊 Use item from underground market.",
-  drugstatus: "💊 Your underground market status.",
-  createfaction: "🏰 Create a faction — costs 10,000 coins!",
-  joinfaction: "🤝 Join an existing faction.",
-  leavefaction: "👋 Leave your current faction.",
-  faction: "🏰 View your faction info.",
-  fmembers: "👥 List faction members.",
-  fvault: "🏦 Faction vault balance.",
-  fdeposit: "💰 Deposit to faction vault.",
-  fwithdraw: "💰 Withdraw from faction vault (leader only).",
-  finvite: "📩 Invite someone to your faction.",
-  fkick: "🦵 Kick someone from your faction.",
-  fopen: "🔓 Open faction to public.",
-  fwar: "⚔️ Start a faction war!",
-  factions: "🏰 List all factions.",
-  bounties: "🎯 Active bounties on players.",
-  setbounty: "🎯 Set a bounty on someone — costs coins!",
-  mybounty: "🎯 Check if there's a bounty on you.",
-  petshop: "🐾 Browse pets for sale.",
-  buypet: "🐾 Buy a pet from the shop.",
-  mypet: "🐾 View your pet's status.",
-  carepet: "❤️ Feed and care for your pet.",
-  renamepet: "✏️ Rename your pet.",
-  petleaderboard: "🏆 Top pets leaderboard.",
-  petreward: "🎁 Collect daily pet reward.",
-};
-for (const [c, desc] of Object.entries(econInfoCmds)) {
-  if (!commands.has(c)) cmd(c, { desc: desc.slice(0, 40), category: "ECONOMY" }, async (sock, msg) => {
-    await sendReply(sock, msg, `💰 *${c.charAt(0).toUpperCase() + c.slice(1)}*\n\n${desc}`);
-  });
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  FUN COMMANDS
@@ -14018,10 +13129,7 @@ const ADVICES = ["Take care of your mental health first.", "Don't compare your c
 const INSULTS = ["You're proof evolution can go in reverse.", "I'd agree with you but then we'd both be wrong.", "You're like a cloud — when you disappear it's a beautiful day."];
 const LINES = ["Are you a bank loan? You've got my interest.", "Is your name Google? You have everything I've been searching for.", "Do you have a map? I keep getting lost in your eyes."];
 
-cmd("joke",    { desc: "Random joke",    category: "FUN" }, async (s, m) => {
-  await sendReply(s, m, `😂 ${random(JOKES)}`);
-  try { await sendNativeFlowButtons(s, m.key.remoteJid, m, `😂 *Joke delivered!*`, [{ text: "🔄 Another Joke", id: `${CONFIG.PREFIX}joke` }], `${CONFIG.BOT_NAME} • Fun`); } catch {}
-});
+
 cmd("truth",   { desc: "Truth question", category: "FUN" }, async (s, m) => { await sendReply(s, m, `🤔 *Truth:*\n\n${_randomTruth()}`); });
 cmd("dare",    { desc: "Dare challenge", category: "FUN" }, async (s, m) => { await sendReply(s, m, `😈 *Dare:*\n\n${random(DARES)}`); });
 cmd(["sad","sadquote","sadvibes"],  { desc: "Random sad quote", category: "FUN" }, async (s, m) => { await sendReply(s, m, `😔 *Sad Quote*\n\n_"${_randomSad()}"_`); });
@@ -15430,7 +14538,7 @@ cmd("unafk", { desc: "Remove AFK status", category: "TOOLS" }, async (sock, msg)
     (afk ? `💬 *Was:* ${afk.reason}\n` : "") +
     ``);
 });
-cmd("qr", { desc: "Generate QR code", category: "TOOLS" }, async (sock, msg, args) => {
+cmd(["qr", "qr2", "createqr2", "genqr2"], { desc: "Generate QR code", category: "TOOLS" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}qr <text or URL>`); return; }
   const text = args.join(" ");
   await react(sock, msg, "⏳");
@@ -15443,7 +14551,7 @@ cmd("qr", { desc: "Generate QR code", category: "TOOLS" }, async (sock, msg, arg
     await sendCTAButtons(sock, msg.key.remoteJid, msg, `📱 *QR Code generated!*\n_Encoded: ${text.slice(0, 70)}${text.length > 70 ? "..." : ""}_`, _qrCtaBtns, `${CONFIG.BOT_NAME} • QR Generator`).catch(() => {});
   } catch { await sendReply(sock, msg, "❌ Failed to generate QR code."); }
 });
-cmd("shorten", { desc: "Shorten URL", category: "TOOLS" }, async (sock, msg, args) => {
+cmd(["shorten", "shortenurl2", "pshorten", "urlshort2", "dagd", "dagdshort", "vgd", "vgdshort", "spoo", "spoome", "spoourl", "tinube", "tinubeurl", "tinubeshorten", "spooemojiurl", "emojishorten", "spooemoji", "randomshort", "randshorten", "randomurl"], { desc: "Shorten URL", category: "TOOLS" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}shorten <url>`); return; }
   await react(sock, msg, "🔗");
   const shortApis = [
@@ -15471,7 +14579,7 @@ cmd("shorten", { desc: "Shorten URL", category: "TOOLS" }, async (sock, msg, arg
   }
   await sendReply(sock, msg, "❌ Failed to shorten URL. Check if it's valid.");
 });
-cmd("ip", { desc: "IP lookup", category: "TOOLS" }, async (sock, msg, args) => {
+cmd(["ip", "geoip", "ipinfo", "iplookup"], { desc: "IP lookup", category: "TOOLS" }, async (sock, msg, args) => {
   await react(sock, msg, "🌐");
   const ip = args[0]?.replace(/[^0-9a-f.:]/gi, "") || "";
   const ipApis = [
@@ -15703,7 +14811,7 @@ cmd("uuid", { desc: "Generate UUID", category: "TOOLS" }, async (sock, msg) => {
   const uuid = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16); });
   await sendReply(sock, msg, `🆔 *UUID*\n\n\`${uuid}\``);
 });
-cmd(["ss", "ssweb", "screenshot", "webshot"], { desc: "Screenshot a website — .ss <url>", category: "TOOLS" }, async (sock, msg, args) => {
+cmd(["ss", "ssweb", "screenshot", "webshot", "ss2", "screenshot2", "webshot2"], { desc: "Screenshot a website — .ss <url>", category: "TOOLS" }, async (sock, msg, args) => {
   if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ss <url>\nExample: ${CONFIG.PREFIX}ss google.com`); return; }
   const jid = msg.key.remoteJid;
   let targetUrl = String(args[0]).trim();
@@ -16517,103 +15625,7 @@ const FANCY_STYLES = {
   italic: t => [...t].map(c => "𝘢𝘣𝘤𝘥𝘦𝘧𝘨𝘩𝘪𝘫𝘬𝘭𝘮𝘯𝘰𝘱𝘲𝘳𝘴𝘵𝘶𝘷𝘸𝘹𝘺𝘻𝘈𝘉𝘊𝘋𝘌𝘍𝘎𝘏𝘐𝘑𝘒𝘓𝘔𝘕𝘖𝘗𝘘𝘙𝘚𝘛𝘜𝘝𝘞𝘟𝘠𝘡"["abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".indexOf(c)] || c).join(""),
   bubble: t => [...t].map(c => "ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ"["abcdefghijklmnopqrstuvwxyz".indexOf(c.toLowerCase())] || c).join(""),
 };
-cmd("say", { desc: "Convert text to voice note — .say <text>", category: "TEXT" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}say <text>*\n\nExample: ${CONFIG.PREFIX}say Hello everyone!`); return; }
-  await react(sock, msg, "🎙️");
-  const text = args.join(" ");
-  const jid = msg.key.remoteJid;
-  const ttsFns = [
-    // 1) StreamElements — most reliable free TTS, no auth needed
-    async () => {
-      const { data } = await axios.get(`https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=${encodeURIComponent(text.slice(0, 500))}`, { responseType: "arraybuffer", timeout: 18000, headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" } });
-      const b = Buffer.from(data);
-      if (b.length < 1000) throw new Error("empty");
-      return b;
-    },
-    // 2) VoiceRSS free TTS (50 requests/day on free tier, no key required for basic)
-    async () => {
-      const { data } = await axios.get(`https://api.voicerss.org/?key=apikey&hl=en-us&v=Linda&c=MP3&f=16khz_16bit_stereo&src=${encodeURIComponent(text.slice(0, 500))}`, { responseType: "arraybuffer", timeout: 15000, headers: { "User-Agent": "Mozilla/5.0" } });
-      const b = Buffer.from(data);
-      if (b.length < 1000 || b.slice(0,6).toString().includes("ERROR")) throw new Error("voicerss error");
-      return b;
-    },
-    // 3) TikTok TTS API (free, no auth)
-    async () => {
-      const { data } = await axios.post("https://tiktok-tts.weilbyte.net/api/generate", { text: text.slice(0, 300), voice: "en_us_001" }, { headers: { "Content-Type": "application/json" }, timeout: 15000 });
-      if (!data?.data) throw new Error("no tiktok tts");
-      const b = Buffer.from(data.data, "base64");
-      if (b.length < 1000) throw new Error("empty");
-      return b;
-    },
-    // 4) Prexzyvilla TTS
-    async () => {
-      const r = await prexzyGet("/tools/tts", { text: text.slice(0, 500), voice: "en" }, 20000);
-      if (!r.ok) throw new Error("prexzy tts fail");
-      const d = r.data?.data || r.data;
-      const audioUrl = d?.url || d?.audio || d?.result;
-      if (!audioUrl) throw new Error("no tts url");
-      const { data } = await axios.get(audioUrl, { responseType: "arraybuffer", timeout: 20000 });
-      return Buffer.from(data);
-    },
-    // 5) Google TTS (en, short text only — often rate-limited)
-    async () => {
-      const { data } = await axios.get(`https://translate.google.com/translate_tts?ie=UTF-8&client=gtx&tl=en&q=${encodeURIComponent(text.slice(0, 200))}`, { responseType: "arraybuffer", timeout: 15000, headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15" } });
-      const b = Buffer.from(data);
-      if (b.length < 1000) throw new Error("empty");
-      return b;
-    },
-    // 6) Siputzx TTS fallback
-    async () => {
-      const { data } = await axios.get(`https://api.siputzx.my.id/api/tools/tts?text=${encodeURIComponent(text.slice(0, 300))}&lang=en`, { responseType: "arraybuffer", timeout: 15000, headers: { "User-Agent": "Mozilla/5.0" } });
-      const b = Buffer.from(data);
-      if (b.length < 1000) throw new Error("empty");
-      return b;
-    },
-  ];
-  // Helper: detect real audio bytes (MP3/OGG/WAV headers) — rejects HTML error pages
-  const _isRealAudio = (b) => {
-    if (!b || b.length < 8) return false;
-    const h = b.slice(0, 4).toString("hex");
-    // MP3 ID3 tag, MP3 sync, OGG, RIFF/WAV, fLaC, ftyp(M4A)
-    if (h.startsWith("494433") || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return true;
-    if (h === "4f676753") return true; // OGG
-    if (h === "52494646") return true; // RIFF/WAV
-    if (h === "664c6143") return true; // fLaC
-    if (b.slice(4,8).toString("ascii") === "ftyp") return true; // M4A
-    return false;
-  };
-  let audioBuf = null;
-  for (const fn of ttsFns) {
-    try {
-      const _b = await fn();
-      if (_b && _isRealAudio(_b)) { audioBuf = _b; break; }
-    } catch {}
-  }
-  if (!audioBuf) {
-    await sendReply(sock, msg, `❌ TTS failed — all voice providers are down right now.`);
-    return;
-  }
-  // Determine correct mime from magic bytes. Only use ptt:true for OGG/Opus —
-  // WhatsApp shows "audio not available" if ptt is set on MP3/M4A buffers.
-  const _isOgg = (audioBuf[0] === 0x4f && audioBuf[1] === 0x67 && audioBuf[2] === 0x67 && audioBuf[3] === 0x53);
-  const _isM4a = (audioBuf.slice(4,8).toString("ascii") === "ftyp");
-  const _sayMime = _isOgg ? "audio/ogg; codecs=opus" : _isM4a ? "audio/mp4" : "audio/mpeg";
-  try {
-    await sock.sendMessage(jid, { audio: audioBuf, mimetype: _sayMime, ptt: _isOgg }, { quoted: msg });
-  } catch {
-    await sock.sendMessage(jid, { document: audioBuf, mimetype: _sayMime, fileName: `say.${_isOgg?"ogg":_isM4a?"m4a":"mp3"}` }, { quoted: msg });
-  }
-  await react(sock, msg, "✅");
-});
-cmd("fancy", { desc: "Fancy text", category: "TEXT" }, async (sock, msg, args) => {
-  if (args.length < 2) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}fancy <style> <text>\nStyles: bold, italic, bubble`); return; }
-  const style = args[0].toLowerCase(), text = args.slice(1).join(" ");
-  const fn = FANCY_STYLES[style];
-  await sendReply(sock, msg, `✨ *Fancy Text (${style})*\n\n${fn ? fn(text) : text}`);
-});
-cmd("fancylist", { desc: "List fancy text styles", category: "TEXT" }, async (sock, msg) => {
-  await sendReply(sock, msg, `✨ *Fancy Styles:*\nbold, italic, bubble\n\nUsage: ${CONFIG.PREFIX}fancy <style> <text>`);
-});
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  GROUP COMMANDS
@@ -19092,6 +18104,7 @@ cmd(["facebook", "fb"], { desc: "Download from Facebook — .fb <URL> [video|aud
   const mode = (args[1] || "").toLowerCase();
   const jid = msg.key.remoteJid;
   const statusMsg = await sock.sendMessage(jid, { text: `📘 *MIAS MDX — Facebook*\n\n⬡ Fetching media...\n◻ Downloading${mode ? " (" + mode + ")" : ""}...\n◻ Sending...` }, { quoted: msg });
+for (const _a of ["fbv2", "facebookv2", "metav2"]) { const _c = commands.get("facebook"); if (_c) { commands.set(_a, { ..._c, canonical: "facebook", isAlias: true }); aliases.set(_a, "facebook"); } }
   const dlKey = statusMsg.key;
   try {
     let result = null;
@@ -19447,6 +18460,7 @@ cmd(["spotify","spot","spotdl"], { desc: "Download Spotify track as MP3 with cov
   const url = args[0];
   const jid = msg.key.remoteJid;
   const _spotStMsg = await sock.sendMessage(jid, { text: `🎧 *MIAS MDX — Spotify*\n\n⏳ Fetching track info...\n⏳ Downloading audio...\n⏳ Sending...` }, { quoted: msg });
+for (const _a of ["spotify2", "spotifyv2", "spotdlv2"]) { const _c = commands.get("spotify"); if (_c) { commands.set(_a, { ..._c, canonical: "spotify", isAlias: true }); aliases.set(_a, "spotify"); } }
   const _spotStKey = _spotStMsg.key;
   let dlUrl = null, title = "Spotify Track", thumbUrl = null, artists = "", duration = "";
 
@@ -19812,7 +18826,8 @@ cmd(["pinterest", "pinsearch", "pindl", "pin2"], { desc: "Pinterest search/downl
     const _pinDlApis = [
       async () => { const r = await prexzyGet("/download/pinterestV2", { url: _pinUrl }, 45000); const d = r.data?.data || r.data; return d?.url || d?.video || d?.image || d?.downloadUrl; },
       async () => { const r = await prexzyGet("/download/pinterest", { url: _pinUrl }, 40000); const d = r.data?.data || r.data; return d?.url || d?.video || d?.image; },
-      async () => { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/pinterest?url=${encodeURIComponent(_pinUrl)}`, { timeout: 30000 }); return data?.result?.url || data?.url || data?.data?.url; },
+      async () => { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/pinterest?url=${encodeURIComponent(_pinUrl)}`, { timeout: 30000 });
+for (const _a of ["pinterest2", "pinterestv2", "pindlv2", "pinterestdl2"]) { const _c = commands.get("pinterest"); if (_c) { commands.set(_a, { ..._c, canonical: "pinterest", isAlias: true }); aliases.set(_a, "pinterest"); } } return data?.result?.url || data?.url || data?.data?.url; },
       async () => { const { data } = await axios.get(`https://api.siputzx.my.id/api/d/pinterest?url=${encodeURIComponent(_pinUrl)}`, { timeout: 30000 }); return data?.data?.url || data?.url; },
       async () => { const { data } = await axios.get(`https://api.nexoracle.com/downloader/pinterest?apikey=free_key@maher_apis&url=${encodeURIComponent(_pinUrl)}`, { timeout: 30000 }); return data?.result?.url || data?.url; },
     ];
@@ -19919,7 +18934,7 @@ cmd(["pinterest", "pinsearch", "pindl", "pin2"], { desc: "Pinterest search/downl
   // fallback prexzy: prexzyGet('/download/soundcloud', args)
 });
 
-cmd("apk", { desc: "Download APK", category: "DOWNLOAD" }, async (sock, msg, args) => {
+cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}apk <app name>`); return; }
   await react(sock, msg, "📱");
   const jid = msg.key.remoteJid;
@@ -21615,437 +20630,7 @@ cmd(["adult", "adultdl", "xdl", "nsfwdl"], { desc: "Download adult/NSFW content 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ECONOMY — Advanced commands (Faction, Pet, Battle, Drugs, Travel, Market)
 // ═══════════════════════════════════════════════════════════════════════════════
-cmd("createfaction", { desc: "Create a faction", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}createfaction <name>`); return; }
-  const sender = getSender(msg), name = args.join(" ");
-  if (userFaction.has(sender)) { await sendReply(sock, msg, "❌ You're already in a faction! Leave first."); return; }
-  const e = getEco(sender);
-  if (e.wallet < 5000) { await sendReply(sock, msg, "❌ Need 5,000 coins to create a faction!"); return; }
-  addWallet(sender, -5000);
-  const fid = name.toLowerCase().replace(/\s+/g, "_");
-  factions.set(fid, { name, leader: sender, members: [sender], vault: 0, created: Date.now() });
-  userFaction.set(sender, fid);
-  await sendReply(sock, msg, `⚔️ *Faction Created!*\n\n🏴 *${name}*\n👑 Leader: @${sender.split("@")[0]}\n💰 Cost: 5,000 coins`, [sender]);
-});
-cmd("joinfaction", { desc: "Join a faction", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}joinfaction <name>`); return; }
-  const sender = getSender(msg);
-  if (userFaction.has(sender)) { await sendReply(sock, msg, "❌ Already in a faction!"); return; }
-  const fid = args.join(" ").toLowerCase().replace(/\s+/g, "_");
-  const f = factions.get(fid);
-  if (!f) { await sendReply(sock, msg, "❌ Faction not found!"); return; }
-  f.members.push(sender); userFaction.set(sender, fid);
-  await sendReply(sock, msg, `⚔️ Joined *${f.name}*!`);
-});
-cmd("leavefaction", { desc: "Leave your faction", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid);
-  if (f) { f.members = f.members.filter(m => m !== sender); if (f.members.length === 0) factions.delete(fid); }
-  userFaction.delete(sender);
-  await sendReply(sock, msg, `✅ Left faction.`);
-});
-cmd("faction", { desc: "View your faction info", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, `❌ Not in a faction! Use ${CONFIG.PREFIX}createfaction or ${CONFIG.PREFIX}joinfaction`); return; }
-  const f = factions.get(fid);
-  if (!f) { await sendReply(sock, msg, "❌ Faction data missing!"); return; }
-  await sendReply(sock, msg, `⚔️ *${f.name}*\n\n👑 Leader: @${f.leader.split("@")[0]}\n👥 Members: ${f.members.length}\n💰 Vault: ${(f.vault || 0).toLocaleString()} coins\n📅 Created: ${new Date(f.created).toDateString()}`, [f.leader]);
-});
-cmd("factions", { desc: "List all factions", category: "ECONOMY" }, async (sock, msg) => {
-  if (!factions.size) { await sendReply(sock, msg, "❌ No factions exist yet!"); return; }
-  let t = "⚔️ *All Factions:*\n\n";
-  for (const [, f] of factions) { t += `🏴 *${f.name}* — ${f.members.length} members | 💰 ${(f.vault||0).toLocaleString()}\n`; }
-  await sendReply(sock, msg, t + ``);
-});
-cmd("fmembers", { desc: "List faction members", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid);
-  let t = `👥 *${f.name} Members:*\n\n`;
-  f.members.forEach((m, i) => { t += `${i+1}. @${m.split("@")[0]}${m === f.leader ? " 👑" : ""}\n`; });
-  await sendReply(sock, msg, t + ``, f.members);
-});
-cmd("fvault", { desc: "Check faction vault", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid);
-  await sendReply(sock, msg, `💰 *${f.name} Vault:* ${(f.vault||0).toLocaleString()} coins`);
-});
-cmd("fdeposit", { desc: "Deposit to faction vault", category: "ECONOMY" }, async (sock, msg, args) => {
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const amount = parseInt(args[0]) || 0;
-  if (amount < 1) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}fdeposit <amount>`); return; }
-  const e = getEco(sender);
-  if (e.wallet < amount) { await sendReply(sock, msg, "❌ Not enough coins!"); return; }
-  addWallet(sender, -amount);
-  const f = factions.get(fid); f.vault = (f.vault || 0) + amount;
-  await sendReply(sock, msg, `✅ Deposited *${amount.toLocaleString()}* to faction vault!\n💰 Vault: ${f.vault.toLocaleString()}`);
-});
-cmd("fwithdraw", { desc: "Withdraw from faction vault (leader only)", category: "ECONOMY" }, async (sock, msg, args) => {
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid);
-  if (f.leader !== sender) { await sendReply(sock, msg, "❌ Only the faction leader can withdraw!"); return; }
-  const amount = parseInt(args[0]) || 0;
-  if (amount < 1 || (f.vault || 0) < amount) { await sendReply(sock, msg, "❌ Invalid amount or insufficient vault funds!"); return; }
-  f.vault -= amount; addWallet(sender, amount);
-  await sendReply(sock, msg, `✅ Withdrew *${amount.toLocaleString()}* from vault!\n💰 Vault: ${f.vault.toLocaleString()}`);
-});
-cmd("finvite", { desc: "Invite user to faction", category: "ECONOMY" }, async (sock, msg) => {
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  if (!mentions.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}finvite @user`); return; }
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid);
-  await sendReply(sock, msg, `📨 @${mentions[0].split("@")[0]} has been invited to *${f.name}*!\nUse ${CONFIG.PREFIX}joinfaction ${fid} to join.`, mentions);
-});
-cmd("fkick", { desc: "Kick member from faction (leader only)", category: "ECONOMY" }, async (sock, msg) => {
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  if (!mentions.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}fkick @user`); return; }
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid);
-  if (f.leader !== sender) { await sendReply(sock, msg, "❌ Only the faction leader can kick!"); return; }
-  const target = mentions[0];
-  f.members = f.members.filter(m => m !== target); userFaction.delete(target);
-  await sendReply(sock, msg, `✅ Kicked @${target.split("@")[0]} from *${f.name}*!`, [target]);
-});
-cmd("fopen", { desc: "Open faction to public", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid); f.open = !f.open;
-  await sendReply(sock, msg, `⚔️ Faction is now *${f.open ? "OPEN" : "CLOSED"}* to new members.`);
-});
-cmd("fwar", { desc: "Declare war on another faction", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}fwar <faction name>`); return; }
-  const sender = getSender(msg), fid = userFaction.get(sender);
-  if (!fid) { await sendReply(sock, msg, "❌ Not in a faction!"); return; }
-  const f = factions.get(fid);
-  const targetFid = args.join(" ").toLowerCase().replace(/\s+/g, "_");
-  const tf = factions.get(targetFid);
-  if (!tf) { await sendReply(sock, msg, "❌ Target faction not found!"); return; }
-  const myPower = f.members.length * 100 + (f.vault || 0);
-  const theirPower = tf.members.length * 100 + (tf.vault || 0);
-  const won = Math.random() * myPower > Math.random() * theirPower;
-  const prize = Math.floor(Math.random() * 2000) + 500;
-  if (won) { f.vault = (f.vault || 0) + prize; await sendReply(sock, msg, `⚔️ *WAR WON!*\n\n🏴 *${f.name}* defeated *${tf.name}*!\n💰 Loot: +${prize} coins to vault!`); }
-  else { tf.vault = (tf.vault || 0) + prize; await sendReply(sock, msg, `⚔️ *WAR LOST!*\n\n🏴 *${tf.name}* defeated *${f.name}*!\n💔 Lost ${prize} coins.`); }
-});
 
-// Pet system
-cmd("petshop", { desc: "View pets for sale", category: "ECONOMY" }, async (sock, msg) => {
-  const pets = [{ name: "Dog", price: 1500, emoji: "🐕" }, { name: "Cat", price: 1200, emoji: "🐈" }, { name: "Parrot", price: 2000, emoji: "🦜" }, { name: "Hamster", price: 800, emoji: "🐹" }, { name: "Fish", price: 500, emoji: "🐠" }, { name: "Dragon", price: 10000, emoji: "🐉" }];
-  let t = "🏪 *Pet Shop:*\n\n";
-  pets.forEach(p => { t += `${p.emoji} *${p.name}* — ${p.price.toLocaleString()} coins\n`; });
-  t += `\nUse: ${CONFIG.PREFIX}buypet <name>`;
-  await sendReply(sock, msg, t);
-});
-cmd("buypet", { desc: "Buy a pet", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}buypet <name>`); return; }
-  const sender = getSender(msg), name = args[0].toLowerCase();
-  const pets = { dog: { price: 1500, emoji: "🐕" }, cat: { price: 1200, emoji: "🐈" }, parrot: { price: 2000, emoji: "🦜" }, hamster: { price: 800, emoji: "🐹" }, fish: { price: 500, emoji: "🐠" }, dragon: { price: 10000, emoji: "🐉" } };
-  const pet = pets[name];
-  if (!pet) { await sendReply(sock, msg, `❌ Unknown pet! Use ${CONFIG.PREFIX}petshop to see options.`); return; }
-  const e = getEco(sender);
-  if (e.wallet < pet.price) { await sendReply(sock, msg, `❌ Need ${pet.price.toLocaleString()} coins!`); return; }
-  addWallet(sender, -pet.price);
-  petStore.set(sender, { type: name, name: name, emoji: pet.emoji, health: 100, hunger: 100, happiness: 100, level: 1, bought: Date.now() });
-  await sendReply(sock, msg, `${pet.emoji} *You bought a ${name}!*\n\n💰 -${pet.price.toLocaleString()} coins\nUse ${CONFIG.PREFIX}mypet to check on it!`);
-});
-cmd("mypet", { desc: "View your pet", category: "ECONOMY" }, async (sock, msg) => {
-  const pet = petStore.get(getSender(msg));
-  if (!pet) { await sendReply(sock, msg, `❌ No pet! Use ${CONFIG.PREFIX}buypet to get one.`); return; }
-  await sendReply(sock, msg, `${pet.emoji} *${pet.name}* (Lv.${pet.level})\n\n❤️ Health: ${pet.health}%\n🍗 Hunger: ${pet.hunger}%\n😊 Happiness: ${pet.happiness}%\n\nUse ${CONFIG.PREFIX}carepet to feed & play!`);
-});
-cmd("carepet", { desc: "Feed and care for pet", category: "ECONOMY" }, async (sock, msg) => {
-  const pet = petStore.get(getSender(msg));
-  if (!pet) { await sendReply(sock, msg, `❌ No pet!`); return; }
-  pet.hunger = Math.min(100, pet.hunger + 30);
-  pet.happiness = Math.min(100, pet.happiness + 20);
-  pet.health = Math.min(100, pet.health + 10);
-  if (pet.happiness >= 90 && pet.hunger >= 90) { pet.level++; }
-  await sendReply(sock, msg, `${pet.emoji} *Pet cared for!*\n\n🍗 Hunger: ${pet.hunger}%\n😊 Happiness: ${pet.happiness}%\n❤️ Health: ${pet.health}%\n⭐ Level: ${pet.level}`);
-});
-cmd("renamepet", { desc: "Rename your pet", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}renamepet <name>`); return; }
-  const pet = petStore.get(getSender(msg));
-  if (!pet) { await sendReply(sock, msg, "❌ No pet!"); return; }
-  pet.name = args.join(" ");
-  await sendReply(sock, msg, `${pet.emoji} Pet renamed to *${pet.name}*!`);
-});
-cmd("petleaderboard", { desc: "Pet level leaderboard", category: "ECONOMY" }, async (sock, msg) => {
-  if (!petStore.size) { await sendReply(sock, msg, "❌ No pets yet!"); return; }
-  const sorted = [...petStore.entries()].sort((a, b) => b[1].level - a[1].level).slice(0, 10);
-  let t = "🏆 *Pet Leaderboard:*\n\n";
-  sorted.forEach(([jid, pet], i) => { t += `${i+1}. ${pet.emoji} *${pet.name}* (Lv.${pet.level}) — @${jid.split("@")[0]}\n`; });
-  await sendReply(sock, msg, t + ``, sorted.map(([j]) => j));
-});
-cmd("petreward", { desc: "Collect daily pet reward", category: "ECONOMY" }, async (sock, msg) => {
-  const pet = petStore.get(getSender(msg));
-  if (!pet) { await sendReply(sock, msg, "❌ No pet!"); return; }
-  const reward = pet.level * 50;
-  addWallet(getSender(msg), reward);
-  await sendReply(sock, msg, `${pet.emoji} *Pet Reward!*\n\n+${reward} coins (Level ${pet.level} bonus)`);
-});
-
-// Battle system
-cmd("attack", { desc: "Attack another player", category: "ECONOMY" }, async (sock, msg) => {
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  if (!mentions.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}attack @user`); return; }
-  const sender = getSender(msg), target = mentions[0];
-  if (sender === target) { await sendReply(sock, msg, "❌ Can't attack yourself!"); return; }
-  const sE = getEco(sender), tE = getEco(target);
-  const sPower = sE.level * 10 + (hasItem(sender, "sword") ? 25 : 0) + (hasItem(sender, "armor") ? 15 : 0);
-  const tPower = tE.level * 10 + (hasItem(target, "shield") ? 20 : 0) + (hasItem(target, "armor") ? 15 : 0);
-  const won = Math.random() * sPower > Math.random() * tPower;
-  const coins = Math.floor(Math.random() * 500) + 100;
-  if (won) { addWallet(sender, coins); addWallet(target, -coins); addXP(sender, 50);
-    await sendReply(sock, msg, `⚔️ *ATTACK!*\n\n@${sender.split("@")[0]} defeated @${target.split("@")[0]}!\n💰 +${coins} coins stolen!\n+50 XP`, [sender, target]);
-  } else { addWallet(sender, -Math.floor(coins/2));
-    await sendReply(sock, msg, `⚔️ *ATTACK FAILED!*\n\n@${target.split("@")[0]} defended against @${sender.split("@")[0]}!\n💔 -${Math.floor(coins/2)} coins`, [sender, target]);
-  }
-});
-cmd("attacklog", { desc: "View attack history", category: "ECONOMY" }, async (sock, msg) => {
-  await sendReply(sock, msg, `📜 *Attack Log*\n\nAttack history is session-based.\nUse ${CONFIG.PREFIX}attack @user to battle!`);
-});
-cmd("battlelb", { desc: "Battle leaderboard", category: "ECONOMY" }, async (sock, msg) => {
-  const sorted = [...economy.entries()].sort((a, b) => b[1].level - a[1].level).slice(0, 10);
-  let t = "🏆 *Battle Leaderboard:*\n\n";
-  sorted.forEach(([jid, e], i) => { t += `${i+1}. @${jid.split("@")[0]} — Lv.${e.level} | ${e.wallet.toLocaleString()} coins\n`; });
-  await sendReply(sock, msg, t + ``, sorted.map(([j]) => j));
-});
-cmd("autoshield", { desc: "Toggle auto-shield", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg);
-  if (!hasItem(sender, "shield")) { await sendReply(sock, msg, `❌ You need a shield! Buy one from ${CONFIG.PREFIX}shop`); return; }
-  const e = getEco(sender); e.autoShield = !e.autoShield;
-  await sendReply(sock, msg, `🛡️ Auto-Shield: ${e.autoShield ? "✅ ON" : "❌ OFF"}`);
-});
-cmd("tornhelp", { desc: "Torn-style help menu", category: "ECONOMY" }, async (sock, msg) => {
-  await sendReply(sock, msg, `🎮 *Torn-Style Commands:*\n\n⚔️ ${CONFIG.PREFIX}attack @user — Attack player\n🏥 ${CONFIG.PREFIX}hospital — Check health\n💪 ${CONFIG.PREFIX}train — Train stats\n🌆 ${CONFIG.PREFIX}cities — View cities\n✈️ ${CONFIG.PREFIX}travel <city> — Travel\n💊 ${CONFIG.PREFIX}drugs — Drug market\n🛡️ ${CONFIG.PREFIX}autoshield — Toggle shield\n📊 ${CONFIG.PREFIX}battlelb — Battle rankings`);
-});
-cmd("hospital", { desc: "Check/restore health", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), e = getEco(sender);
-  if (!e.health) e.health = 100;
-  if (e.health >= 100) { await sendReply(sock, msg, `🏥 You're at full health! (${e.health}/100)`); return; }
-  const cost = (100 - e.health) * 10;
-  if (e.wallet < cost) { await sendReply(sock, msg, `🏥 Healing costs ${cost} coins. You have ${e.wallet}.`); return; }
-  addWallet(sender, -cost); e.health = 100;
-  await sendReply(sock, msg, `🏥 *Healed!* -${cost} coins\n❤️ Health: 100/100`);
-});
-cmd("nerve", { desc: "Check nerve points", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg));
-  if (!e.nerve) e.nerve = 50;
-  await sendReply(sock, msg, `💢 *Nerve:* ${e.nerve}/50\n\nNerve regenerates over time.`);
-});
-cmd("energy", { desc: "Check energy level", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg));
-  if (!e.energy) e.energy = 100;
-  await sendReply(sock, msg, `⚡ *Energy:* ${e.energy}/100\n\nEnergy is used for training and travel.`);
-});
-cmd("train", { desc: "Train to increase stats", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), e = getEco(sender);
-  if (!e.energy) e.energy = 100;
-  if (e.energy < 20) { await sendReply(sock, msg, "❌ Not enough energy! Wait for it to regenerate."); return; }
-  e.energy -= 20;
-  const stat = ["strength", "defense", "speed"][Math.floor(Math.random() * 3)];
-  if (!e.stats) e.stats = { strength: 1, defense: 1, speed: 1 };
-  e.stats[stat]++; addXP(sender, 25);
-  await sendReply(sock, msg, `💪 *Training Complete!*\n\n📈 ${stat.charAt(0).toUpperCase() + stat.slice(1)} +1\n⚡ Energy: ${e.energy}/100\n+25 XP`);
-});
-cmd("cities", { desc: "View available cities", category: "ECONOMY" }, async (sock, msg) => {
-  const cities = [
-    { name: "Lagos", emoji: "🇳🇬", cost: 500 }, { name: "London", emoji: "🇬🇧", cost: 2000 },
-    { name: "Dubai", emoji: "🇦🇪", cost: 3000 }, { name: "New York", emoji: "🇺🇸", cost: 4000 },
-    { name: "Tokyo", emoji: "🇯🇵", cost: 3500 }, { name: "Paris", emoji: "🇫🇷", cost: 2500 },
-  ];
-  let t = "🌍 *Cities:*\n\n";
-  cities.forEach(c => { t += `${c.emoji} *${c.name}* — ✈️ ${c.cost} coins\n`; });
-  t += `\nUse: ${CONFIG.PREFIX}travel <city>`;
-  await sendReply(sock, msg, t);
-});
-cmd("travel", { desc: "Travel to a city", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}travel <city>`); return; }
-  const sender = getSender(msg), e = getEco(sender);
-  const cities = { lagos: 500, london: 2000, dubai: 3000, newyork: 4000, tokyo: 3500, paris: 2500 };
-  const city = args.join("").toLowerCase().replace(/\s+/g, "");
-  const cost = cities[city];
-  if (!cost) { await sendReply(sock, msg, `❌ Unknown city! Use ${CONFIG.PREFIX}cities`); return; }
-  if (e.wallet < cost) { await sendReply(sock, msg, `❌ Need ${cost} coins to travel!`); return; }
-  addWallet(sender, -cost); e.location = city;
-  const bonus = Math.floor(Math.random() * cost * 0.5);
-  addWallet(sender, bonus);
-  await sendReply(sock, msg, `✈️ *Traveled to ${args.join(" ")}!*\n\n💰 Travel cost: -${cost}\n🎁 Found: +${bonus} coins abroad!`);
-});
-cmd("travelstatus", { desc: "Check current location", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg));
-  await sendReply(sock, msg, `📍 *Location:* ${e.location ? e.location.charAt(0).toUpperCase() + e.location.slice(1) : "Home"}`);
-});
-cmd("abroad", { desc: "Explore abroad for loot", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), e = getEco(sender);
-  if (!e.location || e.location === "home") { await sendReply(sock, msg, `❌ Travel somewhere first! Use ${CONFIG.PREFIX}travel`); return; }
-  const loot = Math.floor(Math.random() * 1000) + 200;
-  addWallet(sender, loot); addXP(sender, 30);
-  await sendReply(sock, msg, `🌍 *Explored ${e.location}!*\n\n💰 Found: +${loot} coins\n+30 XP`);
-});
-
-// Drugs system
-cmd("drugs", { desc: "View drug market", category: "ECONOMY" }, async (sock, msg) => {
-  const drugs = [
-    { name: "Xanax", price: 1000, effect: "+25 nerve", emoji: "💊" },
-    { name: "Energy Drink", price: 300, effect: "+30 energy", emoji: "🥤" },
-    { name: "Steroids", price: 2000, effect: "+5 strength", emoji: "💉" },
-    { name: "Speed", price: 1500, effect: "+5 speed", emoji: "⚡" },
-  ];
-  let t = "💊 *Drug Market:*\n\n";
-  drugs.forEach(d => { t += `${d.emoji} *${d.name}* — ${d.price} coins (${d.effect})\n`; });
-  t += `\nUse: ${CONFIG.PREFIX}buydrg <name>\n⚠️ _Use at your own risk!_`;
-  await sendReply(sock, msg, t);
-});
-cmd("buydrg", { desc: "Buy drugs", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}buydrg <drug name>`); return; }
-  const sender = getSender(msg), e = getEco(sender);
-  const drugs = { xanax: { price: 1000, item: "xanax" }, energydrink: { price: 300, item: "energy_drink" }, steroids: { price: 2000, item: "steroids" }, speed: { price: 1500, item: "speed" } };
-  const key = args.join("").toLowerCase();
-  const drug = drugs[key];
-  if (!drug) { await sendReply(sock, msg, `❌ Unknown drug! Use ${CONFIG.PREFIX}drugs`); return; }
-  if (e.wallet < drug.price) { await sendReply(sock, msg, "❌ Not enough coins!"); return; }
-  addWallet(sender, -drug.price); addItem(sender, drug.item);
-  await sendReply(sock, msg, `💊 Bought *${args.join(" ")}*!\n💰 -${drug.price} coins\nUse ${CONFIG.PREFIX}usedrg ${args.join(" ")} to consume.`);
-});
-cmd("usedrg", { desc: "Use a drug", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}usedrg <drug name>`); return; }
-  const sender = getSender(msg), e = getEco(sender);
-  const effects = { xanax: () => { if(!e.nerve) e.nerve=50; e.nerve = Math.min(50, e.nerve+25); return "💢 Nerve +25"; },
-    energy_drink: () => { if(!e.energy) e.energy=100; e.energy = Math.min(100, e.energy+30); return "⚡ Energy +30"; },
-    steroids: () => { if(!e.stats) e.stats={strength:1,defense:1,speed:1}; e.stats.strength+=5; return "💪 Strength +5"; },
-    speed: () => { if(!e.stats) e.stats={strength:1,defense:1,speed:1}; e.stats.speed+=5; return "🏃 Speed +5"; } };
-  const key = args.join("_").toLowerCase();
-  if (!hasItem(sender, key)) { await sendReply(sock, msg, "❌ You don't have that drug!"); return; }
-  removeItem(sender, key);
-  const effect = effects[key]?.() || "Effect applied";
-  await sendReply(sock, msg, `💊 *Drug Used!*\n\n${effect}`);
-});
-cmd("drugstatus", { desc: "Check active drug effects", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg));
-  await sendReply(sock, msg, `💊 *Drug Status:*\n\n💢 Nerve: ${e.nerve || 50}/50\n⚡ Energy: ${e.energy || 100}/100\n💪 Str: ${e.stats?.strength || 1}\n🏃 Spd: ${e.stats?.speed || 1}`);
-});
-
-// Market system
-cmd("market", { desc: "View player market", category: "ECONOMY" }, async (sock, msg) => {
-  if (!settings.has("_market")) settings.set("_market", new Map());
-  const market = settings.get("_market");
-  if (!market.size) { await sendReply(sock, msg, `🏪 *Market is empty!*\n\nUse ${CONFIG.PREFIX}sell <item> <price> to list.`); return; }
-  let t = "🏪 *Player Market:*\n\n";
-  let i = 1;
-  for (const [id, listing] of market) { t += `${i++}. *${listing.item}* — ${listing.price} coins (by @${listing.seller.split("@")[0]})\n`; }
-  t += `\nUse: ${CONFIG.PREFIX}marketbuy <item>`;
-  await sendReply(sock, msg, t);
-});
-cmd("marketbuy", { desc: "Buy from market", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}marketbuy <item>`); return; }
-  if (!settings.has("_market")) { await sendReply(sock, msg, "❌ Market is empty!"); return; }
-  const market = settings.get("_market");
-  const itemName = args.join("_").toLowerCase();
-  let found = null, foundKey = null;
-  for (const [k, v] of market) { if (v.item.toLowerCase() === itemName) { found = v; foundKey = k; break; } }
-  if (!found) { await sendReply(sock, msg, "❌ Item not found on market!"); return; }
-  const sender = getSender(msg), e = getEco(sender);
-  if (e.wallet < found.price) { await sendReply(sock, msg, "❌ Not enough coins!"); return; }
-  addWallet(sender, -found.price); addWallet(found.seller, found.price);
-  addItem(sender, found.item); market.delete(foundKey);
-  await sendReply(sock, msg, `✅ Bought *${found.item}* for ${found.price} coins!`);
-});
-cmd("unsell", { desc: "Remove item from market", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!settings.has("_market")) { await sendReply(sock, msg, "❌ Nothing on market!"); return; }
-  const market = settings.get("_market"), sender = getSender(msg);
-  const itemName = args.join("_").toLowerCase();
-  for (const [k, v] of market) { if (v.seller === sender && v.item.toLowerCase() === itemName) { market.delete(k); addItem(sender, v.item); await sendReply(sock, msg, `✅ Removed *${v.item}* from market.`); return; } }
-  await sendReply(sock, msg, "❌ Item not found or not yours!");
-});
-cmd("sellitems", { desc: "Sell item to shop", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}sellitems <item>`); return; }
-  const sender = getSender(msg), item = args.join("_").toLowerCase();
-  if (!hasItem(sender, item)) { await sendReply(sock, msg, "❌ You don't have that item!"); return; }
-  const shopItem = shopItems.get(item);
-  const price = shopItem ? Math.floor(shopItem.price * 0.5) : 100;
-  removeItem(sender, item); addWallet(sender, price);
-  await sendReply(sock, msg, `✅ Sold *${item}* for ${price} coins!`);
-});
-cmd("buyitem", { desc: "Buy item from shop", category: "ECONOMY" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}buyitem <item>`); return; }
-  const sender = getSender(msg), item = args.join("_").toLowerCase();
-  const shopItem = shopItems.get(item);
-  if (!shopItem) { await sendReply(sock, msg, `❌ Not in shop! Use ${CONFIG.PREFIX}shop`); return; }
-  const e = getEco(sender);
-  if (e.wallet < shopItem.price) { await sendReply(sock, msg, `❌ Need ${shopItem.price} coins!`); return; }
-  addWallet(sender, -shopItem.price); addItem(sender, item);
-  await sendReply(sock, msg, `✅ Bought *${item}*!\n💰 -${shopItem.price} coins`);
-});
-cmd("shopadd", { desc: "Add item to shop (owner)", category: "ECONOMY", ownerOnly: true }, async (sock, msg, args) => {
-  if (args.length < 2) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}shopadd <item> <price>`); return; }
-  const price = parseInt(args.pop()), item = args.join("_").toLowerCase();
-  shopItems.set(item, { price, desc: "Custom item" });
-  await sendReply(sock, msg, `✅ Added *${item}* to shop for ${price} coins!`);
-});
-cmd("shopdel", { desc: "Remove item from shop (owner)", category: "ECONOMY", ownerOnly: true }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}shopdel <item>`); return; }
-  const item = args.join("_").toLowerCase();
-  shopItems.delete(item);
-  await sendReply(sock, msg, `✅ Removed *${item}* from shop.`);
-});
-cmd("gambstats", { desc: "Gambling statistics", category: "ECONOMY" }, async (sock, msg) => {
-  const e = getEco(getSender(msg));
-  await sendReply(sock, msg, `🎰 *Gambling Stats:*\n\n💰 Wallet: ${e.wallet.toLocaleString()}\n🏦 Bank: ${e.bank.toLocaleString()}\n⭐ Level: ${e.level}\n✨ XP: ${e.xp}`);
-});
-cmd("collect", { desc: "Collect daily bonus from assets", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), e = getEco(sender);
-  const bonus = e.level * 25 + 100;
-  addWallet(sender, bonus);
-  await sendReply(sock, msg, `💎 *Asset Collection!*\n\n+${bonus} coins collected!`);
-});
-cmd("hireworker", { desc: "Hire a worker for passive income", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), e = getEco(sender);
-  const cost = 5000;
-  if (e.wallet < cost) { await sendReply(sock, msg, `❌ Need ${cost} coins to hire a worker!`); return; }
-  addWallet(sender, -cost); if (!e.workers) e.workers = 0; e.workers++;
-  await sendReply(sock, msg, `👷 *Worker Hired!*\n\n💰 -${cost} coins\n👥 Workers: ${e.workers}\nEach worker earns passive income!`);
-});
-cmd("upgrade", { desc: "Upgrade your level", category: "ECONOMY" }, async (sock, msg) => {
-  const sender = getSender(msg), e = getEco(sender);
-  const cost = e.level * 500;
-  if (e.wallet < cost) { await sendReply(sock, msg, `❌ Need ${cost} coins to upgrade!`); return; }
-  addWallet(sender, -cost); e.level++;
-  await sendReply(sock, msg, `⬆️ *Level Up!*\n\n⭐ Level: ${e.level}\n💰 Cost: -${cost}`);
-});
-
-// Bounty system
-cmd("bounties", { desc: "View active bounties", category: "ECONOMY" }, async (sock, msg) => {
-  if (!settings.has("_bounties")) settings.set("_bounties", new Map());
-  const bounties = settings.get("_bounties");
-  if (!bounties.size) { await sendReply(sock, msg, "❌ No active bounties."); return; }
-  let t = "🎯 *Active Bounties:*\n\n";
-  for (const [target, info] of bounties) { t += `• @${target.split("@")[0]} — ${info.reward} coins (by @${info.setter.split("@")[0]})\n`; }
-  await sendReply(sock, msg, t + ``);
-});
-cmd("setbounty", { desc: "Set bounty on player", category: "ECONOMY" }, async (sock, msg, args) => {
-  const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  const amount = parseInt(args.find(a => !a.startsWith("@"))) || 0;
-  if (!mentions.length || amount < 100) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}setbounty @user <amount>`); return; }
-  const sender = getSender(msg), e = getEco(sender);
-  if (e.wallet < amount) { await sendReply(sock, msg, "❌ Not enough coins!"); return; }
-  addWallet(sender, -amount);
-  if (!settings.has("_bounties")) settings.set("_bounties", new Map());
-  settings.get("_bounties").set(mentions[0], { reward: amount, setter: sender });
-  await sendReply(sock, msg, `🎯 Bounty of *${amount} coins* set on @${mentions[0].split("@")[0]}!`, mentions);
-});
-cmd("mybounty", { desc: "Check if there's a bounty on you", category: "ECONOMY" }, async (sock, msg) => {
-  if (!settings.has("_bounties")) { await sendReply(sock, msg, "✅ No bounty on you!"); return; }
-  const b = settings.get("_bounties").get(getSender(msg));
-  if (!b) { await sendReply(sock, msg, "✅ No bounty on you!"); return; }
-  await sendReply(sock, msg, `⚠️ *Bounty on you:* ${b.reward} coins!\nSet by @${b.setter.split("@")[0]}`, [b.setter]);
-});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  HENTAI / ADULT COMMANDS
@@ -25019,7 +23604,7 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
 });
 
 // .mediafiredl — MediaFire downloader
-cmd(["mediafiredl","mfdl","mediafire"], { desc: "Download MediaFire file — .mediafiredl <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
+cmd(["mediafire", "mediafire2", "mediafiredl", "mfdl", "mfdl2"], { desc: "Download MediaFire file — .mediafiredl <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
     if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}mediafiredl <mediafire_url>*`); return; }
     await react(sock, msg, "📦");
     const url = args[0];
@@ -25319,30 +23904,7 @@ cmd(["manga","mangasearch","mangafind"], { desc: "Search for manga — .manga <t
 });
 
 // .moviesearch2 — movie search via prexzyvilla
-cmd(["filmfind"], { desc: "Search movies (prexzyvilla) — .moviesearch2 <title>", category: "SEARCH" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}moviesearch2 <movie title>*`); return; }
-  await react(sock, msg, "🎬");
-  const r = await prexzyGet("/moviesearch", { query }, 20000);
-  const d = r.data;
-  const list = d?.data || d?.result || d?.results || d?.movies || (Array.isArray(d) ? d : null);
-  if (!r.ok || !Array.isArray(list) || !list.length) { await sendReply(sock, msg, `❌ No movies found for "*${query}*".`); return; }
-  const top = list.slice(0, 5);
-  let out = `🎬 *Movie Search — "${query}"*\n\n`;
-  for (const [i, m] of top.entries()) {
-    const title = m.title || m.name || "Unknown";
-    const year = m.year || m.release_year || "";
-    const quality = m.quality || m.resolution || "";
-    const genre = Array.isArray(m.genre) ? m.genre.slice(0, 3).join(", ") : (m.genre || "");
-    out += `*${i + 1}. ${title}${year ? " (" + year + ")" : ""}*\n`;
-    if (quality) out += `   🎞 Quality: ${quality}\n`;
-    if (genre) out += `   🏷 ${genre}\n`;
-    out += "\n";
-  }
-  out += ``;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-});
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SYNTAX CHECKER — check JS/Python/JSON code syntax
@@ -26013,35 +24575,7 @@ cmd(["quizrandom","randomquiz","rquiz"], { desc: "Random mixed quiz question", c
 // ═══════════════════════════════════════════════════════════════════════════
 
 // .geoip — GeoIP lookup
-cmd(["geoip","ipinfo","iplookup"], { desc: "GeoIP info — .geoip <ip>", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}geoip <ip address>*`); return; }
-  await react(sock, msg, "🌐");
-  const r = await prexzyGet("/tools/geoip", { ip: args[0] }, 20000);
-  const d = r.data?.data || r.data;
-  if (!r.ok || !d) { await sendReply(sock, msg, `❌ Could not look up IP *${args[0]}*.`); return; }
-  const _geoIp  = d.ip || args[0];
-  const _geoLat = d.lat || d.latitude;
-  const _geoLon = d.lon || d.longitude;
-  const out = `🌐 *GeoIP Lookup*\n\n🔍 *IP:* ${_geoIp}\n🏳️ *Country:* ${d.country || d.country_name || "N/A"}\n📍 *Region:* ${d.region || d.region_name || "N/A"}\n🏙️ *City:* ${d.city || "N/A"}\n🕐 *Timezone:* ${d.timezone || d.time_zone || "N/A"}\n📡 *ISP:* ${d.isp || d.org || d.as || "N/A"}\n🌍 *Latitude:* ${_geoLat || "N/A"}\n🌍 *Longitude:* ${_geoLon || "N/A"}`;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-  try {
-    const _geoBtns = [];
-    if (_geoLat && _geoLon) _geoBtns.push({ type: "url",  text: "🗺️ View on Maps", url: `https://maps.google.com/?q=${_geoLat},${_geoLon}` });
-    _geoBtns.push({ type: "copy", text: "📋 Copy IP", value: _geoIp, id: "geoip_copy" });
-    await sendCTAButtons(sock, msg.key.remoteJid, msg,
-      `🌐 *GeoIP — ${_geoIp}*`,
-      _geoBtns,
-      `${CONFIG.BOT_NAME} • GeoIP`
-    );
-  } catch {}
 
-  // ── FALLBACK ENDPOINTS (merged from duplicate cmd registrations) ──
-  // fallback prexzy: prexzyGet('/download/douyin', args)
-  // fallback prexzy: prexzyGet('/download/rednote', args)
-  // fallback prexzy: prexzyGet('/tools/myip', args)
-  // fallback URL: https://ipapi.co/${ip}/json/`,
-});
 
 // .hostcheck — Domain hosting info
 cmd(["hostcheck","domaincheck","hostinfo"], { desc: "Domain hosting info — .hostcheck <domain>", category: "TOOLS" }, async (sock, msg, args) => {
@@ -26060,16 +24594,7 @@ cmd(["hostcheck","domaincheck","hostinfo"], { desc: "Domain hosting info — .ho
 });
 
 // .shortenurl2 — URL shortener via Prexzyvilla
-cmd(["shortenurl2","pshorten","urlshort2"], { desc: "Shorten URL (Prexzyvilla) — .shortenurl2 <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}shortenurl2 <url>*`); return; }
-  await react(sock, msg, "🔗");
-  const r = await prexzyGet("/tools/random", { url: args[0] }, 20000);
-  const d = r.data;
-  const short = d?.data?.short || d?.short || d?.shortened || d?.result || d?.url || d?.shortUrl;
-  if (!r.ok || !short) { await sendReply(sock, msg, `❌ URL shortening failed.`); return; }
-  await sendReply(sock, msg, `🔗 *URL Shortened*\n\n📎 *Original:* ${args[0]}\n✅ *Short:* ${short}`);
-  await react(sock, msg, "✅");
-});
+
 
 // .codecompile — Compile & run code
 cmd(["codecompile","runcode","compile2"], { desc: "Compile & run code — .codecompile <lang> <code>", category: "TOOLS" }, async (sock, msg, args) => {
@@ -26163,7 +24688,7 @@ cmd(["detectbugs","bugfind","bugcheck"], { desc: "Find bugs in your code — .de
 // ═══════════════════════════════════════════════════════════════════════════
 
 // .imdbsearch — IMDb movie search
-cmd(["imdbsearch","imdb2","movieinfo2"], { desc: "IMDb movie/series search — .imdbsearch <title>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["imdbsearch","imdb","imdb2","movieinfo","movieinfo2","movieinfo3","filmdetail","filmfind"], { desc: "IMDb movie/series search — .imdbsearch <title>", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}imdbsearch <movie/series title>*`); return; }
   await react(sock, msg, "🎬");
   const r = await prexzyGet("/search/imdb", { query: args.join(" ") }, 25000);
@@ -26250,84 +24775,13 @@ cmd(["scsearch","soundcloudsearch","scloud"], { desc: "Search SoundCloud — .sc
 // ═══════════════════════════════════════════════════════════════════════════
 // PREXZYVILLA — RANDOM IMAGES (binary endpoints)
 // ═══════════════════════════════════════════════════════════════════════════
-const _PREXZY_RANDOM_MAP = {
-  koreangirl: { ep: "random/koreangirl", label: "Korean Girl 🇰🇷" },
-  japangirl: { ep: "random/japangirl", label: "Japan Girl 🇯🇵" },
-  malaysiagirl: { ep: "random/malaysiagirl", label: "Malaysia Girl 🇲🇾" },
-  indonesiagirl: { ep: "random/indonesiagirl", label: "Indonesia Girl 🇮🇩" },
-  chinagirl: { ep: "random/chinagirl", label: "China Girl 🇨🇳" },
-  vietnamgirl: { ep: "random/vietnamgirl", label: "Vietnam Girl 🇻🇳" },
-  thaigirl: { ep: "random/thailandgirl", label: "Thai Girl 🇹🇭" },
-  hijabgirl: { ep: "random/hijabgirl", label: "Hijab Girl 🧕" },
-  randomgirl: { ep: "random/randomgirl", label: "Random Girl 👩" },
-  pfp: { ep: "random/profilepics", label: "Profile Picture 🖼️" },
-  boypic: { ep: "random/boypic", label: "Boy Pic 👦" },
-  randomcat2: { ep: "random/cat", label: "Random Cat 🐱" },
-  randomdog2: { ep: "random/dog", label: "Random Dog 🐶" },
-  randomcar: { ep: "random/car", label: "Random Car 🚗" },
-  waifu2: { ep: "random/waifu", label: "Waifu 🎀" },
-  loli2: { ep: "random/loli", label: "Loli 🌸" },
-  bluearchive: { ep: "random/bluearchive", label: "Blue Archive 🎮" },
-  tiktokgirl: { ep: "random/tiktokgirl", label: "TikTok Girl 📱", isVideo: true },
-  randomsfw: { ep: "random/anhsfw", label: "Random SFW 🖼️" },
-  randommoe: { ep: "random/anhmoe", label: "Random Moe 🌸" },
-  randomai: { ep: "random/anhai", label: "Random AI Art 🤖" },
-};
-for (const [_rCmd, _rInfo] of Object.entries(_PREXZY_RANDOM_MAP)) {
-  cmd(_rCmd, { desc: `${_rInfo.label} random image`, category: "RANDOM" }, async (sock, msg) => {
-    await react(sock, msg, "🎲");
-    try {
-      const caption = `${_rInfo.label}`;
-      // Step 1: try direct binary fetch
-      let buf = null;
-      try {
-        const _rb = Buffer.from((await axios.get(`${CONFIG.PREXZY_API}/${_rInfo.ep}`, { responseType: "arraybuffer", timeout: 30000 })).data);
-        // If prexzy returns an image (JPEG/PNG/GIF/WEBP magic bytes) accept it directly
-        const _magic = _rb.slice(0, 4).toString("hex");
-        const _isImg = _magic.startsWith("ffd8") || _magic.startsWith("8950") || _magic.startsWith("4749") || _magic.startsWith("5249") || _magic.startsWith("webp");
-        if (_isImg && _rb.length > 1000) buf = _rb;
-      } catch {}
-      // Step 2: if binary wasn't an image, try JSON path (prexzy returns { url/image })
-      if (!buf) {
-        try {
-          const { data: _rj } = await axios.get(`${CONFIG.PREXZY_API}/${_rInfo.ep}`, { timeout: 30000 });
-          const _imgUrl = _rj?.url || _rj?.image || _rj?.result?.url || _rj?.data?.url || _rj?.data?.image
-            || (typeof _rj === "string" && _rj.startsWith("http") ? _rj : null);
-          if (_imgUrl) {
-            const _rb2 = Buffer.from((await axios.get(_imgUrl, { responseType: "arraybuffer", timeout: 30000, headers: { "Referer": "https://google.com" } })).data);
-            if (_rb2.length > 1000) buf = _rb2;
-          }
-        } catch {}
-      }
-      if (!buf || buf.length < 500) { await sendReply(sock, msg, `❌ No image returned.`); return; }
-      if (_rInfo.isVideo) await sock.sendMessage(msg.key.remoteJid, { video: buf, caption }, { quoted: msg });
-      else await sock.sendMessage(msg.key.remoteJid, { image: buf, caption }, { quoted: msg });
-      await react(sock, msg, "✅");
-    } catch (e) { await sendReply(sock, msg, `❌ Fetch failed: ${e.message?.slice(0, 80)}`); }
-  });
-}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PREXZYVILLA — SCREENSHOT WEBSITE
 // ═══════════════════════════════════════════════════════════════════════════
 
-cmd(["ss2","screenshot2","webshot2"], { desc: "Screenshot a website — .ss2 <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ss2 <url>*`); return; }
-  await react(sock, msg, "📸");
-  const url = args[0].startsWith("http") ? args[0] : "https://" + args[0];
-  // Try 3 Prexzyvilla screenshot providers
-  const _ssEps = ["/ssweb/webss", "/ssweb/apiFlash", "/ssweb/screenshotLayer"];
-  for (const _ep of _ssEps) {
-    try {
-      const buf = Buffer.from((await axios.get(`${CONFIG.PREXZY_API}${_ep}?url=${encodeURIComponent(url)}`, { responseType: "arraybuffer", timeout: 45000 })).data);
-      if (buf && buf.length > 1000) {
-        await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: `📸 *Website Screenshot*\n🌐 ${url}` }, { quoted: msg });
-        await react(sock, msg, "✅"); return;
-      }
-    } catch {}
-  }
-  await sendReply(sock, msg, `❌ Screenshot failed for: ${url}`);
-});
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PREXZYVILLA — MULTI-LANGUAGE TTS (binary audio endpoints)
@@ -26806,7 +25260,7 @@ cmd(["douyin","douyindl","dy"], { desc: "Download Douyin — .douyin <url>", cat
 });
 
 // ── SnackVideo ──────────────────────────────────────────────────
-cmd(["snack","snackvideo","snackdl"], { desc: "Download SnackVideo — .snack <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
+cmd(["snack", "snack2", "snackvideo", "snackvideo2", "snackdl"], { desc: "Download SnackVideo — .snack <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
     if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}snack <url>*`); return; }
     await react(sock, msg, "🎬");
     const url = args[0];
@@ -26981,7 +25435,7 @@ cmd(["wndetail","webnoveldetail","noveldetail"], { desc: "Get webnovel details �
 // ──────────────────────────────────────────────────────
 
 // ── Trending Movies ────────────────────────────────────────────────
-cmd(["trendings","trending2","movietrendings"], { desc: "Trending movies/series — .trendings", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["trending2","trendings","movietrendings"], { desc: "Trending movies/series — .trendings", category: "SEARCH" }, async (sock, msg, args) => {
   await react(sock, msg, "🎬");
   const r = await prexzyGet("/trending", {}, 25000);
   const d = r.data;
@@ -27000,40 +25454,10 @@ cmd(["trendings","trending2","movietrendings"], { desc: "Trending movies/series 
 });
 
 // ── Movie Detail ──────────────────────────────────────────────────
-cmd(["filmdetail","movieinfo3"], { desc: "Get movie detail — .moviedetail <title>", category: "SEARCH" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}moviedetail <title>*`); return; }
-  await react(sock, msg, "🎬");
-  const r = await prexzyGet("/moviedetail", { title: query }, 25000);
-  const d = r.data?.data || r.data;
-  if (!r.ok || !d) { await sendReply(sock, msg, `❌ No movie detail found for: *${query}*`); return; }
-  const title = d?.title || d?.name || query;
-  const year = d?.year || d?.release_date?.slice(0, 4) || "";
-  const rating = d?.rating || d?.vote_average || "";
-  const genre = d?.genre || d?.genres || "";
-  const synopsis = d?.synopsis || d?.overview || d?.description || "No synopsis.";
-  const poster = d?.poster || d?.poster_path ? `https://image.tmdb.org/t/p/w500${d.poster_path}` : d?.thumbnail || d?.image || "";
-  const director = d?.director || d?.directors?.join(", ") || "";
-  const duration = d?.duration || d?.runtime || "";
-  let text = `🎬 *${title}*${year ? ` (${year})` : ""}\n\n`;
-  if (rating) text += `⭐ *Rating:* ${rating}\n`;
-  if (genre) text += `📌 *Genre:* ${Array.isArray(genre) ? genre.join(", ") : genre}\n`;
-  if (director) text += `🎥 *Director:* ${director}\n`;
-  if (duration) text += `⏱ *Duration:* ${duration} min\n`;
-  text += `\n📝 *Synopsis:*\n${synopsis.slice(0, 400)}...`;
-  if (poster && poster.startsWith("http")) {
-    try {
-      const buf = Buffer.from((await axios.get(poster, { responseType: "arraybuffer", timeout: 20000 })).data);
-      await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: text }, { quoted: msg });
-      await react(sock, msg, "✅"); return;
-    } catch {}
-  }
-  await sendReply(sock, msg, text);
-  await react(sock, msg, "✅");
-});
+
 
 // ── Movie Recommendations ─────────────────────────────────────────
-cmd(["filmrec","recommend"], { desc: "Get movie recommendations — .movierecommend <title>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["recommend","filmrec"], { desc: "Get movie recommendations — .movierecommend <title>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}movierecommend <title>*`); return; }
   await react(sock, msg, "🎬");
@@ -27101,7 +25525,7 @@ cmd(["applemusic","amusic","itunessearch"], { desc: "Search Apple Music — .app
 });
 
 // ── GitHub Repo Search ────────────────────────────────────────────
-cmd(["ghrepos","githubrepo","grepo"], { desc: "Search GitHub repos — .ghrepos <query>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["githubrepo","ghrepos","grepo"], { desc: "Search GitHub repos — .ghrepos <query>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ghrepos <search query>*`); return; }
   await react(sock, msg, "💻");
@@ -27123,37 +25547,7 @@ cmd(["ghrepos","githubrepo","grepo"], { desc: "Search GitHub repos — .ghrepos 
 });
 
 // ── GitHub User Search ────────────────────────────────────────────
-cmd(["ghuser","githubuser","guser"], { desc: "Search GitHub user — .ghuser <username>", category: "SEARCH" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ghuser <username>*`); return; }
-  await react(sock, msg, "👤");
-  const r = await prexzyGet("/search/github-users", { query }, 20000);
-  const d = r.data;
-  const list = d?.data || d?.results || d?.items || [];
-  if (!r.ok || !Array.isArray(list) || !list.length) {
-    // Try direct user profile
-    const r2 = await prexzyGet("/stalk/githubstalk", { user: query }, 20000);
-    const d2 = r2.data?.data || r2.data;
-    if (!r2.ok || !d2) { await sendReply(sock, msg, `❌ No GitHub user found: *${query}*`); return; }
-    const name = d2?.name || d2?.login || query;
-    const bio = d2?.bio || "";
-    const repos = d2?.public_repos || 0;
-    const followers = d2?.followers || 0;
-    const following = d2?.following || 0;
-    await sendReply(sock, msg, `👤 *${name}* (@${d2?.login || query})\n\n${bio ? `📝 ${bio}\n` : ""}📦 Repos: ${repos}\n👥 Followers: ${followers} | Following: ${following}\n🔗 https://github.com/${d2?.login || query}`);
-    return;
-  }
-  let text = `👤 *GitHub Users: ${query}*\n\n`;
-  list.slice(0, 8).forEach((u, i) => {
-    const login = u?.login || u?.username || "Unknown";
-    const type = u?.type || "";
-    const url = u?.html_url || `https://github.com/${login}`;
-    text += `${i+1}. *${login}*${type ? ` (${type})` : ""}\n   🔗 ${url}\n`;
-  });
-  text += ``;
-  await sendReply(sock, msg, text);
-  await react(sock, msg, "✅");
-});
+
 
 // ── WhatsApp Group Search ─────────────────────────────────────────
 cmd(["wagroupsearch","wags","findwagroup"], { desc: "Search WhatsApp groups — .wagroupsearch <topic>", category: "SEARCH" }, async (sock, msg, args) => {
@@ -27181,7 +25575,7 @@ cmd(["wagroupsearch","wags","findwagroup"], { desc: "Search WhatsApp groups — 
 });
 
 // ── Telegram Channel Search ───────────────────────────────────────
-cmd(["tgchan","telegramchan","tgsearch"], { desc: "Search Telegram channels — .tgchan <topic>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["telegramchan","tgchan","tgsearch"], { desc: "Search Telegram channels — .tgchan <topic>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}tgchan <topic>*`); return; }
   await react(sock, msg, "✈️");
@@ -27251,7 +25645,7 @@ cmd(["basketball","nba","basketballscore"], { desc: "Basketball scores/schedule 
 });
 
 // ── Other Sports ─────────────────────────────────────────────────
-cmd(["sports2","othersports","sportsnews"], { desc: "Sports news and scores — .sports2 <query>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["sportsnews","sports2","othersports"], { desc: "Sports news and scores — .sports2 <query>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ") || "latest";
   await react(sock, msg, "🏆");
   const r = await prexzyGet("/sports/othersports", { query }, 20000);
@@ -27440,43 +25834,13 @@ cmd(["textimage","ttimage","t2image"], { desc: "Text to image (imagecreator) —
 // ──────────────────────────────────────────────────────
 
 // ── da.gd ────────────────────────────────────────────────────────
-cmd(["dagd","dagdshort"], { desc: "Shorten URL with da.gd — .dagd <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}dagd <url>*`); return; }
-  await react(sock, msg, "🔗");
-  const url = args[0].startsWith("http") ? args[0] : "https://" + args[0];
-  const r = await prexzyGet("/tools/dagd", { url }, 20000);
-  const d = r.data;
-  const short = d?.short || d?.url || d?.result || d?.data || (typeof d === "string" ? d : null);
-  if (!r.ok || !short) { await sendReply(sock, msg, `❌ Could not shorten URL.`); return; }
-  await sendReply(sock, msg, `🔗 *da.gd Shortened URL*\n\n📎 ${short}`);
-  await react(sock, msg, "✅");
-});
+
 
 // ── v.gd ─────────────────────────────────────────────────────────
-cmd(["vgd","vgdshort"], { desc: "Shorten URL with v.gd — .vgd <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}vgd <url>*`); return; }
-  await react(sock, msg, "🔗");
-  const url = args[0].startsWith("http") ? args[0] : "https://" + args[0];
-  const r = await prexzyGet("/tools/vgd", { url }, 20000);
-  const d = r.data;
-  const short = d?.short || d?.url || d?.result || (typeof d === "string" ? d : null);
-  if (!r.ok || !short) { await sendReply(sock, msg, `❌ Could not shorten URL.`); return; }
-  await sendReply(sock, msg, `🔗 *v.gd Shortened URL*\n\n📎 ${short}`);
-  await react(sock, msg, "✅");
-});
+
 
 // ── Spoo.me ──────────────────────────────────────────────────────
-cmd(["spoo","spoome","spoourl"], { desc: "Shorten URL with spoo.me — .spoo <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}spoo <url>*`); return; }
-  await react(sock, msg, "🔗");
-  const url = args[0].startsWith("http") ? args[0] : "https://" + args[0];
-  const r = await prexzyGet("/tools/spooMe", { url }, 20000);
-  const d = r.data;
-  const short = d?.short || d?.url || d?.result || (typeof d === "string" ? d : null);
-  if (!r.ok || !short) { await sendReply(sock, msg, `❌ Could not shorten URL.`); return; }
-  await sendReply(sock, msg, `🔗 *spoo.me Shortened URL*\n\n📎 ${short}`);
-  await react(sock, msg, "✅");
-});
+
 
 // ──────────────────────────────────────────────────────
 // VIRTUAL NUMBERS (SMS)
@@ -27715,25 +26079,7 @@ cmd(["ytinfo","youtubeinfo","ytmeta"], { desc: "Get YouTube video info — .ytin
 });
 
 // ── Spotify Search V2 ─────────────────────────────────────────────
-cmd(["spotisearch2","spotifysearch2","spoti2"], { desc: "Spotify search V2 — .spotisearch2 <query>", category: "SEARCH" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}spotisearch2 <song/artist>*`); return; }
-  await react(sock, msg, "🎵");
-  const r = await prexzyGet("/download/spotifyV2search", { query }, 20000);
-  const d = r.data;
-  const list = d?.data || d?.results || d?.tracks || d?.items || [];
-  if (!r.ok || !Array.isArray(list) || !list.length) { await sendReply(sock, msg, `❌ No Spotify results for: *${query}*`); return; }
-  let text = `🎵 *Spotify Search V2: ${query}*\n\n`;
-  list.slice(0, 6).forEach((t, i) => {
-    const name = t?.name || t?.title || "Unknown";
-    const artist = t?.artist || t?.artists?.map(a => a.name || a)?.join(", ") || "";
-    const duration = t?.duration || "";
-    text += `${i+1}. *${name}*\n   🎤 ${artist}${duration ? ` ⏱ ${duration}` : ""}\n\n`;
-  });
-  text += ``;
-  await sendReply(sock, msg, text);
-  await react(sock, msg, "✅");
-});
+
 
 // ── Instagram V2 Search ───────────────────────────────────────────
 cmd(["igsearch","instasearch","igsearch2"], { desc: "Instagram user search — .igsearch <username>", category: "SEARCH" }, async (sock, msg, args) => {
@@ -27879,157 +26225,7 @@ cmd(["nonstick","nonsticksound"], { desc: "Get NonStick sounds — .nonstick <v1
 // FIX EXISTING v4.9.6 VIRTUAL NUMBERS — WRONG PATHS (/virtualnumber/ → /vnum/)
 // ═══════════════════════════════════════════════════════════════════════════
 
-cmd(["smscountries","sms24countries","vnumcountries"], { desc: "Get virtual number countries", category: "TOOLS" }, async (sock, msg) => {
-  await react(sock, msg, "📋");
-  let items = [];
-  const r = await prexzyGet("/vnum/sms24-countries");
-  if (r.ok) { const list = r.data?.data || r.data?.countries || r.data || []; items = Array.isArray(list) ? list : Object.entries(list).map(([k,v])=>`${k}: ${v}`); }
-  if (!items.length) {
-    try { const { data: html } = await axios.get("https://receive-smss.com/", { timeout: 12000, headers: { "User-Agent": "Mozilla/5.0" } }); const m = [...html.matchAll(/class="[^"]*flag[^"]*country[^"]*"[^>]*>([^<]+)</gi)]; if (m.length) items = m.map(x => x[1].trim()); } catch {}
-  }
-  if (!items.length) items = ["US","UK","CA","AU","DE","FR","NL","SE","NO","FI","PL","RU","IN","BR","MX","CN","JP","KR","ID","PH","NG","ZA","EG","SA","AE"];
-  let out = `🌍 *Virtual Number Countries*\n\n`;
-  items.slice(0, 25).forEach((c, i) => { out += `${i+1}. ${typeof c === "object" ? (c.name || c.country || JSON.stringify(c)) : c}\n`; });
-  if (items.length > 25) out += `\n...and ${items.length - 25} more\n`;
-  out += `\n> Use *${CONFIG.PREFIX}vnum <country>* to get numbers`;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-});
 
-cmd(["vnum","sms24num","vnumbers"], { desc: "Get virtual numbers by country — .vnum <country>", category: "TOOLS" }, async (sock, msg, args) => {
-  const country = (args.join(" ") || "").trim();
-  if (!country) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}vnum <country>*\nExample: ${CONFIG.PREFIX}vnum US\n\nRun *${CONFIG.PREFIX}smscountries* to see options.`); return; }
-  await react(sock, msg, "📱");
-  let items = [];
-  // Source 1: prexzy
-  const r = await prexzyGet("/vnum/sms24-numbers", { country });
-  if (r.ok) { const list = r.data?.data || r.data?.numbers || r.data || []; if (Array.isArray(list) && list.length) items = list; }
-  // Source 2: receive-smss.com scrape
-  if (!items.length) {
-    try {
-      const { data: html } = await axios.get(`https://receive-smss.com/`, { timeout: 12000, headers: { "User-Agent": "Mozilla/5.0" } });
-      const phones = [...html.matchAll(/href="\/sms\/(\+?[\d\-]+)\/"[^>]*>([\s\S]*?)<\/a>/gi)]
-        .filter(m => m[2] && (m[2].toLowerCase().includes(country.toLowerCase()) || country.length === 2))
-        .map(m => m[1].replace(/[^\d+]/g, ""));
-      if (phones.length) items = phones.slice(0, 15);
-    } catch {}
-  }
-  // Source 3: hs3x.com scrape
-  if (!items.length) {
-    try {
-      const { data: html } = await axios.get(`https://hs3x.com/`, { timeout: 12000, headers: { "User-Agent": "Mozilla/5.0" } });
-      const nums = [...html.matchAll(/(\+?1?[\s\(\-]?\d{3}[\)\-\s]\d{3}[\-\s]\d{4})/g)].map(m => m[1].replace(/\s/g,""));
-      if (nums.length) items = nums.slice(0, 10);
-    } catch {}
-  }
-  if (!items.length) { await sendReply(sock, msg, `❌ No numbers found for *${country}* right now. Try *${CONFIG.PREFIX}veepnum ${country}* or retry in a moment.`); return; }
-  let out = `📱 *Virtual Numbers — ${country.toUpperCase()}*\n\n`;
-  items.slice(0, 15).forEach((n, i) => { const num = typeof n === "object" ? (n.number || n.phone || n.value || JSON.stringify(n)) : n; out += `${i+1}. \`${num}\`\n`; });
-  out += `\n> Use *${CONFIG.PREFIX}vnummsg <number>* to read messages`;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-
-  // ── FALLBACK ENDPOINTS (merged from duplicate cmd registrations) ──
-  // fallback prexzy: prexzyGet('/vnum/sms24-countries', args)
-  // fallback prexzy: prexzyGet('/vnum/veepn-messages', args)
-  // fallback prexzy: prexzyGet('/tools/detectlanguage', args)
-});
-
-cmd(["vnummsg","sms24msg","vnummessages"], { desc: "Get SMS messages for a virtual number — .vnummsg <number>", category: "TOOLS" }, async (sock, msg, args) => {
-  const number = (args[0] || "").replace(/[^\d+]/g, "");
-  if (!number) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}vnummsg <number>*\nExample: ${CONFIG.PREFIX}vnummsg +12025551234`); return; }
-  await react(sock, msg, "📨");
-  let items = [];
-  // Source 1: prexzy
-  const r = await prexzyGet("/vnum/sms24-messages", { number });
-  if (r.ok) { const list = r.data?.data || r.data?.messages || r.data || []; if (Array.isArray(list) && list.length) items = list; }
-  // Source 2: receive-smss.com scrape
-  if (!items.length) {
-    try {
-      const cleanNum = number.replace(/^\+/, "");
-      const urls = [`https://receive-smss.com/sms/+${cleanNum}/`, `https://receive-smss.com/sms/${cleanNum}/`];
-      for (const url of urls) {
-        try {
-          const { data: html } = await axios.get(url, { timeout: 12000, headers: { "User-Agent": "Mozilla/5.0" } });
-          const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
-          const parsed = rows.slice(1, 12).map(r => {
-            const cells = [...r[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(c => c[1].replace(/<[^>]+>/g, "").trim());
-            return cells.length >= 2 ? { sender: cells[0], text: cells[1], time: cells[2] || "" } : null;
-          }).filter(Boolean);
-          if (parsed.length) { items = parsed; break; }
-        } catch {}
-      }
-    } catch {}
-  }
-  if (!items.length) { await sendReply(sock, msg, `📭 No messages yet for *${number}*. Messages can take a minute to appear — try again shortly.`); return; }
-  let out = `📨 *Messages for ${number}*\n\n`;
-  items.slice(0, 10).forEach((m, i) => {
-    const sender = typeof m === "object" ? (m.sender || m.from || "Unknown") : "";
-    const text = typeof m === "object" ? (m.text || m.body || m.message || JSON.stringify(m)) : m;
-    const time = typeof m === "object" ? (m.time || m.date || "") : "";
-    out += `📩 *${i+1}.* From: *${sender}*\n${time ? `🕐 ${time}\n` : ""}💬 ${text}\n\n`;
-  });
-  out += ``;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// VEEPN VIRTUAL NUMBERS (NEW)
-// ═══════════════════════════════════════════════════════════════════════════
-
-cmd(["veepcountries","veepncountries","veepcountry"], { desc: "Get VeePN virtual number countries", category: "TOOLS" }, async (sock, msg) => {
-  await react(sock, msg, "🌐");
-  const r = await prexzyGet("/vnum/veepn-countries");
-  if (!r.ok) { await sendReply(sock, msg, `❌ Could not fetch VeePN countries.`); return; }
-  const list = r.data?.data || r.data?.countries || r.data || [];
-  const items = Array.isArray(list) ? list : Object.entries(list).map(([k, v]) => `${k}: ${v}`);
-  let out = `🌐 *VeePN Available Countries*\n\n`;
-  items.slice(0, 25).forEach((c, i) => { out += `${i+1}. ${typeof c === "object" ? (c.name || c.country || JSON.stringify(c)) : c}\n`; });
-  if (items.length > 25) out += `\n...and ${items.length - 25} more\n`;
-  out += `\n> Use *${CONFIG.PREFIX}veepnum <country>* to get numbers`;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-});
-
-cmd(["veepnum","veepnumbers","veepnsms"], { desc: "Get VeePN virtual numbers — .veepnum <country>", category: "TOOLS" }, async (sock, msg, args) => {
-  const country = args.join(" ");
-  if (!country) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}veepnum <country>*\nFirst run *${CONFIG.PREFIX}veepcountries* to see available countries.`); return; }
-  await react(sock, msg, "📱");
-  const r = await prexzyGet("/vnum/veepn-numbers", { country });
-  if (!r.ok) { await sendReply(sock, msg, `❌ Could not fetch VeePN numbers.`); return; }
-  const list = r.data?.data || r.data?.numbers || r.data || [];
-  const items = Array.isArray(list) ? list : [];
-  if (!items.length) { await sendReply(sock, msg, `❌ No VeePN numbers found for *${country}*.`); return; }
-  let out = `📱 *VeePN Numbers — ${country}*\n\n`;
-  items.slice(0, 15).forEach((n, i) => {
-    const num = typeof n === "object" ? (n.number || n.phone || n.value || JSON.stringify(n)) : n;
-    out += `${i+1}. \`${num}\`\n`;
-  });
-  out += `\n> Use *${CONFIG.PREFIX}veepmsg <country> <number>* to read messages`;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-});
-
-cmd(["veepmsg","veepnmsg","veepnmessages"], { desc: "Get VeePN messages — .veepmsg <country> <number>", category: "TOOLS" }, async (sock, msg, args) => {
-  const country = args[0], number = args[1];
-  if (!country || !number) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}veepmsg <country> <number>*`); return; }
-  await react(sock, msg, "📨");
-  const r = await prexzyGet("/vnum/veepn-messages", { country, number });
-  if (!r.ok) { await sendReply(sock, msg, `❌ Could not fetch VeePN messages.`); return; }
-  const list = r.data?.data || r.data?.messages || r.data || [];
-  const items = Array.isArray(list) ? list : [];
-  if (!items.length) { await sendReply(sock, msg, `📭 No VeePN messages for *${number}*. Try again.`); return; }
-  let out = `📨 *VeePN Messages — ${number}*\n\n`;
-  items.slice(0, 10).forEach((m, i) => {
-    const sender = typeof m === "object" ? (m.sender || m.from || "Unknown") : "";
-    const text = typeof m === "object" ? (m.text || m.body || m.message || JSON.stringify(m)) : m;
-    out += `📩 *${i+1}.* From: *${sender}*\n💬 ${text}\n\n`;
-  });
-  out += ``;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IMAGE GENERATION STYLES (17 STYLES)
@@ -28417,65 +26613,7 @@ cmd(["doods","doodsstream","doodsdl"], { desc: "Download DoodsStream video — .
   await react(sock, msg, "✅");
 });
 
-cmd(["pinterestv2","pindlv2","pinterestdl2"], { desc: "Download Pinterest video/image V2 — .pinterestv2 <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  const url = args[0];
-  if (!url || !url.includes("pin")) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}pinterestv2 <pinterest_url>*\n\nExample: ${CONFIG.PREFIX}pinterestv2 https://pin.it/xxxxx`); return; }
-  await react(sock, msg, "📌");
-  // Try multiple providers with fallback
-  const _pinProviders = [
-    async () => {
-      const r = await prexzyGet("/download/pinterestV2", { url }, 45000);
-      if (!r.ok) throw new Error("prexzy v2 fail");
-      const d = r.data?.data || r.data;
-      return d?.url || d?.video || d?.image || d?.media || d?.download
-        || d?.result?.url || d?.result?.video || d?.result?.image
-        || (typeof d === "string" && d.startsWith("http") ? d : null);
-    },
-    async () => {
-      const r = await prexzyGet("/download/pinterest", { url }, 45000);
-      if (!r.ok) throw new Error("prexzy v1 fail");
-      const d = r.data?.data || r.data;
-      return d?.url || d?.video || d?.image || d?.media || d?.download
-        || (typeof d === "string" && d.startsWith("http") ? d : null);
-    },
-    async () => {
-      const { data } = await axios.get(`https://api.siputzx.my.id/api/d/pinterest?url=${encodeURIComponent(url)}`, { timeout: 30000 });
-      const d = data?.data || data?.result || data;
-      return d?.url || d?.video || d?.image || (typeof d === "string" && d.startsWith("http") ? d : null);
-    },
-    async () => {
-      const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/pinterest?url=${encodeURIComponent(url)}`, { timeout: 30000 });
-      const d = data?.data || data?.result || data;
-      return d?.url || d?.video || d?.image || (typeof d === "string" && d.startsWith("http") ? d : null);
-    },
-    async () => {
-      const { data } = await axios.get(`https://api.davidcyriltech.my.id/pinterest?url=${encodeURIComponent(url)}`, { timeout: 30000 });
-      const d = data?.data || data?.result || data;
-      return d?.url || d?.video || d?.image || (typeof d === "string" && d.startsWith("http") ? d : null);
-    },
-  ];
-  let mediaUrl = null;
-  for (const fn of _pinProviders) {
-    try { mediaUrl = await fn(); if (mediaUrl && typeof mediaUrl === "string" && mediaUrl.startsWith("http")) break; } catch {}
-  }
-  if (!mediaUrl) { await sendReply(sock, msg, `❌ Pinterest V2: all providers failed. Make sure the URL is a valid Pinterest link.`); return; }
-  const buf = Buffer.from((await axios.get(mediaUrl, { responseType: "arraybuffer", timeout: 60000, headers: { "User-Agent": "Mozilla/5.0", "Referer": "https://www.pinterest.com/" } })).data);
-  if (!buf || buf.length < 1000) { await sendReply(sock, msg, `❌ Media buffer too small — Pinterest may have blocked the download.`); return; }
-  const _pinCaption = `📌 *Pinterest V2*`;
-  const _urlHasVideo = /\.(mp4|mov|webm|avi|mkv)/i.test(mediaUrl) || /video/i.test(mediaUrl);
-  const _bufHdr = buf.length >= 12 ? buf.slice(4, 8).toString("ascii") : "";
-  const _isVideo = _urlHasVideo || ["ftyp", "moov", "mdat"].includes(_bufHdr);
-  if (_isVideo) {
-    try {
-      await sock.sendMessage(msg.key.remoteJid, { video: buf, caption: _pinCaption, mimetype: "video/mp4" }, { quoted: msg });
-    } catch {
-      await sock.sendMessage(msg.key.remoteJid, { document: buf, mimetype: "video/mp4", fileName: "pinterest_video.mp4", caption: _pinCaption }, { quoted: msg });
-    }
-  } else {
-    await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: _pinCaption }, { quoted: msg });
-  }
-  await react(sock, msg, "✅");
-});
+
 
 cmd(["web2zip","saveweb2zip","websitezip"], { desc: "Save website as ZIP — .web2zip <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const url = args[0];
@@ -28508,7 +26646,7 @@ cmd(["sfile","sfiledl","sfilemobi"], { desc: "Download from sfile.mobi — .sfil
 // SEARCH — MISSING ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-cmd(["ghissues","githubissues","gissue"], { desc: "Search GitHub issues — .ghissues <query>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["githubissues","ghissues","gissue"], { desc: "Search GitHub issues — .ghissues <query>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ghissues <query>*`); return; }
   await react(sock, msg, "🐛");
@@ -28532,7 +26670,7 @@ cmd(["ghissues","githubissues","gissue"], { desc: "Search GitHub issues — .ghi
   // fallback prexzy: prexzyGet('/download/sfile', args)
 });
 
-cmd(["ghcode","githubcode","gsearch"], { desc: "Search GitHub code — .ghcode <query>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["githubcode","ghcode"], { desc: "Search GitHub code — .ghcode <query>", category: "SEARCH" }, async (sock, msg, args) => {
   const query = args.join(" ");
   if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ghcode <query>*`); return; }
   await react(sock, msg, "💻");
@@ -28576,7 +26714,7 @@ cmd(["nik","nikcheck","nikparse"], { desc: "Parse NIK Indonesian ID — .nik <ni
   await react(sock, msg, "✅");
 });
 
-cmd(["ytmonet","ytmonetize","youtubecheck"], { desc: "YouTube monetization checker — .ytmonet <url>", category: "SEARCH" }, async (sock, msg, args) => {
+cmd(["ytmonetize","ytmonet","youtubecheck"], { desc: "YouTube monetization checker — .ytmonet <url>", category: "SEARCH" }, async (sock, msg, args) => {
   const url = args[0];
   if (!url) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ytmonet <youtube_url>*`); return; }
   await react(sock, msg, "💰");
@@ -28760,41 +26898,11 @@ cmd(["tktranscript","tiktoktranscript","tiktoktext"], { desc: "Get TikTok video 
   await react(sock, msg, "✅");
 });
 
-cmd(["tinube","tinubeurl","tinubeshorten"], { desc: "Shorten URL with tinu.be — .tinube <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  const url = args[0];
-  if (!url) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}tinube <url>*`); return; }
-  await react(sock, msg, "🔗");
-  const r = await prexzyGet("/tools/tinube", { url });
-  if (!r.ok) { await sendReply(sock, msg, `❌ URL shortening failed.`); return; }
-  const d = r.data?.data || r.data;
-  const short = d?.short || d?.url || d?.result || d?.shortened || (typeof d === "string" ? d : JSON.stringify(d));
-  await sendReply(sock, msg, `🔗 *tinu.be Shortener*\n\n📎 Original: ${url.slice(0, 80)}\n✂️ Short: *${short}*`);
-  await react(sock, msg, "✅");
-});
 
-cmd(["spooemojiurl","emojishorten","spooemoji"], { desc: "Shorten URL with emoji — .spooemoji <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  const url = args[0];
-  if (!url) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}spooemoji <url>*`); return; }
-  await react(sock, msg, "🔗");
-  const r = await prexzyGet("/tools/spooEmoji", { url });
-  if (!r.ok) { await sendReply(sock, msg, `❌ Spoo Emoji shortening failed.`); return; }
-  const d = r.data?.data || r.data;
-  const short = d?.short || d?.url || d?.result || d?.shortened || (typeof d === "string" ? d : JSON.stringify(d));
-  await sendReply(sock, msg, `🔗 *Spoo Emoji URL*\n\n📎 Original: ${url.slice(0, 80)}\n✂️ Short: *${short}*`);
-  await react(sock, msg, "✅");
-});
 
-cmd(["randomshort","randshorten","randomurl"], { desc: "Random URL shortener — .randomshort <url>", category: "TOOLS" }, async (sock, msg, args) => {
-  const url = args[0];
-  if (!url) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}randomshort <url>*`); return; }
-  await react(sock, msg, "🔗");
-  const r = await prexzyGet("/tools/random", { url });
-  if (!r.ok) { await sendReply(sock, msg, `❌ Random URL shortening failed.`); return; }
-  const d = r.data?.data || r.data;
-  const short = d?.short || d?.url || d?.result || d?.shortened || (typeof d === "string" ? d : JSON.stringify(d));
-  await sendReply(sock, msg, `🔗 *Random Shortener*\n\n📎 Original: ${url.slice(0, 80)}\n✂️ Short: *${short}*`);
-  await react(sock, msg, "✅");
-});
+
+
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STYLETEXT (34 endpoints) — All prexzyvilla /tools/ text style endpoints
@@ -31558,18 +29666,7 @@ cmd(["dchumanize","humanizedc","dcaihumanize"], { desc: "Humanize AI text via DC
 });
 
 // ─── Tools: Temp Number ───────────────────────────────────────────────────────
-cmd(["dctempnumber","tempnumberdc","dctempnum"], { desc: "Get temporary phone numbers via DC — .dctempnumber", category: "TOOLS" }, async (sock, msg) => {
-  await react(sock, msg, "📱");
-  let result = null;
-  try { const r = await dcGet("/tempnumber/receive-smss/numbers", {}, 20000); if (r.ok) result = r.data?.data || r.data; } catch {}
-  if (!result || !Array.isArray(result) || !result.length) { try { const r = await dcGet("/tempnumber/sms24/numbers", {}, 20000); if (r.ok) result = r.data?.data || r.data; } catch {} }
-  if (!result || !Array.isArray(result) || !result.length) { try { const r = await dcGet("/tempnumber/receivesms/numbers", {}, 20000); if (r.ok) result = r.data?.data || r.data; } catch {} }
-  if (!result || !result.length) { await sendReply(sock, msg, `❌ Could not fetch temporary numbers.`); return; }
-  const nums = Array.isArray(result) ? result.slice(0, 10) : [];
-  const text = `📱 *Temporary Phone Numbers*\n\n${nums.map((n, i) => `${i + 1}. ${n?.number || n?.phone_number || n?.phone || n || "?"} ${n?.country ? `(${n.country})` : ""}`).join("\n")}`;
-  await sendReply(sock, msg, text);
-  await react(sock, msg, "✅");
-});
+
 
 // ─── Tools: Base64 Encode ─────────────────────────────────────────────────────
 cmd(["dcencode","encodedc","dcbase64"], { desc: "Base64 encode text via DC — .dcencode <text>", category: "TOOLS" }, async (sock, msg, args) => {
@@ -32142,44 +30239,7 @@ for (const [name, endpoint] of Object.entries(_PREXZY_REACTIONS)) {
 }
 
 // ─── RANDOM IMAGES ────────────────────────────────────────────────────────────
-const _PREXZY_RANDOMS = {
-  cat: ["/random/cat", "🐱 *Cute Cat*"],
-  dog: ["/random/dog", "🐶 *Cute Dog*"],
-  waifu: ["/random/waifu", "🌸 *Waifu*"],
-  car: ["/random/car", "🚗 *Random Car*"],
-  boypic: ["/random/boypic", "👦 *Boy Pic*"],
-  profilepic: ["/random/profilepics", "🖼️ *Profile Picture*"],
-  bluearchive: ["/random/bluearchive", "🎮 *Blue Archive*"],
-  japangirl: ["/random/japangirl", "🌸 *Japan Girl*"],
-  koreangirl: ["/random/koreangirl", "🇰🇷 *Korean Girl*"],
-  chinagirl: ["/random/chinagirl", "🇨🇳 *China Girl*"],
-  indonesiagirl: ["/random/indonesiagirl", "🇮🇩 *Indonesia Girl*"],
-  malaysiagirl: ["/random/malaysiagirl", "🇲🇾 *Malaysia Girl*"],
-  vietnamgirl: ["/random/vietnamgirl", "🇻🇳 *Vietnam Girl*"],
-  thailandgirl: ["/random/thailandgirl", "🇹🇭 *Thailand Girl*"],
-  hijabgirl: ["/random/hijabgirl", "🧕 *Hijab Girl*"],
-  randomgirl: ["/random/randomgirl", "👧 *Random Girl*"],
-  tiktokgirl: ["/random/tiktokgirl", "📱 *TikTok Girl*"],
-  sfwpic: ["/random/anhsfw", "✅ *SFW Image*"],
-  moepic: ["/random/anhmoe", "🌸 *Moe Image*"],
-  aipic: ["/random/anhai", "🤖 *AI Art*"],
-};
 
-for (const [cmdName, [endpoint, label]] of Object.entries(_PREXZY_RANDOMS)) {
-  cmd(cmdName, { desc: `Get random ${cmdName} image`, category: "RANDOM" }, async (sock, msg) => {
-    await react(sock, msg, "🖼️");
-    const jid = msg.key.remoteJid;
-    let imgUrl = null;
-    try {
-      const r = await prexzyGet(endpoint, {}, 20000);
-      const d = r.data?.data || r.data?.result || r.data;
-      imgUrl = d?.url || d?.image || d?.img || d?.photo || (Array.isArray(d) ? d[0]?.url : null) || (typeof d === "string" ? d : null);
-    } catch {}
-    if (!imgUrl) { await sendReply(sock, msg, `❌ Could not fetch image.`); return; }
-    await sock.sendMessage(jid, { image: { url: imgUrl }, caption: `${label}` }, { quoted: msg });
-    await react(sock, msg, "✅");
-  });
-}
 
 // ─── RANDOM ANIME CHARACTERS ─────────────────────────────────────────────────
 const _ANIME_CHARS = ["naruto","itachi","nezuko","miku","asuna","erza","mikasa","megumin","emilia",
@@ -32192,34 +30252,7 @@ for (const ch of _ANIME_CHARS) _ANIME_CHARS_BATCH[ch] = ch;
 
 
 // ─── ANIME WALLPAPERS ────────────────────────────────────────────────────────
-const _ANIME_WALLS = {
-  artwallpaper: ["/random/anime/art", "🎨 *Art Wallpaper*"],
-  cyberwallpaper: ["/random/anime/cyber", "🤖 *Cyber Wallpaper*"],
-  gamewallpaper: ["/random/anime/gamewallpaper", "🎮 *Game Wallpaper*"],
-  mountainwallpaper: ["/random/anime/mountain", "🏔️ *Mountain Wallpaper*"],
-  progwallpaper: ["/random/anime/programming", "💻 *Programming Wallpaper*"],
-  spacewallpaper: ["/random/anime/space", "🚀 *Space Wallpaper*"],
-  techwallpaper: ["/random/anime/technology", "⚙️ *Tech Wallpaper*"],
-  hpwallpaper: ["/random/anime/wallhp", "📱 *Mobile Wallpaper*"],
-  mlwallpaper: ["/random/anime/wallml", "🎮 *ML Wallpaper*"],
-  animewallpaper: ["/random/anime/wallmlnime", "🎌 *Anime Wallpaper*"],
-};
 
-for (const [cmdName, [endpoint, label]] of Object.entries(_ANIME_WALLS)) {
-  cmd(cmdName, { desc: `Get random ${label} image`, category: "RANDOM" }, async (sock, msg) => {
-    await react(sock, msg, "🖼️");
-    const jid = msg.key.remoteJid;
-    let imgUrl = null;
-    try {
-      const r = await prexzyGet(endpoint, {}, 20000);
-      const d = r.data?.data || r.data;
-      imgUrl = d?.url || d?.image || (typeof d === "string" ? d : null);
-    } catch {}
-    if (!imgUrl) { await sendReply(sock, msg, `❌ Could not fetch wallpaper.`); return; }
-    await sock.sendMessage(jid, { image: { url: imgUrl }, caption: `${label}` }, { quoted: msg });
-    await react(sock, msg, "✅");
-  });
-}
 
 // ─── IMAGE CREATOR ────────────────────────────────────────────────────────────
 cmd(["dcmemegen","memecreate"], { desc: "Create meme image — .dcmemegen top|bottom text", category: "FUN" }, async (sock, msg, args) => {
@@ -32591,31 +30624,7 @@ cmd(["dcgpt5","gpt5ai"], { desc: "GPT-5 AI via Prexzy — .dcgpt5 <question>", c
 
 // ─── FREE SOUND SEARCH ────────────────────────────────────────────────────────
 // ─── VIRTUAL NUMBER ───────────────────────────────────────────────────────────
-cmd(["dcvmsgs","vmsgs"], { desc: "Read virtual number SMS — .dcvmsgs <number>", category: "TOOLS" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}dcvmsgs <phone_number>`); return; }
-  await react(sock, msg, "💬");
-  const number = args[0];
-  let msgs = null;
-  try {
-    const r = await prexzyGet("/vnum/sms24-messages", { number }, 20000);
-    const d = r.data?.data || r.data;
-    const list = Array.isArray(d) ? d : (d?.messages || d?.sms || []);
-    if (list.length) {
-      msgs = list.slice(0, 10).map((m, i) => `${i+1}. From: *${m.sender || m.from || "?"}*\n   ${m.text || m.message || m.content || "?"}\n   ⏱️ ${m.time || m.date || "-"}`).join("\n\n");
-    }
-  } catch {}
-  if (!msgs) {
-    try {
-      const r = await prexzyGet("/vnum/veepn-messages", { number, country: "us", page: "1", count: "10" }, 20000);
-      const d = r.data?.data || r.data;
-      const list = Array.isArray(d) ? d : (d?.messages || []);
-      if (list.length) msgs = list.slice(0, 10).map((m, i) => `${i+1}. From: *${m.sender || m.from || "?"}*\n   ${m.text || m.message || "?"}`).join("\n\n");
-    } catch {}
-  }
-  if (!msgs) { await sendReply(sock, msg, `❌ No messages or number not found.`); return; }
-  await sendReply(sock, msg, `💬 *SMS for ${number}*\n\n${msgs}`);
-  await react(sock, msg, "✅");
-});
+
 
 // ─── DETECT LANGUAGE ─────────────────────────────────────────────────────────
 cmd(["dclangdetect","detectlang"], { desc: "Detect language of text — .dclangdetect <text>", category: "TOOLS" }, async (sock, msg, args) => {
@@ -39348,6 +37357,7 @@ try {
         e._origHandler = __playV21;
         commands.set(n, e);
       }
+for (const n of ["play2"]) { if (commands.has("play")) { commands.set(n, { ...commands.get("play"), canonical: "play", isAlias: true }); aliases.set(n, "play"); } }
     } catch {}
 
     // ── GETCMD v21 — inline monospace code viewer (no attachments) ────────
