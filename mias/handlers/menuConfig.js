@@ -174,18 +174,6 @@ export const MENU_CATEGORIES = [
     ],
   },
   {
-    id: "cat_games",
-    label: "🎮 Games",
-    cmds: [
-      { name: "tictactoe", desc: "Play Tic-Tac-Toe",             wizard: true  },
-      { name: "truth",     desc: "Truth or dare — truth",         wizard: false },
-      { name: "dare",      desc: "Truth or dare — dare",          wizard: false },
-      { name: "8ball",     desc: "Magic 8-ball",                  wizard: true  },
-      { name: "quote",     desc: "Inspirational quote",           wizard: false },
-      { name: "riddle",    desc: "Riddle challenge",              wizard: false },
-    ],
-  },
-  {
     id: "cat_owner",
     label: "👑 Owner Tools",
     cmds: [

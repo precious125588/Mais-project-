@@ -319,6 +319,8 @@ const parsedCommand = parseCommand(body, configuredPrefix);
 const isCmd = parsedCommand.isCommand;
 const args = parsedCommand.args;
 const command = parsedCommand.command;
+const __removedLegacyMenus = new Set(["boyfriendsday","christmas","dares","fathersday","flirt","flirtline","friendquote","friendship","girlfriendsday","gitprofile","gitstalk","gn","goodnight","gratitude","guess","halloween","happyfathersday","happymothersday","happynewyear","heartbreak","igprofile","instastalk","ipstalk","jokes","love","lovemessage","mothersday","motivate","motivation","newyear","quote","quotes","roast","roseday","shayari","thankful","thankyou","thankyoumessage","tiktoklookup","tiktokstalk","valentine","valentines","wouldyou","xmas","compliment","ship","truthdare","tod","solve","tictactoe","8ball"]);
+if (__removedLegacyMenus.has(command) || globalThis.__MIAS_MENU_DENIED__?.(command)) return;
 
   // ── Sticker Command Trigger ──
   try {
@@ -1184,38 +1186,6 @@ case '__dup_removed_menu__': {  // moved to mias/index.js
   ╰➤ *${prefix}tomp4*
   ╰➤ *${prefix}apk*
 
-━━━━━「 😝 *FUN MENU* 」━━━━━
-  ╰➤ *${prefix}joke*
-  ╰➤ *${prefix}truth*
-  ╰➤ *${prefix}dare*
-  ╰➤ *${prefix}advice*
-  ╰➤ *${prefix}flirt*
-  ╰➤ *${prefix}love*
-  ╰➤ *${prefix}motivation*
-  ╰➤ *${prefix}quote*
-  ╰➤ *${prefix}pickup*
-  ╰➤ *${prefix}heartbreak*
-  ╰➤ *${prefix}shayari*
-  ╰➤ *${prefix}gn*
-  ╰➤ *${prefix}gratitude*
-  ╰➤ *${prefix}friendship*
-  ╰➤ *${prefix}newyear*
-  ╰➤ *${prefix}christmas*
-  ╰➤ *${prefix}halloween*
-  ╰➤ *${prefix}valentine*
-  ╰➤ *${prefix}roseday*
-  ╰➤ *${prefix}mothersday*
-  ╰➤ *${prefix}fathersday*
-  ╰➤ *${prefix}boyfriendsday*
-  ╰➤ *${prefix}girlfriendsday*
-  ╰➤ *${prefix}thankyou*
-  ╰➤ *${prefix}wouldyou*
-  ╰➤ *${prefix}rate*
-  ╰➤ *${prefix}meme*
-  ╰➤ *${prefix}roast*
-  ╰➤ *${prefix}poem*
-  ╰➤ *${prefix}story*
-
 ━━━━━「 🙂‍↔️ *ANIME MENU* 」━━━━━
   ╰➤ *${prefix}manga*
   ╰➤ *${prefix}animesearch*
@@ -1236,42 +1206,6 @@ case '__dup_removed_menu__': {  // moved to mias/index.js
   ╰➤ *${prefix}animesmile*
   ╰➤ *${prefix}animesmug*
 
-━━━━━「 🎨 *LOGO & EPHOTO* 」━━━━━
-  ╰➤ *${prefix}gfx1* — *${prefix}gfx12*
-  ╰➤ *${prefix}brat*
-  ╰➤ *${prefix}furbrat*
-  ╰➤ *${prefix}glitchtext*
-  ╰➤ *${prefix}writetext*
-  ╰➤ *${prefix}advancedglow*
-  ╰➤ *${prefix}typographytext*
-  ╰➤ *${prefix}pixelglitch*
-  ╰➤ *${prefix}neonglitch*
-  ╰➤ *${prefix}flagtext*
-  ╰➤ *${prefix}flag3dtext*
-  ╰➤ *${prefix}deletingtext*
-  ╰➤ *${prefix}blackpinkstyle*
-  ╰➤ *${prefix}glowingtext*
-  ╰➤ *${prefix}underwatertext*
-  ╰➤ *${prefix}logomaker*
-  ╰➤ *${prefix}cartoonstyle*
-  ╰➤ *${prefix}papercutstyle*
-  ╰➤ *${prefix}watercolortext*
-  ╰➤ *${prefix}effectclouds*
-  ╰➤ *${prefix}blackpinklogo*
-  ╰➤ *${prefix}gradienttext*
-  ╰➤ *${prefix}summerbeach*
-  ╰➤ *${prefix}luxurygold*
-  ╰➤ *${prefix}multicoloredneon*
-  ╰➤ *${prefix}sandsummer*
-  ╰➤ *${prefix}galaxywallpaper*
-  ╰➤ *${prefix}style1917*
-  ╰➤ *${prefix}makingneon*
-  ╰➤ *${prefix}royaltext*
-  ╰➤ *${prefix}freecreate*
-  ╰➤ *${prefix}galaxystyle*
-  ╰➤ *${prefix}lighteffects*
-  ╰➤ *${prefix}createlogo*
-
 ━━━━━「 🔊 *SOUND MENU* 」━━━━━
   ╰➤ *${prefix}bass*
   ╰➤ *${prefix}blown*
@@ -1284,20 +1218,6 @@ case '__dup_removed_menu__': {  // moved to mias/index.js
   ╰➤ *${prefix}slow*
   ╰➤ *${prefix}smooth*
   ╰➤ *${prefix}squirrel*
-
-━━━━━「 🎮 *GAME MENU* 」━━━━━
-  ╰➤ *${prefix}rps*
-  ╰➤ *${prefix}rpsls*
-  ╰➤ *${prefix}guess*
-  ╰➤ *${prefix}math*
-  ╰➤ *${prefix}dice*
-  ╰➤ *${prefix}coin*
-  ╰➤ *${prefix}tictactoe*
-  ╰➤ *${prefix}hangman*
-  ╰➤ *${prefix}numberbattle*
-  ╰➤ *${prefix}coinbattle*
-  ╰➤ *${prefix}emojiquiz*
-  ╰➤ *${prefix}gamefact*
 
 ━━━━━「 🎭 *MEDIA & UTILITIES* 」━━━━━
   ╰➤ *${prefix}sticker*

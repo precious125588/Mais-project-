@@ -76,6 +76,7 @@ import {
   getStickerHash,
 } from "./lib/kevdraPatches.js";
 import { createStickerFromBuffer } from "./lib/stickerMedia.js";
+import { canonicalMenuEntries, activeMenuCategories, resolveMenuCategory, formatMenuCategory, boldCommand, quoteSection, createMenuQuoteSelector, menuReaction, installMenuCategoryPolicy, deliverMenuCaption } from "./lib/premiumMenus.js";
 // ── MIAS HANDLER SYSTEM — universal messaging abstraction ─────────────────────
 import { installHandlerGlobals, updateHandlerSock } from "./handlers/globals.js";
 import { isGktwAvailable } from "./handlers/gktwAdapter.js";
@@ -818,7 +819,7 @@ const CONFIG = {
   SESSION_ID:   process.env.SESSION_ID   || "",
   OWNER_NUMBER: (process.env.OWNER_NUMBER || process.env.OWNER || "").trim(),
   OWNER_JID: (process.env.OWNER_JID || process.env.OWNER_LID || "").trim(),
-  BOT_NAME:     process.env.BOT_NAME || "𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x",
+  BOT_NAME:     process.env.BOT_NAME || "𝑴𝑰𝑨𝑺 𝑴𝑫𝑿",
   PREFIX:       INITIAL_PREFIX !== null
     ? INITIAL_PREFIX
     : Object.prototype.hasOwnProperty.call(process.env, "PREFIX")
@@ -7119,36 +7120,17 @@ function cmd(names, opts, handler) {
 }
 
 function getPrimaryCommandCount() {
-  if (typeof commands === "undefined" || !commands || !commands.entries) return 0;
-  let count = 0;
-  for (const [name, cmdObj] of commands.entries()) {
-    if (!cmdObj?.isAlias) count++;
-  }
-  return count;
+  return canonicalMenuEntries(commands, aliases, MENU_CATEGORIES).length;
 }
 
 function isCommandAlias(name) {
-  if (!name) return false;
-  const lower = name.toLowerCase().trim();
-  const entry = typeof commands !== "undefined" && commands ? commands.get(lower) : null;
-  if (entry && typeof entry.isAlias === "boolean") return entry.isAlias;
-  return aliases.has(lower);
+  const lower = String(name || '').toLowerCase().trim();
+  return commands.get(lower)?.isAlias === true || aliases.has(lower);
 }
 
 function getCategoryPrimaryCommands(cat) {
-  if (!cat || !cat.cmds) return [];
-  const result = [];
-  const seen = new Set();
-  for (const c of cat.cmds) {
-    if (!c) continue;
-    const lower = c.toLowerCase().trim();
-    const entry = typeof commands !== "undefined" && commands ? commands.get(lower) : null;
-    const canon = (entry?.canonical || aliases.get(lower) || lower).toLowerCase();
-    if (seen.has(canon)) continue;
-    seen.add(canon);
-    result.push(canon);
-  }
-  return result;
+  return canonicalMenuEntries(commands, aliases, MENU_CATEGORIES)
+    .filter(item => item.category === cat?.name).map(item => item.name);
 }
 
   try {
@@ -8263,33 +8245,10 @@ try {
   console.error('[QUOTES] Error loading quotes_massive.json:', e.message);
 }
 
-const _userQuoteBags = new Map();
-function _randomMenuQuoteForUser(userId) {
-  const u = String(userId || 'global').replace(/[^0-9]/g, '') || 'global';
-  let bag = _userQuoteBags.get(u);
-  const allPool = [
-    ...(typeof _HOPE_QUOTES !== 'undefined' ? _HOPE_QUOTES : []),
-    ...(typeof _MENU_QUOTES_EXTRA !== 'undefined' ? _MENU_QUOTES_EXTRA : []),
-    ...(typeof _SAD_QUOTES !== 'undefined' ? _SAD_QUOTES : []),
-    ...(typeof _TRUTH_QUOTES !== 'undefined' ? _TRUTH_QUOTES : []),
-    ...(_MASSIVE_QUOTES || [])
-  ];
-  if (!allPool.length) allPool.push('The world needs your specific kind of light.');
-
-  if (!bag || !bag.pool || bag.pool.length === 0) {
-    const shuffled = allPool.slice();
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    bag = { pool: shuffled, used: [] };
-    _userQuoteBags.set(u, bag);
-  }
-
-  const q = bag.pool.pop();
-  bag.used.push(q);
-  return q;
-}
+const _randomMenuQuoteForUser = createMenuQuoteSelector(() => [
+  ..._HOPE_QUOTES, ..._MENU_QUOTES_EXTRA, ..._SAD_QUOTES, ..._TRUTH_QUOTES,
+  ...(_MASSIVE_QUOTES || []),
+]);
 globalThis._randomMenuQuoteForUser = _randomMenuQuoteForUser;
 
 function _randomMenuQuote() { return _randomMenuQuoteForUser("global"); }
@@ -8438,14 +8397,14 @@ function buildMenu(jid, senderName, sender) {
   const greet = hh < 5 ? "🌙 Late Night" : hh < 12 ? "🌅 Good Morning" : hh < 17 ? "☀️ Good Afternoon" : hh < 21 ? "🌆 Good Evening" : "🌙 Good Night";
 
   let t = "";
-  t += `> 💬 *_"${_randomHope()}"_*\n\n`;
+  t += quoteSection(userQuote);
   t += `✦ ─────────────────── ✦\n`;
-  t += `  ⚡  *𝑴𝑰𝑨𝑺  𝑴𝑫𝑿*  ⚡\n`;
+  t += `  *${CONFIG.BOT_NAME || "𝑴𝑰𝑨𝑺 𝑴𝑫𝑿"}*\n`;
   t += `✦ ─────────────────── ✦\n\n`;
   t += `${greet}, *${senderName}* 👋\n\n`;
   t += `┌─────「 *𝗦𝗬𝗦𝗧𝗘𝗠 𝗦𝗧𝗔𝗧𝗦* 」─────\n`;
   t += `│  ◈ 𝗣𝗿𝗲𝗳𝗶𝘅    ➜  \`${CONFIG.PREFIX}\`\n`;
-  t += `│  ◈ 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀  ➜  ${totalCmds}+\n`;
+  t += `│  ◈ 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀  ➜  ${totalCmds}\n`;
   t += `│  ◈ 𝗩𝗲𝗿𝘀𝗶𝗼𝗻   ➜  ${CONFIG.VERSION}\n`;
   t += `│  ◈ 𝗠𝗼𝗱𝗲     ➜  ${s.workMode || "public"}\n`;
   t += `│  ◈ 𝗨𝗽𝘁𝗶𝗺𝗲   ➜  ${fmtUptime(up)}\n`;
@@ -8453,215 +8412,91 @@ function buildMenu(jid, senderName, sender) {
   t += `│  ◈ 𝗧𝗶𝗺𝗲     ➜  ${timeStr}\n`;
   t += `└─────────────────────────\n\n`;
   t += `━━━━━「 🗂️ *CATEGORIES* 」━━━━━\n\n`;
-  for (const cat of MENU_CATEGORIES) {
+  for (const cat of activeMenuCategories(commands, aliases, MENU_CATEGORIES)) {
     if (cat.adult && (!s.adultMode || s.safeMode)) continue;
     const count = getCategoryPrimaryCommands(cat).length;
-    t += `  ╰➤ ${cat.emoji} *${cat.name}*  ‹${count} cmds›\n`;
+    t += `  ╰➤ ${cat.emoji} *${boldCommand(cat.name)}*  ‹${count} cmds›\n`;
   }
   t += `\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
   t += `  ╰➤ _${CONFIG.PREFIX}menu <category>_ — open a category\n`;
   t += `  ╰➤ _${CONFIG.PREFIX}settings_ — configure the bot\n\n`;
-  t += ``;
+  t += `𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x`;
   return t;
 }
 
 
-cmd(["allmenu", "fullmenu"], {
-  desc: "Display all bot commands across all categories attached with bot info and cover photo in a single message",
-  category: "main",
-  react: "🏷️"
-}, async (sock, msg, args) => {
-  const jid = msg.key.remoteJid;
-  const sender = msg.key.fromMe ? (sock.user?.id || "").replace(/:[0-9]+@/, "@") : (msg.key.participant || msg.participant || jid).replace(/:[0-9]+@/, "@");
-  const senderName = msg.pushName || "User";
-  try {
-    await react(sock, msg, "🏷️");
-    const userQuote = _randomMenuQuoteForUser(sender || jid);
-    let botPic = null;
-    const _candidatePaths = [
-      path.join(_ASSETS_DIR, "allmenu.jpg"),
-      path.join(_ASSETS_DIR, "botpic1.jpg"),
-      path.join(_ASSETS_DIR, "menu-cover.jpg")
-    ];
-    for (const p of _candidatePaths) {
-      try {
-        if (fs.existsSync(p)) {
-          const buf = fs.readFileSync(p);
-          if (buf && buf.length > 1000) { botPic = buf; break; }
-        }
-      } catch (_) {}
-    }
-    if (!botPic) {
-      try { botPic = await getBotPic(); } catch (_) {}
-    }
-    if (!botPic) {
-      try {
-        const _botJ = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
-        const ppUrl = await sock.profilePictureUrl(_botJ, "image").catch(() => null)
-                   || await sock.profilePictureUrl(sock.user?.id, "image").catch(() => null);
-        if (ppUrl) {
-          const rPp = await axios.get(ppUrl, { responseType: "arraybuffer", timeout: 10000 });
-          if (rPp.data) botPic = Buffer.from(rPp.data);
-        }
-      } catch (_) {}
-    }
-    const botName = CONFIG.BOT_NAME || "MAIS MDX";
-    const botOwner = CONFIG.OWNER_NAME || "Precious";
-    const botJid = (sock.user?.id || "").replace(/:[0-9]+@/, "@");
-    const botNumber = botJid.split("@")[0] || "Bot";
+function menuPictureSources(sock, jid) {
+  const scope = jid.endsWith('@g.us') ? jid : 'global_cuz';
+  const custom = getSettings(scope)?.__cuz?.botProfile;
+  const downloadImage = async url => {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
+    const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 8000, maxContentLength: 8 * 1024 * 1024 });
+    const buf = Buffer.from(response.data || []);
+    const signature = buf.subarray(0, 4).toString('hex');
+    return buf.length > 500 && (signature.startsWith('ffd8') || signature === '89504e47' || signature === '52494646') ? buf : null;
+  };
+  return [
+    async () => downloadImage(custom || _BOT_PIC_FALLBACKS[0]),
+    async () => {
+      const botJid = String(sock.user?.id || '').replace(/:[0-9]+@/, '@');
+      if (!botJid || typeof sock.profilePictureUrl !== 'function') return null;
+      return downloadImage(await sock.profilePictureUrl(botJid, 'image'));
+    },
+    ..._LOCAL_BOT_PICS.map(file => async () => fs.readFileSync(file)),
+    ..._BOT_PIC_FALLBACKS.filter(url => url !== custom && url !== _BOT_PIC_FALLBACKS[0]).map(url => async () => downloadImage(url)),
+  ];
+}
 
-    // Build complete allmenu text with all categories and commands from commands registry
-    const grouped = {};
-    const seen = new Set();
-    const cmdList = [];
-    const cmdMap = (typeof commands !== 'undefined' && commands) || globalThis.__MIAS_COMMANDS__ || new Map();
-    if (cmdMap && cmdMap.entries) {
-      for (const [name, cmdObj] of cmdMap.entries()) {
-        if (!name) continue;
-        if (cmdObj?.isAlias || isCommandAlias(name)) continue;
-        const canon = (cmdObj?.canonical || name).toLowerCase();
-        if (seen.has(canon)) continue;
-        seen.add(canon);
-        const cat = (cmdObj?.category || "OTHER").toUpperCase();
-        if (!grouped[cat]) grouped[cat] = [];
-        grouped[cat].push({ name: canon, desc: cmdObj?.desc || "" });
-        cmdList.push(canon);
-      }
-    }
-    const totalCount = cmdList.length || getPrimaryCommandCount() || 0;
-    const isPublic = Boolean(
-      (typeof getSettings === "function" && (getSettings(jid)?.publicMode || getSettings("bot")?.publicMode)) ||
-      (typeof getSetting === "function" && getSetting("publicMode")) ||
-      CONFIG.MODE === "public" ||
-      CONFIG.PUBLIC_MODE
-    );
-
-    let allText = `┏━━━〔 🌟 *${botName.toUpperCase()} ALL-MENU* 🌟 〕━━━┓\n`;
-    allText += `┃ 👑 *Owner:* ${botOwner}\n`;
-    allText += `┃ 🤖 *Bot:* @${botNumber}\n`;
-    allText += `┃ 👤 *User:* ${senderName}\n`;
-    allText += `┃ ⚡ *Mode:* ${isPublic ? "PUBLIC" : "PRIVATE"}\n`;
-    allText += `┃ 📦 *Total Commands:* ${totalCount}\n`;
-    allText += `┃ 📅 *Date:* ${new Date().toLocaleDateString()}\n`;
-    allText += `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n`;
-    allText += `> 💬 *_"${userQuote}"_*\n\n`;
-
-    const sortedCats = Object.keys(grouped).sort();
-    for (const cat of sortedCats) {
-      allText += `╭───『 *${cat}* (${grouped[cat].length}) 』───\n`;
-      for (const cmdItem of grouped[cat]) {
-        const desc = cmdItem.desc ? ` - _${cmdItem.desc}_` : "";
-        allText += `│ • *${CONFIG.PREFIX}${cmdItem.name}*${desc}\n`;
-      }
-      allText += `╰──────────────────────────────\n\n`;
-    }
-    allText += `> © ${botName} • All rights reserved.`;
-
-    const mentions = [sender, botJid].filter(Boolean);
-
-    // Send attached together with bot picture in ONE message:
-    if (botPic && Buffer.isBuffer(botPic)) {
-      try {
-        await sock.sendMessage(jid, {
-          image: botPic,
-          caption: allText,
-          mentions,
-          contextInfo: {
-            mentionedJid: mentions,
-            forwardingScore: 999,
-            isForwarded: true
-          }
-        }, { quoted: msg });
-        return;
-      } catch (errImg) {
-        console.error('[ALLMENU] Image send fallback:', errImg.message);
-      }
-    }
-
-    await sendReply(sock, msg, allText);
-  } catch (err) {
-    console.error('[ALLMENU ERROR]', err);
-    await sendReply(sock, msg, `❌ Failed to generate allmenu: ${err.message}`);
-  }
-});
-
-cmd(["menu", "help", "commands", ".menu", "start"], { desc: "Show full menu", category: "INFO" }, async (sock, msg, args) => {
-  const jid = msg.key.remoteJid;
+async function sendPremiumMenu(sock, msg, args, all = false) {
+  const jid = msg?.key?.remoteJid;
+  if (!jid || !msg.key.id) return;
   const sender = getSender(msg);
-  const rawPushName = msg.pushName || msg.verifiedBizName || "";
-  if (rawPushName && rawPushName.trim() && !/^\d+$/.test(rawPushName.trim())) {
+  const rawPushName = msg.pushName || msg.verifiedBizName || '';
+  if (rawPushName.trim() && !/^\d+$/.test(rawPushName.trim())) {
     const snum = _cleanNum(sender);
     if (snum) pushNameCache.set(snum, rawPushName.trim());
   }
-  let senderName = await getDisplayName(sock, sender, isGroup(msg) ? jid : null);
-  if ((!senderName || /^\+?\d+$/.test(senderName)) && rawPushName && rawPushName.trim()) {
-    senderName = rawPushName.trim();
-  }
-
-  if (args[0]) {
-    const catName = args[0].toUpperCase();
-    const cat = MENU_CATEGORIES.find(c => c.name === catName || c.name.startsWith(catName));
-    if (!cat) { await sendReply(sock, msg, `❓ Category *${args[0].toUpperCase()}* not found.\nUse ${CONFIG.PREFIX}menu to see all categories.`); return; }
-    if (cat.adult && !getSettings(jid).adultMode) { await sendReply(sock, msg, `🔞 Enable adult mode first with ${CONFIG.PREFIX}setting → option 23.1`); return; }
-    const uniq = getCategoryPrimaryCommands(cat);
-    let text = `${cat.emoji} ━━━ *${cat.name}* ━━━ ${uniq.length} cmds\n\n`;
-    for (const c of uniq) {
-      const info = commands.get(c);
-      text += `  ╰➤ *${CONFIG.PREFIX}${c}*${info?.desc ? "  — _" + info.desc + "_" : ""}\n`;
-    }
-    text += `\n━━━━━━━━━━━━━━━━━━━`;
-    await sendReply(sock, msg, text);
+  let senderName = rawPushName || 'User';
+  try { senderName = await getDisplayName(sock, sender, isGroup(msg) ? jid : null) || senderName; } catch {}
+  if (/^\+?\d+$/.test(senderName) && rawPushName) senderName = rawPushName.trim();
+  const categories = activeMenuCategories(commands, aliases, MENU_CATEGORIES);
+  const requested = Array.isArray(args) && args.length > 0;
+  const cat = requested && !all ? resolveMenuCategory(args, categories) : null;
+  if (requested && !all && !cat) {
+    await sendReply(sock, msg, '❓ Category *' + args.join(' ').toUpperCase() + '* not found.\nUse ' + CONFIG.PREFIX + 'menu to see all categories.');
     return;
   }
-
-  await react(sock, msg, "📋");
-  const menuText = buildMenu(jid, senderName, sender);
-  // Use bot pic as the primary cover for interactive list menu
-  // getBotPic() picks from botpic1/2/3.jpg (your actual bot profile pics)
-  let coverBuf = await getBotPic().catch(() => null);
-  // Fallback: try button-menu.jpg
-  if (!coverBuf) {
-    const coverPath = path.join(__dirname, "assets", "button-menu.jpg");
-    try { if (fs.existsSync(coverPath)) coverBuf = fs.readFileSync(coverPath); } catch {}
+  const settings = getSettings(jid);
+  if (cat?.adult && (!settings.adultMode || settings.safeMode)) {
+    await sendReply(sock, msg, '🔞 Enable adult mode first with ' + CONFIG.PREFIX + 'setting.');
+    return;
   }
-  if (!coverBuf) {
-    const _nightMenuPic2 = typeof MENU2_PIC_B64 !== "undefined" && MENU2_PIC_B64 ? Buffer.from(MENU2_PIC_B64, "base64") : null;
-    if (_nightMenuPic2) coverBuf = _nightMenuPic2;
-  }
-
-  // Respect explicit menuMode without changing the original text-menu path
-  const ownerS = getSettings(getOwnerJid());
-  const explicitMenuMode = __MENU_MODES.includes(ownerS?.menuMode) ? ownerS.menuMode : "";
-  if (!jid.endsWith("@newsletter")) {
-    if (explicitMenuMode === "button") {
-      const entry = commands.get("btnmenu");
-      if (entry?.handler) { await entry.handler(sock, msg, []); return; }
-    }
-    if (explicitMenuMode === "flow") {
-      const entry = commands.get("flowmenu");
-      if (entry?.handler) { await entry.handler(sock, msg, []); return; }
-    }
-    if (explicitMenuMode === "list") {
-      await sendMenuV2(sock, jid, msg, { userName: senderName });
-      return;
-    }
-    if (!explicitMenuMode && !!ownerS?.buttonsMode) {
-      await sendMenuV2(sock, jid, msg, { userName: senderName });
-      return;
-    }
-  }
-  // Text mode: image + plain text menu, then play a random song
-  if (coverBuf) {
-    try {
-      await sock.sendMessage(jid, { image: coverBuf, caption: menuText }, { quoted: msg });
-    } catch {
-      await sendReply(sock, msg, menuText);
-    }
+  try { await react(sock, msg, menuReaction(cat?.name || (all ? 'ALL' : 'MAIN'))); } catch {}
+  let text;
+  if (cat) {
+    const uniq = getCategoryPrimaryCommands(cat);
+    text = quoteSection(_randomMenuQuoteForUser(sender || jid)) + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\n𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
   } else {
-    await sendReply(sock, msg, menuText);
+    text = buildMenu(jid, senderName, sender);
+    if (all) {
+      const start = text.indexOf('━━━━━「 🗂️');
+      const end = text.indexOf('\n━━━━━━━━━━━━━━━━━━━━━━━━━', start);
+      const listing = categories.map(formatMenuCategory).join('\n\n');
+      text = text.slice(0, start) + listing + text.slice(end);
+    }
   }
-  // Send a random menu song even in text mode
-  await sendMenuSong(sock, jid, msg);
+  const botJid = String(sock.user?.id || '').replace(/:[0-9]+@/, '@');
+  await deliverMenuCaption(sock, msg, text, menuPictureSources(sock, jid), sendReply, [sender, botJid].filter(Boolean));
+  // Preserve the existing main-menu song; category/all menus remain one menu.
+  if (!cat && !all) { try { await sendMenuSong(sock, jid, msg); } catch {} }
+}
+
+cmd(['allmenu', 'fullmenu'], { desc: 'Show all active canonical commands', category: 'INFO' }, async (sock, msg, args) => {
+  await sendPremiumMenu(sock, msg, args, true);
+});
+
+cmd(['menu', 'help', 'commands', '.menu', 'start'], { desc: 'Show menu or category', category: 'INFO' }, async (sock, msg, args) => {
+  await sendPremiumMenu(sock, msg, args, false);
 });
 
 
@@ -43718,3 +43553,8 @@ async function handleReaction(sock, r) {
   }
 }
 globalThis.handleReaction = handleReaction;
+
+// Targeted menu policy is installed after existing command overrides.
+const __menuCategoryPolicy = installMenuCategoryPolicy(commands, aliases, MENU_CATEGORIES, ["boyfriendsday","christmas","dares","fathersday","flirt","flirtline","friendquote","friendship","girlfriendsday","gitprofile","gitstalk","gn","goodnight","gratitude","guess","halloween","happyfathersday","happymothersday","happynewyear","heartbreak","igprofile","instastalk","ipstalk","jokes","love","lovemessage","mothersday","motivate","motivation","newyear","quote","quotes","roast","roseday","shayari","thankful","thankyou","thankyoumessage","tiktoklookup","tiktokstalk","valentine","valentines","wouldyou","xmas","compliment","ship","truthdare","tod","solve","tictactoe","8ball"]);
+globalThis.__MIAS_MENU_DENIED__ = name => __menuCategoryPolicy.denied(name, commands.get(String(name).toLowerCase()));
+globalThis.__MIAS_MENU_POLICY_REPORT__ = __menuCategoryPolicy.clean();

@@ -1,0 +1,4 @@
+- Keep this WhatsApp bot on its existing Node host; do not execute live startup for local menu tests.
+- Use mias/lib/premiumMenus.js with the existing command registry for menus, canonical counts, category policy, quote selection and image-caption delivery; this avoids conflicting handlers and stale command lists.
+- Test index.js menu functions through source extraction with mocked sockets rather than importing startup; imports have filesystem, network and session side effects.
+- Disable exclusive removed-category commands at the registry and legacy dispatcher boundaries, retaining shared commands; late registrations must obey the same policy.

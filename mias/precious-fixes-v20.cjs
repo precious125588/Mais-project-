@@ -43,7 +43,7 @@
 
 'use strict';
 
-const CATEGORIES_TO_REMOVE = ['ECONOMY','FUN','TEXTMAKER','GAME','RELIGION','TEXT','DEBUG'];   // add more names here if you want
+const CATEGORIES_TO_REMOVE = ['ECONOMY','RELIGION','TEXT'];   // add more names here if you want
 
 function install(ctx) {
   const report = { gst: false, play: false, playViewOnce: false, settings: false, settingsReply: false, categories: [], rows: 0 };
