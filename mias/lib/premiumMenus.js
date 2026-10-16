@@ -119,10 +119,12 @@ export function resolveMenuCategory(args, categories) {
   return matches.length === 1 ? matches[0] : null;
 }
 export function formatMenuCategory(cat) {
-  return ['╭━〔 *' + String(cat.name).toUpperCase() + '* · ' + cat.cmds.length + ' 〕━━╮', '', ...cat.cmds.map(name => '± ' + boldCommand(name)), '', '╰━━━━━━━━━━━━━━━━━━╯'].join('\n');
+  // Premium black-and-gold layout: unicode rules only, no emoji anywhere.
+  return ['────────────────────', '', '*' + String(cat.name).toUpperCase() + '*  (' + cat.cmds.length + ')', '', ...cat.cmds.map(name => '± ' + boldCommand(name)), '', '────────────────────'].join('\n');
 }
 export function quoteSection(quote) {
-  return '✦ ─────────────────── ✦\n\n\n> 💬 *_"' + quote + '"_*\n\n\n';
+  // Quote block from the bot's own collection — no emoji decoration.
+  return '────────────────────\n\n\n> _"' + String(quote ?? '') + '"_\n\n\n';
 }
 export function createMenuQuoteSelector(getQuotes, random = Math.random) {
   const previous = new Map();
@@ -142,13 +144,12 @@ export function createMenuQuoteSelector(getQuotes, random = Math.random) {
 }
 export const MENU_REACTIONS = Object.freeze({ MAIN: '📋', ALL: '🏷️', INTELLIGENCE: '🤖', ANIMATION: '🍥', DOWNLOAD: '📥', GROUP: '👥', AUDIO: '🎵', TOOLS: '🔧', OWNER: '🔐', SETTINGS: '⚙️', CONFIG: '🎛️', CREATOR: '👑', CONVERT: '🔄', DEBUG: '🐛', STATUS: '🎬', INFO: '📊', MEDIA: '🖼️', MISC: '📁', SEARCH: '🔍', SESSION: '🔑', TTS: '🔊', UTILITY: '🛠️', WHATSAPP: '📱', AI: '🤖', ANIME: '🍥', ADULT: '🔞', HENTAI: '❤️‍🔥', NSFW: '🚨', NEXRAY: '⚡', 'NEXRAY-CANVAS': '🎴' });
 const extraReactions = new Map();
+// Every supported menu command reacts with exactly one emoji: 💔.
+// The reaction is a message reaction, not menu text, so it is the only emoji
+// that may appear around a menu. MENU_REACTIONS is kept for compatibility.
 export function menuReaction(category) {
-  const raw = String(category || '').toUpperCase();
-  const key = ['MAIN', 'ALL'].includes(raw) ? raw : normalizeMenuCategory(category);
-  if (REMOVED_MENU_CATEGORIES.has(key)) return null;
-  if (MENU_REACTIONS[key]) return MENU_REACTIONS[key];
-  if (!extraReactions.has(key)) extraReactions.set(key, String.fromCodePoint(0x1f600 + extraReactions.size % 70));
-  return extraReactions.get(key);
+  void category;
+  return '\uD83D\uDC94';
 }
 export function installMenuCategoryPolicy(commands, aliases, categories, legacyNames = []) {
   // Keep the pre-existing dispatcher policy unchanged. Renaming a legacy
@@ -250,4 +251,17 @@ export async function deliverMenuCaption(sock, msg, text, pictureSources, sendRe
     return;
   }
   return sendText(text);
+}
+
+// ── Download branding footer ────────────────────────────────────────────────
+// Applied ONLY to downloaded-media captions by the shared delivery helpers.
+// A zero-width space keeps WhatsApp from turning the line into a quote block,
+// so the visible text stays exactly "> POWERED BY JUST X".
+export const JUST_X_FOOTER = '> POWERED BY JUST X';
+export function withJustXFooter(caption) {
+  const text = String(caption ?? '');
+  if (text.includes('POWERED BY JUST X')) return text; // never duplicate
+  const footer = '\u200B' + JUST_X_FOOTER;
+  const trimmed = text.replace(/\s+$/, '');
+  return trimmed ? trimmed + '\n\n' + footer : footer;
 }
