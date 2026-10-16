@@ -1,3 +1,4 @@
+import { forwardPremiumMenu } from "../lib/premiumMenus.js";
 /**
  * MIAS — UI Manager  v1
  *
@@ -135,32 +136,7 @@ function _commandRows(cat) {
  * @returns {Promise<void>}
  */
 async function openHome(sock, jid, msg, opts = {}) {
-  const caps = await getCapabilities(sock);
-  const text = _homeText(opts);
-  const rows = _categoryRows();
-
-  // Send bot vCard first (with profile pic)
-  try {
-    await sendBotVCard(sock, jid, { quoted: msg, withPic: true });
-  } catch {}
-
-  // Send interactive category list or plain text
-  if (caps.lists) {
-    try {
-      return await sendList(sock, jid, text, [
-        { title: "Categories", rows },
-      ], {
-        buttonText: "Open Categories",
-        title: _botName(),
-        footer: `${_prefix()}help <command> for details`,
-        quoted: msg,
-      });
-    } catch {}
-  }
-
-  // Fallback: plain-text category list
-  const fallback = rows.map((r, i) => `[${i + 1}] ${r.title} — ${r.description}`).join("\n");
-  return sendText(sock, jid, `${text}\n\n${fallback}`, { quoted: msg });
+  return forwardPremiumMenu(sock, jid, msg);
 }
 
 // ─── Category selector ────────────────────────────────────────────────────────
@@ -175,25 +151,7 @@ async function openHome(sock, jid, msg, opts = {}) {
  * @returns {Promise<void>}
  */
 async function openCategorySelector(sock, jid, msg, opts = {}) {
-  const caps = await getCapabilities(sock);
-  const rows = _categoryRows();
-  const body = `*${_botName()} — Categories*\n${LINE}\nChoose a category:`;
-
-  if (caps.lists) {
-    try {
-      return await sendList(sock, jid, body, [
-        { title: "All Categories", rows },
-      ], {
-        buttonText: "Browse",
-        title: "Categories",
-        footer: `${_prefix()}menu to return home`,
-        quoted: msg,
-      });
-    } catch {}
-  }
-
-  const fallback = rows.map((r, i) => `[${i + 1}] ${r.title} — ${r.description}`).join("\n");
-  return sendText(sock, jid, `${body}\n\n${fallback}`, { quoted: msg });
+  return forwardPremiumMenu(sock, jid, msg);
 }
 
 // ─── Category command list ────────────────────────────────────────────────────
@@ -209,32 +167,7 @@ async function openCategorySelector(sock, jid, msg, opts = {}) {
  * @returns {Promise<void>}
  */
 async function openCommandList(sock, jid, msg, categoryId, opts = {}) {
-  const cat = getCategoryById(categoryId);
-  if (!cat) {
-    return sendText(sock, jid, `Category "${categoryId}" not found. Try ${_prefix()}menu.`, { quoted: msg });
-  }
-
-  const caps  = await getCapabilities(sock);
-  const rows  = _commandRows(cat);
-  const body  = `*${cat.label}*\n${LINE}\nSelect a command:`;
-
-  if (caps.lists) {
-    try {
-      return await sendList(sock, jid, body, [
-        { title: cat.label, rows },
-      ], {
-        buttonText:  "Choose Command",
-        title:       cat.label,
-        footer:      `${_prefix()}menu to return home`,
-        quoted:      msg,
-      });
-    } catch {}
-  }
-
-  // Plain-text fallback
-  const prefix  = _prefix();
-  const fallback = (cat.cmds || []).map(c => `  ${prefix}${c.name}  —  ${c.desc}`).join("\n");
-  return sendText(sock, jid, `${body}\n\n${fallback}`, { quoted: msg });
+  return forwardPremiumMenu(sock, jid, msg, [categoryId]);
 }
 
 // ─── Wizard opener ────────────────────────────────────────────────────────────

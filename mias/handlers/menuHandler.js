@@ -1,3 +1,4 @@
+import { forwardPremiumMenu } from "../lib/premiumMenus.js";
 /**
  * MIAS — Menu Handler  v4
  *
@@ -128,108 +129,7 @@ function _chunk(arr, size = 3) {
  * @returns {Promise<void>}
  */
 export async function sendMenu(sock, jid, msg, opts = {}) {
-  const prefix   = _getPrefix();
-  const botName  = _getBotName();
-  const version  = _getVersion();
-  const mode     = _getMode();
-  const cmdCount = _getCmdCount();
-  const uptime   = formatUptime(process.uptime?.() || 0);
-
-  // Fetch bot profile picture for image header
-  let coverImage = opts.coverImage || null;
-  if (!coverImage) {
-    try {
-      const botJid = sock.user?.id;
-      if (botJid) coverImage = await fetchProfilePic(sock, botJid);
-    } catch {}
-  }
-
-  // ── Try MenuBuilder: ONE rich message with image + buttons + adReply ────────
-  try {
-    const mb = new MenuBuilder(sock, jid)
-      .botName(botName)
-      .cmdCount(cmdCount)
-      .uptime(uptime)
-      .prefix(prefix)
-      .userName(opts.userName || "Guest")
-      .version(version)
-      .mode(mode)
-      .categories(MENU_CATEGORIES)
-      .footer(`${prefix}help <command> for details`)
-      .quoted(msg);
-
-    if (opts.ping != null) mb.ping(opts.ping);
-    if (coverImage)        mb.coverImage(coverImage);
-
-    return await mb.send();
-  } catch {}
-
-  // ── Fallback: interactive list (all categories) ───────────────────────────
-  const caps = await getCapabilities(sock).catch(() => ({}));
-  if (caps.lists) {
-    try {
-      const menuText = _buildMenuText({
-        botName, owner: _getOwner(), prefix, version, uptime,
-        ping: opts.ping ?? null, mode, cmdCount, userName: opts.userName,
-      });
-      const _realCats = (() => {
-        try {
-          const mc = globalThis.__MIAS_MENU_CATEGORIES__;
-          if (Array.isArray(mc) && mc.length > 0) {
-            return mc.filter(c=>c&&Array.isArray(c.cmds)&&c.cmds.length>0).map(cat => {
-              const name  = (cat.name || cat.id || 'OTHER').toUpperCase();
-              const emoji = cat.emoji || '📁';
-              const cmds  = [...new Set(cat.cmds)];
-              return { id: 'cat_'+name.toLowerCase(), label: emoji+' '+name, cmds };
-            });
-          }
-        } catch {}
-        return MENU_CATEGORIES;
-      })();
-      const rows = _realCats.map(cat => ({
-        id:          cat.id,
-        title:       (cat.label||cat.id).slice(0,24),
-        description: `${[...new Set(cat.cmds||[])].length} commands`,
-      }));
-      return await sendList(sock, jid, menuText, [
-        { title: "Categories", rows },
-      ], {
-        buttonText: "Open Categories",
-        title:      botName,
-        footer:     `${prefix}help <command> for details`,
-        quoted:     msg,
-      });
-    } catch {}
-  }
-
-  // ── Fallback: buttons ────────────────────────────────────────────────────
-  if (caps.buttons) {
-    try {
-      const menuText = _buildMenuText({
-        botName, owner: _getOwner(), prefix, version, uptime,
-        ping: opts.ping ?? null, mode, cmdCount, userName: opts.userName,
-      });
-      await sendText(sock, jid, menuText, { quoted: msg });
-      const chunks = _chunk(MENU_CATEGORIES, 3);
-      for (const chunk of chunks) {
-        await sendButtons(sock, jid, "Choose a category:", chunk.map(c => ({
-          text: c.label,
-          id:   c.id,
-        })), { quoted: msg });
-      }
-      return;
-    } catch {}
-  }
-
-  // ── Last resort: plain text ──────────────────────────────────────────────
-  const menuText = _buildMenuText({
-    botName, owner: _getOwner(), prefix, version, uptime,
-    ping: opts.ping ?? null, mode, cmdCount, userName: opts.userName,
-  });
-  const catList = MENU_CATEGORIES.map((c, i) =>
-    `[${i + 1}] ${c.label} — ${c.cmds.length} cmds`
-  ).join("\n");
-  return sendText(sock, jid, `${menuText}\n\n${catList}`, { quoted: msg });
+  return forwardPremiumMenu(sock, jid, msg || opts.quoted);
 }
 
 /**
@@ -244,38 +144,7 @@ export async function sendMenu(sock, jid, msg, opts = {}) {
  * @param {object}   [opts.quoted]
  */
 export async function sendCategoryMenu(sock, jid, categoryId, commands, opts = {}) {
-  const cat    = getCategoryById(categoryId);
-  const title  = cat ? cat.label : categoryId;
-  const prefix = _getPrefix();
-
-  // Use provided commands OR fall back to menuConfig
-  const cmds = (commands?.length ? commands : (cat?.cmds || [])).slice(0, 10);
-
-  const caps = await getCapabilities(sock);
-
-  if (caps.lists) {
-    try {
-      const rows = cmds.map(c => ({
-        id:          `cmd_${c.name}`,
-        title:       `${prefix}${c.name}`,
-        description: c.desc || "",
-      }));
-      return await sendList(sock, jid, `Commands in *${title}*:`, [
-        { title, rows },
-      ], {
-        buttonText: "Browse",
-        title,
-        footer:     `${prefix}help <command> for details`,
-        quoted:     opts.quoted,
-      });
-    } catch {}
-  }
-
-  const list = cmds.map(c => `  ${prefix}${c.name}  —  ${c.desc || "No description"}`).join("\n");
-  return sendText(sock, jid,
-    `*${title}*\n${"─".repeat(24)}\n${list}\n\nUse \`${prefix}help <command>\` for details.`,
-    { quoted: opts.quoted }
-  );
+  return forwardPremiumMenu(sock, jid, opts.quoted, [categoryId]);
 }
 
 /**
@@ -287,7 +156,10 @@ export async function sendCategoryMenu(sock, jid, categoryId, commands, opts = {
  * @param {object} [opts.quoted]
  */
 export async function sendCommandCount(sock, jid, opts = {}) {
-  const count  = _getCmdCount();
+  const msg = opts.quoted;
+  if (!msg?.key?.id || msg.key.remoteJid !== jid || typeof globalThis.__MIAS_MENU_SNAPSHOT__ !== 'function') throw new Error('Original command-count request is required');
+  const categories = await globalThis.__MIAS_MENU_SNAPSHOT__(sock, msg);
+  const count = categories.reduce((sum, cat) => sum + cat.cmds.length, 0);
   const prefix = _getPrefix();
   const ver    = _getVersion();
   const text = [
