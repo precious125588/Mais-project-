@@ -1,6 +1,61 @@
 // Node-hosted menu helpers. No sockets, sessions, timers or startup side effects.
 export const REMOVED_MENU_CATEGORIES = new Set(['GAMES', 'TEXTMAKER', 'STALK', 'LOGO', 'FUN', 'INTELLIGENCE', 'ANIMATION', 'TTS', 'UTILITY']);
-const DISPATCHER_REMOVED = new Set(['GAMES', 'TEXTMAKER', 'STALK', 'LOGO', 'FUN']);
+
+// Menu-only selections. These never change registration, authorization or handlers.
+export const SEARCH_MENU_EXCLUSIONS = new Set(`
+apksearch applemusic basketball berita-antara berita-cnbc berita-cnn berita-detik
+berita-kompas berita-liputan6 berita-republika berita-tempo berita-tribun berita-viva
+igsearch imdbsearch nik recommend scsearch search-apkpure search-applemusic
+search-bukalapak search-canva search-capcut search-font search-deezer search-gimage
+search-font8 search-github search-google search-gnews search-instagram search-islamqa
+search-jkt48 search-lirik search-npm search-pinterest search-playstore search-reddit
+search-scholar search-shopee search-soundcloud search-spotify search-tokopedia
+search-tiktok search-stickerwa search-twitter search-wallpaper search-wikipedia
+search-wiktionary search-youtube search-ytmusic sportsnews spotisearch telegramchan
+tiksearch trending ud trending2 wagroupsearch wallpaper
+`.trim().split(/\s+/));
+// "apple music" is an existing display label for the registered applemusic name.
+export const MENU_DISPLAY_LABELS = Object.freeze({ 'apple music': 'applemusic' });
+export const TOOLS_MENU_EXCLUSIONS = new Set(`
+acutetext alightmotion allstyles artoid brokenlink circlednegtext circledtext
+cjkthaitext codecompile currency curvy1text curvy2text curvy3text dbase decfile
+detectlanguage dnslookup ebase emojidecrypt emojiencrypt emojigif emojimix encfile
+enhance3 entoid faceswap fauxcyrillic fauxethiopic fdroid fullwidthtext getfile
+hdvideo2 hostcheck html2img htmlencode htmlencrypt idtoen img2qr jatoid jsobfuscate
+kotoid mathbolditalic mathboldscript mathboldtext mathdoublestruck mathfraktur
+mathmonospace mathsansbold mathsansbolditalic mathsansitalic mathsanstext nikparse
+nsfw-check ocr parenthesized price reencode removebg2 removebg removebg3 removevocal
+reversedtext rockdotstext sendemail setjs skip-adlinksumo smallcapstext spamngl
+squarednegtext squaredtext ssweb strokedtext subdomain-finder subscripttext
+superscripttext sync syncstatus syntaxcheck tagtext textgif textimage textmp4
+tiktok-earnings tiktok-hashtags tktranscript trackip translate trt truecaller
+tttranscript upload-nx upscale2 upscale3 upscale4 upscale5 upscale6 usernamegen
+uuid vcc vcfcast vcfread virtual-number virtual-number2 webinfo webphishing
+webtozip whatsmusic winrate-mlbb wink yt-summarize yt-summarize2 yt-transcribe
+`.trim().split(/\s+/));
+export function menuExclusionReport(commands, aliases = new Map()) {
+  const resolve = name => {
+    const key = MENU_DISPLAY_LABELS[name] || name;
+    const entry = commands.get(key);
+    const canonical = String(entry?.canonical || aliases.get(key) || key).toLowerCase();
+    return commands.has(canonical) ? canonical : null;
+  };
+  const report = {};
+  for (const [label, selection] of [['search', SEARCH_MENU_EXCLUSIONS], ['tools', TOOLS_MENU_EXCLUSIONS]]) {
+    report[label] = { matched: [], unmatched: [], mappings: [] };
+    for (const name of selection) {
+      const canonical = resolve(name);
+      if (!canonical) report[label].unmatched.push(name);
+      else { report[label].matched.push(name); report[label].mappings.push({ selected: name, canonical }); }
+    }
+  }
+  return report;
+}
+function menuHiddenCanonicals(commands, aliases) {
+  const report = menuExclusionReport(commands, aliases);
+  return new Set([...report.search.mappings, ...report.tools.mappings].map(item => item.canonical));
+}
+
 // Presentation-only labels; API/command metadata and handlers stay untouched.
 const LEGACY_LABELS = {
   GENERAL: 'INFO', MENU: 'INFO', AI: 'INTELLIGENCE', ANIME: 'ANIMATION',
@@ -40,7 +95,7 @@ export const ORIGINAL_PHASE1_QUOTES = Object.freeze([
   'Choose relationships where honesty does not have to compete with comfort.',
   'The future improves every time you finish one useful thing today.',
 ]);
-const CATEGORY_ALIASES = { GAME: 'GAMES', STALKER: 'STALK', GROUPS: 'GROUP', DOWNLOADS: 'DOWNLOAD', DL: 'DOWNLOAD', MAIN: 'INFO', SYSTEM: 'INFO', SETTING: 'SETTINGS' };
+const CATEGORY_ALIASES = { GAME: 'GAMES', STALKER: 'STALK', GROUPS: 'GROUP', TOOL: 'TOOLS', DOWNLOADS: 'DOWNLOAD', DL: 'DOWNLOAD', MAIN: 'INFO', SYSTEM: 'INFO', SETTING: 'SETTINGS' };
 export function normalizeMenuCategory(value) {
   const key = String(value || '').trim().toUpperCase().replace(/^CAT_/, '');
   return LEGACY_LABELS[key] || CATEGORY_ALIASES[key] || key;
@@ -80,9 +135,11 @@ export function canonicalMenuEntries(commands, aliases = new Map(), categories =
     }
   }
   const unique = new Map();
+  const hidden = menuHiddenCanonicals(commands, aliases);
   for (const [name, entry] of commands) {
     if (!isMenuEntryVisible(name, entry, context)) continue;
     const canonical = String(entry.canonical || aliases.get(name) || name).toLowerCase();
+    if (hidden.has(canonical) && !['tg-sticker', 'time'].includes(canonical)) continue;
     // A deleted canonical must not be advertised by a dangling alias.
     const primary = commands.get(canonical);
     if (!isMenuEntryVisible(canonical, primary, context)) continue;
@@ -119,12 +176,11 @@ export function resolveMenuCategory(args, categories) {
   return matches.length === 1 ? matches[0] : null;
 }
 export function formatMenuCategory(cat) {
-  // Premium black-and-gold layout: unicode rules only, no emoji anywhere.
-  return ['────────────────────', '', '*' + String(cat.name).toUpperCase() + '*  (' + cat.cmds.length + ')', '', ...cat.cmds.map(name => '± ' + boldCommand(name)), '', '────────────────────'].join('\n');
+  return ['*' + String(cat.name).toUpperCase() + '*  (' + cat.cmds.length + ')',
+    ...cat.cmds.map(name => '± ' + boldCommand(name))].join('\n');
 }
 export function quoteSection(quote) {
-  // Quote block from the bot's own collection — no emoji decoration.
-  return '────────────────────\n\n\n> _"' + String(quote ?? '') + '"_\n\n\n';
+  return '> _"' + String(quote ?? '') + '"_\n\n';
 }
 export function createMenuQuoteSelector(getQuotes, random = Math.random) {
   const previous = new Map();
@@ -143,62 +199,38 @@ export function createMenuQuoteSelector(getQuotes, random = Math.random) {
   };
 }
 export const MENU_REACTIONS = Object.freeze({ MAIN: '📋', ALL: '🏷️', INTELLIGENCE: '🤖', ANIMATION: '🍥', DOWNLOAD: '📥', GROUP: '👥', AUDIO: '🎵', TOOLS: '🔧', OWNER: '🔐', SETTINGS: '⚙️', CONFIG: '🎛️', CREATOR: '👑', CONVERT: '🔄', DEBUG: '🐛', STATUS: '🎬', INFO: '📊', MEDIA: '🖼️', MISC: '📁', SEARCH: '🔍', SESSION: '🔑', TTS: '🔊', UTILITY: '🛠️', WHATSAPP: '📱', AI: '🤖', ANIME: '🍥', ADULT: '🔞', HENTAI: '❤️‍🔥', NSFW: '🚨', NEXRAY: '⚡', 'NEXRAY-CANVAS': '🎴' });
-const extraReactions = new Map();
-// Every supported menu command reacts with exactly one emoji: 💔.
-// The reaction is a message reaction, not menu text, so it is the only emoji
-// that may appear around a menu. MENU_REACTIONS is kept for compatibility.
+// Reactions are separate from menu text. Main/all retain the requested 💔;
+// category requests use their existing supported category-specific reactions.
 export function menuReaction(category) {
-  void category;
-  return '\uD83D\uDC94';
+  const raw = String(category || '').toUpperCase();
+  if (!raw || raw === 'MAIN' || raw === 'ALL') return '\uD83D\uDC94';
+  return MENU_REACTIONS[normalizeMenuCategory(raw)] || '\uD83D\uDC94';
 }
-export function installMenuCategoryPolicy(commands, aliases, categories, legacyNames = []) {
-  // Keep the pre-existing dispatcher policy unchanged. Renaming a legacy
-  // presentation label must NEVER newly disable its command implementations.
-  const policyCategory = value => {
-    const key = String(value || '').trim().toUpperCase().replace(/^CAT_/, '');
-    return CATEGORY_ALIASES[key] || key;
-  };
-  const shared = new Set();
-  const candidates = new Set(legacyNames);
-  for (const cat of categories) {
-    const removed = DISPATCHER_REMOVED.has(policyCategory(cat.name));
-    for (const name of cat.cmds || []) {
-      const key = String(name).toLowerCase();
-      const canonical = String(commands.get(key)?.canonical || aliases.get(key) || key).toLowerCase();
-      (removed ? candidates : shared).add(canonical);
-      if (removed) candidates.add(key);
-    }
-  }
-  for (const [name, entry] of commands) {
-    if (DISPATCHER_REMOVED.has(policyCategory(entry?.category))) {
-      candidates.add(name); candidates.add(String(entry?.canonical || aliases.get(name) || name).toLowerCase());
-    }
-  }
-  for (const name of shared) candidates.delete(name);
-  const denied = (name, entry) => {
-    const key = String(name).toLowerCase();
-    const canonical = String(entry?.canonical || aliases.get(key) || key).toLowerCase();
-    return !shared.has(canonical) && (candidates.has(key) || candidates.has(canonical) || DISPATCHER_REMOVED.has(policyCategory(entry?.category)));
-  };
+export function installMenuCategoryPolicy(commands, aliases, categories, legacyNames = [], isDisabled = () => false) {
+  // Category removal is presentation-only. Never delete handlers or alias maps.
+  void legacyNames;
   const removed = new Set(), ambiguous = new Set();
-  function clean() {
-    for (const [name, entry] of commands) {
-      const canonical = String(entry?.canonical || aliases.get(name) || name).toLowerCase();
-      if (denied(name, entry)) { candidates.add(name); candidates.add(canonical); removed.add(canonical); commands.delete(name); aliases.delete(name); }
-      else if (shared.has(canonical) && DISPATCHER_REMOVED.has(policyCategory(entry?.category))) ambiguous.add(canonical);
-    }
-    for (const [alias, canonical] of aliases) if (denied(alias, commands.get(alias)) || candidates.has(canonical) && !shared.has(canonical)) { commands.delete(alias); aliases.delete(alias); }
-    categories.splice(0, categories.length, ...categories.filter(cat => !DISPATCHER_REMOVED.has(policyCategory(cat.name))));
-    for (const cat of categories) cat.cmds = (cat.cmds || []).filter(name => !denied(name, commands.get(name)));
-    return { removed: [...removed].sort(), ambiguous: [...ambiguous].sort() };
-  }
+  const denied = () => false;
   const originalSet = commands.set.bind(commands);
   commands.set = function(name, entry) {
-    if (denied(name, entry)) { candidates.add(String(name).toLowerCase()); candidates.add(String(entry?.canonical || name).toLowerCase()); removed.add(String(entry?.canonical || name).toLowerCase()); aliases.delete(name); return commands; }
+    if (isDisabled(name)) entry = { ...entry, disabled: true, enabled: false };
     return originalSet(name, entry);
   };
+  function clean() {
+    for (const cat of categories) if (REMOVED_MENU_CATEGORIES.has(normalizeMenuCategory(cat.name))) removed.add(cat.name);
+    categories.splice(0, categories.length, ...categories.filter(cat => !REMOVED_MENU_CATEGORIES.has(normalizeMenuCategory(cat.name))));
+    return { removed: [...removed].sort(), ambiguous: [...ambiguous].sort(), exclusions: menuExclusionReport(commands, aliases) };
+  }
   clean();
   return { denied, clean, removed, ambiguous };
+}
+// Legacy UI identifiers resolve into the same premium renderer, never a static list.
+export async function forwardPremiumMenu(sock, jid, msg, args = []) {
+  if (typeof globalThis.__MIAS_PREMIUM_MENU__ !== 'function') throw new Error('Command registry is not ready; menu unavailable');
+  if (!msg?.key?.remoteJid || !msg.key.id || msg.key.remoteJid !== jid) throw new Error('Original menu request is required');
+  const categoryAliases = { cat_system: 'info', cat_dl: 'download', cat_groups: 'group' };
+  const routed = args.map(value => categoryAliases[value] || String(value).replace(/^cat_/, ''));
+  return globalThis.__MIAS_PREMIUM_MENU__(sock, msg, routed, false);
 }
 // Classify explicit delivery rejections separately from unavailable pictures.
 export function isCaptionLimitError(error) {
