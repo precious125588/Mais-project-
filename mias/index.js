@@ -7206,6 +7206,22 @@ const DISABLED_COMMANDS = new Set([
   "animelib", "animelibrefresh", "bcheck", "btnmenu", "buttonsmode",
   "chatbotscope", "debug", "debugclear", "creatoroff", "ghostmode", "enhance2",
   "regionalindicator", "mathboldfraktur", "invertedtext",
+  // ── Owner-selected permanent disable list (31) — added 2026-10-16 ──
+  // DOWNLOAD (4)
+  "doods", "dl", "igstory", "mlskin-dl",
+  // OWNER (13)
+  "flowmenu", "listmenu", "listsetcmd", "listui", "safemode", "setcreator",
+  "setcmdaliasv2", "setvip", "slowmode", "smartmenu", "textmenu", "togglemenu",
+  "viplist",
+  // SEARCH (1)
+  "ytmonetize",
+  // SETTINGS (1)
+  "sfwddest",
+  // TOOLS (8)
+  "blackpinklogo", "flagtext", "galaxywallpaper", "logomaker", "sandsummer",
+  "ttp2", "yttranscript", "zhtoid",
+  // WHATSAPP (4)
+  "channelreact", "channelupdate", "channelstats", "blocked",
 ]);
 
 // Duplicate downloader names folded into their canonical parent. Only names
@@ -8581,8 +8597,15 @@ function buildMenu(jid, senderName, sender, context = {}) {
   try { host = String(detectHostEnvironment().platform || "UNKNOWN").toUpperCase(); } catch {}
   const rule = "────────────────────";
 
+  const ruleWidth = rule.length; // divider width = reference line width
+  const centerLine = (txt) => {
+    const w = [...String(txt)].length;
+    const pad = Math.max(0, Math.floor((ruleWidth - w) / 2));
+    return " ".repeat(pad) + txt;
+  };
   let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
-  t += "*BOT OWNER*\n𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n";
+  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n";
+  t += "𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
   t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
@@ -8593,15 +8616,32 @@ function buildMenu(jid, senderName, sender, context = {}) {
   t += "\n\n" + rule + "\nPOWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x";
   return t;
 }
+// P4 fix: cache downloaded menu images for 10 minutes so .menu/.allmenu and
+// category menus do not re-download the same cover on every single request.
+const _menuPicCache = new Map(); // url -> { buf, exp }
+function _menuPicCached(key) {
+  const hit = _menuPicCache.get(key);
+  if (hit && hit.exp > Date.now()) return hit.buf;
+  if (hit) _menuPicCache.delete(key);
+  return null;
+}
+function _menuPicStore(key, buf) {
+  if (_menuPicCache.size > 24) _menuPicCache.delete(_menuPicCache.keys().next().value);
+  _menuPicCache.set(key, { buf, exp: Date.now() + 10 * 60 * 1000 });
+}
 function menuPictureSources(sock, jid) {
   const scope = jid.endsWith('@g.us') ? jid : 'global_cuz';
   const custom = getSettings(scope)?.__cuz?.botProfile;
   const downloadImage = async url => {
     if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
+    const cached = _menuPicCached(url);
+    if (cached) return cached;
     const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 8000, maxContentLength: 8 * 1024 * 1024 });
     const buf = Buffer.from(response.data || []);
     const signature = buf.subarray(0, 4).toString('hex');
-    return buf.length > 500 && (signature.startsWith('ffd8') || signature === '89504e47' || signature === '52494646') ? buf : null;
+    const ok = buf.length > 500 && (signature.startsWith('ffd8') || signature === '89504e47' || signature === '52494646') ? buf : null;
+    if (ok) _menuPicStore(url, ok);
+    return ok;
   };
   return [
     async () => downloadImage(custom || _BOT_PIC_FALLBACKS[0]),

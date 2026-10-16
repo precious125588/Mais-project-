@@ -199,14 +199,44 @@ async function tikwmInfo(videoUrl) {
     cover: abs(v.cover || v.origin_cover), digg: v.digg_count || 0, plays: v.play_count || 0,
   };
 }
-async function resolveTikTok(videoUrl) {
-  try { const i = await tikwmInfo(videoUrl); if (i) return i; } catch {}
+// P6 fix: ordered provider chain with per-provider classification. One failed
+// source never blocks the next; each provider is wrapped so a timeout/HTTP
+// error/parse failure is logged (not swallowed) and the chain continues.
+async function _tryProvider(label, fn) {
   try {
+    const out = await fn();
+    if (out) return out;
+    console.log('[anime-edits][resolve] ' + label + ' returned no media');
+  } catch (e) {
+    console.log('[anime-edits][resolve] ' + label + ' failed:', (e && e.message) || e);
+  }
+  return null;
+}
+async function resolveTikTok(videoUrl) {
+  // 1) tikwm (primary)
+  let i = await _tryProvider('tikwm', () => tikwmInfo(videoUrl));
+  if (i) return i;
+  // 2) giftedtech
+  i = await _tryProvider('giftedtech', async () => {
     const d = await getJson('https://api.giftedtech.co.ke/api/download/tiktok?apikey=gifted&url=' + encodeURIComponent(videoUrl));
     const r = d && (d.result || d.data);
     const v = r && (r.video || r.nowm || r.no_watermark);
     if (v) return { title: r.title || 'TikTok edit', author: '', play: v, hd: r.hd || v, music: r.music || r.audio, cover: r.cover || r.thumbnail, digg: 0, plays: 0 };
-  } catch {}
+    return null;
+  });
+  if (i) return i;
+  // 3) tikwm (no-hd variant) — same host, lighter endpoint; still documented
+  i = await _tryProvider('tikwm-lite', async () => {
+    const d = await getJson('https://www.tikwm.com/api/?url=' + encodeURIComponent(videoUrl));
+    const v = d && d.data;
+    if (v && v.play) {
+      const host = 'https://www.tikwm.com';
+      const abs = u => (u && u.startsWith('/') ? host + u : u);
+      return { title: v.title || 'TikTok edit', author: (v.author && (v.author.unique_id || v.author.nickname)) || '', play: abs(v.play), hd: abs(v.hdplay || v.play), music: abs(v.music), cover: abs(v.cover || v.origin_cover), digg: v.digg_count || 0, plays: v.play_count || 0 };
+    }
+    return null;
+  });
+  if (i) return i;
   return null;
 }
 async function tikwmUserPosts(uniqueId) {
