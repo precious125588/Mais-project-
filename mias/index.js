@@ -1134,7 +1134,7 @@ function getRuntimeDebugState() {
     ownerConfigured: !!((CONFIG?.OWNER_NUMBER || "").replace(/[^0-9]/g, "")),
     ownerNumber: ownerNum || null,
     ownerJid: ownerJid || null,
-    workMode: ownerSettings?.workMode || "public",
+    workMode: ownerSettings?.workMode || "private",
     privateMode: !!ownerSettings?.privateMode,
     // Menus are intentionally text-only. Legacy button settings are ignored
     // so a persisted old preference cannot re-enable interactive payloads.
@@ -1685,7 +1685,8 @@ try {
 function defaultSettings() {
   return {
     adultMode: false, privateMode: false, antiLink: false,
-    welcome: false, goodbye: false, adminOnly: false, autoReact: false,
+    // autoReact defaults ON (owner request) — .autoreact off still disables it.
+    welcome: false, goodbye: false, adminOnly: false, autoReact: true,
     stickerWm: false, antiSpam: false, antiDelete: false,
     antiEdit: false, antiBad: false, antiSticker: false,
     antiStatus: false, antiRaid: false,
@@ -1724,8 +1725,11 @@ function defaultSettings() {
     //                 (which gates the per-command reactions only).
     // reactMeOwner  : when ON, every owner message is reacted with 👑
     //                 (overrides random emoji for the owner).
-    autoReactMsgs: false,
+    autoReactMsgs: true,   // default ON (owner request): react to ordinary messages too
     reactMeOwner: false,
+    // Owner gateways (settings UI 40.x / 41.x). Default ON = previous behavior.
+    autoSendStatus: true,  // "send pls"/"share pls" replies to the bot's status
+    autoSendAza: true,     // prefixless `aza` auto account-info reply
     autoTag: false,         // auto-hidetag all members on every group message
     aiTag: false,           // show WhatsApp AI ✦ badge on every bot reply
     // ── richMode ──────────────────────────────────────────────────────
@@ -3501,7 +3505,15 @@ END:VCARD`;
             // [v36 STEP 6] Status auto-send keywords
             const _t = String(body || "").toLowerCase().trim();
             const _isStatusSendKey = /^([.\/!#]?send|send pls|send please|share|send boss|send abeg|please send|pls send|send me|send send pls|share pls|share me|send bby|share boss|pls share|share this|send it|send this)\b/i.test(_t);
-            if (ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && _isStatusSendKey) {
+            // Owner gateway (settings 40.x): when autoSendStatus is OFF, other
+            // people's "send pls"/"share pls" replies to the bot's status are
+            // ignored. Owner/sudo keep working so the toggle itself stays usable.
+            const _autoSendAllowed = (() => { try {
+              const _sender = isGroup(msg) ? (msg.key.participant || msg.participant) : msg.key.remoteJid;
+              if (msg.key.fromMe || isOwner(_sender) || isSudo(_sender)) return true;
+              return getSettings(getOwnerJid()).autoSendStatus !== false;
+            } catch { return true; } })();
+            if (ctx?.quotedMessage && ctx?.remoteJid === "status@broadcast" && _isStatusSendKey && _autoSendAllowed) {
               if (typeof globalThis.V36_STATUS_SEND === "function") {
                 return globalThis.V36_STATUS_SEND(sock, msg, ctx.quotedMessage);
               }
@@ -4984,10 +4996,10 @@ function getConfiguredOwnerNumber() {
   return (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") || _cleanNum(_botJid || "") || "";
 }
 const getOwnerJid = () => `${getConfiguredOwnerNumber() || CREATOR_NUMBER}@s.whatsapp.net`;
-function setWorkModeState(s, mode = "public") {
+function setWorkModeState(s, mode = "private") { // private is the default bot mode
   const normalized = ["public", "private", "only_group", "inbox"].includes(String(mode || "").toLowerCase())
     ? String(mode).toLowerCase()
-    : "public";
+    : "private";
   s.workMode = normalized;
   s.privateMode = normalized === "private";
   return s;
@@ -7234,13 +7246,26 @@ const DISABLED_COMMANDS = new Set([
   "gofile2","gofile-dl","likee-dl","leaktube","mediafire-dl","mega-dl","pinterest-dl",
   "soundcloud-dl","spotify-dl","threads-dl","twit-dl","video-dl",
   // GROUP (3)
-  "gcstory","gcstatus","gstatus",
+  // gcstory/gcstatus/gstatus are NO LONGER disabled — they now live as hidden
+  // aliases of the canonical `groupstatus` parent (see the alias fold below).
+  "postgc",
   // OWNER (3; setcmdaliasv2 already listed above)
   "debugtail","welcomedm",
   // TOOLS (1)
   "flag3dtext",
   // WHATSAPP (1)
   "channelinfo",
+  // ── User-requested disable list (2026-10-16, batch 2). Same contract:
+  //    blocked at dispatch, hidden from every menu, excluded from every
+  //    command count, aliases cannot bypass — handlers left untouched. ──
+  "ig-dl","ig-dl2","igdl2",            // instagram aliases folded away
+  "dropcase",                          // runtime command removal
+  "eval","shell","sysinfo",            // owner debug eval (incl. its aliases)
+  "run","exec",                        // code runner
+  "getcmd",                            // source dumper
+  "listeval","removeval",              // eval-session management
+  "unvip","removevip","revokevip",     // VIP revocation
+  "writefile",                           // server file writer
 ]);
 
 // Duplicate downloader names folded into their canonical parent. Only names
@@ -8945,6 +8970,17 @@ function buildSettingsMenu(jid) {
 ┃ 39.2 ᴘᴀᴜ𝘀ᴇ ᴏɴ ᴘʀɪᴠᴀᴛᴇ  ${s.protectAlways === false ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
+╭━━❖ *𝗔𝘂𝘁𝗼 𝗦𝗲𝗻𝗱 𝗦𝘁𝗮𝘁𝘂𝘀* ❖━━╮
+┃ 40.1 ᴇɴᴀʙʟᴇ  ${s.autoSendStatus !== false ? "✅" : ""}
+┃ 40.2 ᴅɪꜱᴀʙʟᴇ  ${s.autoSendStatus === false ? "✅" : ""}
+┃ _\"ꜱᴇɴᴅ ᴘʟꜱ\"/\"ꜱʜᴀʀᴇ ᴘʟꜱ\" ʀᴇᴘʟɪᴇꜱ ᴛᴏ ʏᴏᴜʀ ꜱᴛᴀᴛᴜꜱ_
+╰━━━━━━━━━━━╯
+╭━━❖ *𝗔𝘂𝘁𝗼 𝗦𝗲𝗻𝗱 𝗔𝘇𝗮* ❖━━╮
+┃ 41.1 ᴇɴᴀʙʟᴇ  ${s.autoSendAza !== false ? "✅" : ""}
+┃ 41.2 ᴅɪꜱᴀʙʟᴇ  ${s.autoSendAza === false ? "✅" : ""}
+┃ _ᴘʀᴇꜰɪxʟᴇꜱꜱ 'aza' ᴀᴜᴛᴏ ʀᴇᴘʟʏ_
+╰━━━━━━━━━━━╯
+
 _Reply: *<section>.<option>* — e.g. *1.1* or *7.2*_
 _Reply *0* to close settings_`;
 }
@@ -9044,6 +9080,10 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "38.2": s => { s.statusVcard = false; return "🚫 Status vCard: PERMANENTLY OFF — removed."; },
   "39.1": s => { s.protectAlways = true;  return "✅ Group Protections: ALWAYS ON (they keep working in private mode)."; },
   "39.2": s => { s.protectAlways = false; return "❌ Group Protections: paused while the bot is in private mode."; },
+  "40.1": s => { s.autoSendStatus = true;  return "✅ Auto Send Status: ENABLED — \"send pls\"/\"share pls\" replies to your status will be served."; },
+  "40.2": s => { s.autoSendStatus = false; return "❌ Auto Send Status: DISABLED — status send-requests are ignored (owner/sudo excepted)."; },
+  "41.1": s => { s.autoSendAza = true;  return "✅ Auto Send Aza: ENABLED — prefixless aza replies for everyone."; },
+  "41.2": s => { s.autoSendAza = false; return "❌ Auto Send Aza: DISABLED — prefixless aza works for owner/sudo only."; },
 };
 
 // ── v38: PERSISTENCE ──────────────────────────────────────────────────────
@@ -31204,6 +31244,15 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
   // canvas with a blurred version of the image as background — exactly like
   // levanter.site/profile-picture. setpp keeps its normal crop behaviour.
   const __miasFullDpHandler = async (sock, msg, args) => {
+    // HARD GUARD: fulldp changes the BOT's own profile picture, so it is
+    // owner-only — not even sudo/creator users may run it.
+    try {
+      const _fdSender = getSender(msg);
+      if (!(msg.key.fromMe || isOwner(_fdSender))) {
+        await sendReply(sock, msg, "🔒 *Owner only.* Only the bot owner can change the full profile picture.");
+        return;
+      }
+    } catch {}
     try { await react(sock, msg, "🌀"); } catch {}
     try {
       const buf = await __miasReadImageBuf(sock, msg, args);
@@ -42388,6 +42437,12 @@ for (const dead of ["setwelcomemsg", "setgoodbyemsg"]) {
 
 // ── AZA: payment info + passport-style picture card ──
 cmd(["aza"], { desc: "Show payment account info", category: "INFO" }, async (sock, msg) => {
+  // Owner gateway (settings 41.x): when autoSendAza is OFF, the prefixless aza
+  // reply is silenced for everyone except owner/sudo.
+  try {
+    const _sender = getSender(msg);
+    if (!(msg.key.fromMe || isOwner(_sender) || isSudo(_sender)) && getSettings(getOwnerJid()).autoSendAza === false) return;
+  } catch {}
   const _mine = _getAzaFor(msg) || _azaUsers._default || {};
   const bank = _mine.bank || _azaStore.bank || "OPAY";
   const number = _mine.number || _azaStore.number || "9068551055";
