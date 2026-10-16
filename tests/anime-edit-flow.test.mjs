@@ -1,4 +1,5 @@
 import test from "node:test";
+import fs from "node:fs";
 import assert from "node:assert/strict";
 import {
   createAnimeEditFlow,
@@ -29,10 +30,10 @@ test(".Naruto is routed to the remote anime-edit shortcut", () => {
   assert.equal(flow.resolve(parsed.command)?.query, "Naruto");
 });
 
-test("raw anime commands resolve when no prefix is configured", () => {
+test("anime dispatch respects the hardened default prefix when configuration is empty", () => {
   const flow = createAnimeEditFlow({ prefix: "" });
-  const parsed = parseCommand("Naruto", null);
-
+  assert.equal(parseCommand("Naruto", null).isCommand, false);
+  const parsed = parseCommand(".Naruto", null);
   assert.equal(parsed.isCommand, true);
   assert.equal(parsed.command, "naruto");
   assert.equal(flow.resolve(parsed.command)?.slug, "naruto");
@@ -131,12 +132,15 @@ test("configured TikTok source pool contains the supplied shared URLs", () => {
   assert.ok(JJK_HASHTAGS.length >= 2);
 });
 
-test("the supplied vm links remain page-only sources", () => {
+test("configured hashtag pages match the current source fixture and are not direct media", () => {
+  // The old 37 VM URLs were replaced upstream with nine hashtag pages.
+  // Validate the checked-in fixture instead of reviving removed downloader data.
+  const configured = JSON.parse(fs.readFileSync(new URL('../mias/Config/animeSources.json', import.meta.url), 'utf8')).sources;
   const pages = configuredSourcePages("naruto");
-  assert.equal(pages.length, 37);
-  assert.ok(pages.every((url) => /^https:\/\/(?:vm|www)\.tiktok\.com\//i.test(url)));
-  assert.ok(pages.includes("https://vm.tiktok.com/ZS9S4SvHhaF3W-Lgjvi/"));
-  assert.ok(pages.includes("https://vm.tiktok.com/ZS9S4K8sqBvwE-B7mO8/"));
+  assert.ok(configured.length > 0);
+  assert.deepEqual(pages, [...new Set(configured)]);
+  assert.ok(pages.every((url) => /^https:\/\/www\.tiktok\.com\/tag\/[a-z0-9]+$/i.test(url)));
+  assert.deepEqual(configuredSourceVideoUrls("naruto"), []);
 });
 
 test("Naruto rejects plain and AI-style clips without the edit hashtag", () => {

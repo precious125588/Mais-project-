@@ -74,7 +74,7 @@ function ok(cond, name) { if (cond) { pass++; console.log('  PASS ' + name); } e
   const idx = fs.readFileSync(path.join(__dirname, '..', 'mias', 'index.js'), 'utf8');
   ok(idx.includes('renderMemberCard(_wPp, "WELCOME", display'), 'welcome card receives target member display name');
   ok(idx.includes('renderMemberCard(_gPp, "GOODBYE", display'), 'goodbye card receives departing member display name');
-  ok(idx.includes("[SUDO-QUOTE] reply detected"), 'sudo quote diagnostics present in index.js');
+  ok(idx.includes('installSudoCommand') && idx.includes('sudoPending as __sudoPendingMap') && idx.includes('const _sudoPending = __sudoPendingMap;'), 'sudo command delegates to feature module and shares its pending-reply Map');
   ok(/imageMessage\?\.caption/.test(idx), 'sudo handler falls back to quoted imageMessage caption');
   const v24 = fs.readFileSync(path.join(__dirname, '..', 'mias', 'precious-fixes-v24.cjs'), 'utf8');
   ok(v24.includes('[SUDO-QUOTE] handler matched'), 'v24 picker sudo diagnostics present');

@@ -38,8 +38,24 @@ ok('settings menu renders section 38 and 39',
 
 /* ── 3. vCard gating ─────────────────────────────────────────────────── */
 console.log('\n[3] vCard auto-popup');
-ok('vcard send is behind _sendVcard', /if \(_sendVcard\) await sock\.sendMessage\(author, \{ contacts:/.test(idx));
-ok('intro text drops "Save my contact:" when off', /_sendVcard \? `/.test(idx));
+// v39 deliberately superseded v38's opt-in auto-DM. Execute the actual
+// current source block for both toggle values; never restore auto-sends.
+const statusStart = idx.indexOf('const _botSelfJid2 =');
+const statusEnd = idx.indexOf('} catch {}', statusStart);
+const statusBody = idx.slice(statusStart, statusEnd);
+const { AsyncFunction } = { AsyncFunction: Object.getPrototypeOf(async function(){}).constructor };
+let autoSends = 0;
+const runStatus = new AsyncFunction('sock', 'toStandardJid', '_ownerSStatus', 'author', '_cleanNum', '_ownerJStatus', 'CONFIG', statusBody);
+const oldCache = globalThis._statusReplyCache;
+for (const statusVcard of [false, true]) {
+  globalThis._statusReplyCache = new Map();
+  await runStatus({user:{id:'10000@s.whatsapp.net'},sendMessage:async()=>{autoSends++;}}, x=>x,
+    {statusReply:true,statusVcard}, '20000@s.whatsapp.net', x=>String(x).split('@')[0],
+    '10000@s.whatsapp.net', {BOT_NAME:"MIA'S MDX"});
+}
+globalThis._statusReplyCache = oldCache;
+ok('v39 never sends unsolicited viewer vCards with either toggle value', autoSends === 0);
+ok('v39 status-viewer block never sends intro or contact messages', !/sock\.sendMessage/.test(statusBody));
 
 /* ── 4. identity normalisation ───────────────────────────────────────── */
 console.log('\n[4] identity');

@@ -174,9 +174,9 @@ test("Numeric option without pending value refuses waiting-value mode", async ()
 });
 
 test("Pairing client uses WhatsApp Web Chrome fingerprint and has notification debug", async () => {
-  const pairCode = fs.readFileSync("/tmp/repo/pair.js", "utf8");
-  const miasCode = fs.readFileSync("/tmp/repo/mias/index.js", "utf8");
-  const caseCode = fs.readFileSync("/tmp/repo/case.js", "utf8");
+  const pairCode = fs.readFileSync(new URL("../pair.js", import.meta.url), "utf8");
+  const miasCode = fs.readFileSync(new URL("../mias/index.js", import.meta.url), "utf8");
+  const caseCode = fs.readFileSync(new URL("../case.js", import.meta.url), "utf8");
 
   assert.ok(
     pairCode.includes('Browsers.ubuntu("Chrome")') || pairCode.includes('["Ubuntu", "Chrome", "20.0.04"]'),

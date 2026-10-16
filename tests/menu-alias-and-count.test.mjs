@@ -11,25 +11,25 @@ test("Menu & Alias filtering - Registry assigns isAlias and canonical properly",
   // Verify cmd implementation has isAlias logic
   assert.ok(miasIndex.includes("const isAlias = i > 0;"), "cmd() must tag aliases with isAlias = i > 0");
   assert.ok(miasIndex.includes("commands.set(n, { ...opts, handler, canonical, isAlias });"), "cmd() must store canonical and isAlias flag");
-  assert.ok(miasIndex.includes("function getPrimaryCommandCount()"), "getPrimaryCommandCount() must be defined");
+  assert.ok(miasIndex.includes("function getPrimaryCommandCount(context = {})"), "getPrimaryCommandCount() must be defined");
   assert.ok(miasIndex.includes("function isCommandAlias(name)"), "isCommandAlias() must be defined");
-  assert.ok(miasIndex.includes("function getCategoryPrimaryCommands(cat)"), "getCategoryPrimaryCommands() must be defined");
+  assert.ok(miasIndex.includes("function getCategoryPrimaryCommands(cat, context = {})"), "getCategoryPrimaryCommands() must be defined");
 });
 
 test("Menu & Alias filtering - Menus display only primary commands", () => {
   const miasIndex = fs.readFileSync(path.join(ROOT, "mias/index.js"), "utf8");
 
   // buildMenu must use getPrimaryCommandCount
-  assert.ok(miasIndex.includes("const totalCmds = getPrimaryCommandCount();"), "buildMenu must use getPrimaryCommandCount()");
+  assert.ok(miasIndex.includes("const totalCmds = getPrimaryCommandCount(context);"), "buildMenu must use getPrimaryCommandCount()");
 
   // Category counts in buildMenu must use getCategoryPrimaryCommands
-  assert.ok(miasIndex.includes("const count = getCategoryPrimaryCommands(cat).length;"), "buildMenu category count must use primary commands");
+  assert.ok(miasIndex.includes("const count = getCategoryPrimaryCommands(cat, context).length;"), "buildMenu category count must use primary commands");
 
   // .menu <category> must use getCategoryPrimaryCommands
-  assert.ok(miasIndex.includes("const uniq = getCategoryPrimaryCommands(cat);"), ".menu must use getCategoryPrimaryCommands");
+  assert.ok(miasIndex.includes("const uniq = getCategoryPrimaryCommands(cat, context);"), ".menu must use getCategoryPrimaryCommands");
 
   // allmenu must skip aliases
-  assert.ok(miasIndex.includes("canonicalMenuEntries(commands, aliases, MENU_CATEGORIES)"), "allmenu must use centralized unique canonical entries");
+  assert.ok(miasIndex.includes("canonicalMenuEntries(commands, aliases, MENU_CATEGORIES, context)"), "allmenu must use centralized unique canonical entries");
 
   // In DOWNLOAD category of MENU_CATEGORIES, tt and ttdl must not be listed
   const downloadMatch = miasIndex.match(/name:\s*"DOWNLOAD"[^}]+cmds:\s*\[([^\]]+)\]/);

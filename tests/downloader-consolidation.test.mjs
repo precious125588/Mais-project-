@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-const ROOT = "/tmp/repo";
+const ROOT = path.resolve(new URL("..", import.meta.url).pathname);
 
 test("Downloader consolidation - Protected parent commands are intact", () => {
   const miasIndex = fs.readFileSync(path.join(ROOT, "mias/index.js"), "utf8");

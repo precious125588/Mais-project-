@@ -23,8 +23,8 @@ function quoteArray(name) {
 function categoryArray(){const a=source.indexOf('const MENU_CATEGORIES = [');const b=source.indexOf('\n];',a);return vm.runInNewContext(source.slice(a,b+3)+'; MENU_CATEGORIES');}
 const quoteNames=['_HOPE_QUOTES','_MENU_QUOTES_EXTRA','_SAD_QUOTES','_TRUTH_QUOTES'];
 const quotes=quoteNames.flatMap(quoteArray).concat(JSON.parse(fs.readFileSync(path.join(ROOT,'mias/quotes_massive.json'),'utf8')));
-function createHarness({imageFailure=false,reactionFailure=false,sendFailure=false}={}) {
- const commands=new Map(), aliases=new Map(), categories=categoryArray();const settings={adultMode:true,safeMode:false,workMode:'private'};
+function createHarness({imageFailure=false,reactionFailure=false,sendFailure=false,owner=true,creator=true,group=false,admin=false,adultMode=true,safeMode=false,banned=new Set()}={}) {
+ const commands=new Map(), aliases=new Map(), categories=categoryArray();const settings={adultMode,safeMode,workMode:'private'};
  const register=(names,opts={},handler=async()=>{})=>{const list=[].concat(names);for(let i=0;i<list.length;i++){const name=list[i].toLowerCase();commands.set(name,{...opts,canonical:list[0],isAlias:i>0,handler});if(i)aliases.set(name,list[0]);}};
  for(const cat of categories)for(const name of cat.cmds)register(name,{category:cat.name});
  register(['tiktok','tt','ttdl'],{category:'DOWNLOAD'});register(['menu','help','commands','.menu','start'],{category:'INFO'});register(['allmenu','fullmenu'],{category:'INFO'});
@@ -32,11 +32,18 @@ function createHarness({imageFailure=false,reactionFailure=false,sendFailure=fal
  const policy=menu.installMenuCategoryPolicy(commands,aliases,categories,['gitstalk']);
  const sent=[]; const sock={user:{id:'12345:1@s.whatsapp.net'},profilePictureUrl:async jid=>{assert.equal(jid,'12345@s.whatsapp.net');if(imageFailure)throw Error('profile unavailable');return 'https://example.test/profile.jpg';},sendMessage:async(jid,content,options)=>{sent.push({jid,content,options});if(content.react&&reactionFailure)throw Error('reaction failed');if(content.image&&sendFailure)throw Error('image failed');return{key:{id:'out-'+sent.length}};}};
  const msg={key:{remoteJid:'67890@s.whatsapp.net',id:'incoming-1',fromMe:false},pushName:'Mia'};
- const sandbox={...menu,commands,aliases,MENU_CATEGORIES:categories,CONFIG:{PREFIX:'.',VERSION:'5.3.1',BOT_NAME:'𝑴𝑰𝑨𝑺 𝑴𝑫𝑿'},getSettings:()=>settings,getSender:()=>msg.key.remoteJid,_cleanNum:s=>s.split('@')[0],pushNameCache:new Map(),getDisplayName:async()=>msg.pushName,isGroup:()=>false,process:{uptime:()=>125,memoryUsage:()=>({rss:32*1048576})},fmtUptime:()=> '2m 5s',_randomMenuQuoteForUser:menu.createMenuQuoteSelector(()=>quotes),_LOCAL_BOT_PICS:[path.join(ROOT,'mias/assets/allmenu.jpg')],_BOT_PIC_FALLBACKS:['https://example.test/configured.jpg'],fs:{readFileSync:p=>{if(imageFailure)throw Error('local unavailable');return fs.readFileSync(p);}},Buffer,axios:{get:async()=>{if(imageFailure)throw Error('image retrieval failed');return{data:fs.readFileSync(path.join(ROOT,'mias/assets/allmenu.jpg'))};}},react:async(s,m,emoji)=>s.sendMessage(m.key.remoteJid,{react:{text:emoji,key:m.key}}),sendReply:async(s,m,text)=>s.sendMessage(m.key.remoteJid,{text},{quoted:m}),sendMenuSong:async()=>{},Date,Math,Map,Set,String};
+ const sandbox={...menu,commands,aliases,MENU_CATEGORIES:categories,CONFIG:{PREFIX:'.',VERSION:'5.3.1',BOT_NAME:'𝑴𝑰𝑨𝑺 𝑴𝑫𝑿'},getSettings:()=>settings,getSender:()=>msg.key.remoteJid,_cleanNum:s=>s.split('@')[0],pushNameCache:new Map(),getDisplayName:async()=>msg.pushName,isOwner:()=>owner,isCreator:()=>creator,isSudo:()=>false,isSudoIn:()=>false,isGroupAdmin:async()=>admin,RISKY_CMDS:new Set(['risk']),settings:new Map([['67890@s.whatsapp.net_banned',banned]]),isGroup:()=>group,process:{uptime:()=>125,memoryUsage:()=>({rss:32*1048576})},fmtUptime:()=> '2m 5s',_randomMenuQuoteForUser:menu.createMenuQuoteSelector(()=>quotes),_LOCAL_BOT_PICS:[path.join(ROOT,'mias/assets/allmenu.jpg')],_BOT_PIC_FALLBACKS:['https://example.test/configured.jpg'],fs:{readFileSync:p=>{if(imageFailure)throw Error('local unavailable');return fs.readFileSync(p);}},Buffer,axios:{get:async()=>{if(imageFailure)throw Error('image retrieval failed');return{data:fs.readFileSync(path.join(ROOT,'mias/assets/allmenu.jpg'))};}},react:async(s,m,emoji)=>s.sendMessage(m.key.remoteJid,{react:{text:emoji,key:m.key}}),sendReply:async(s,m,text)=>s.sendMessage(m.key.remoteJid,{text},{quoted:m}),sendMenuSong:async()=>{},Date,Math,Map,Set,String};
  vm.createContext(sandbox);
- const funcs=['getPrimaryCommandCount','getCategoryPrimaryCommands','buildMenu','menuPictureSources','sendPremiumMenu'].map(functionSource).join('\n').replace('function sendPremiumMenu(', 'async function sendPremiumMenu(');
+ const funcs=['getPrimaryCommandCount','getCategoryPrimaryCommands','buildMenu','menuPictureSources','menuVisibilityContext','sendPremiumMenu'].map(functionSource).join('\n').replace('function sendPremiumMenu(', 'async function sendPremiumMenu(').replace('function menuVisibilityContext(', 'async function menuVisibilityContext(');
  // functionSource starts at "function" and retains async for inner awaits via prefix.
  vm.runInContext(funcs,sandbox);
+ // Execute the actual .menu/.allmenu registrations, not test replacement handlers.
+ sandbox.cmd=register;
+ for (const command of ['allmenu','menu']) {
+   const start=source.indexOf("cmd(['"+command+"'");
+   const end=source.indexOf('\n});',start)+4;
+   vm.runInContext(source.slice(start,end),sandbox);
+ }
  return {sock,msg,sent,commands,aliases,categories,policy,sandbox,run:(args=[],all=false)=>sandbox.sendPremiumMenu(sock,msg,args,all)};
 }
 function image(h){return h.sent.find(x=>x.content.image)?.content;}
@@ -49,8 +56,137 @@ test('case-insensitive and unambiguous category aliases; invalid and removed req
 test('reaction errors do not prevent menu; image lookup/send failures exhaust fallbacks then safe text',async()=>{const r=createHarness({reactionFailure:true});await r.run();assert.ok(image(r));const f=createHarness({imageFailure:true});await f.run();assert.equal(image(f),undefined);assert.ok(f.sent.some(x=>x.content.text?.includes('𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x')));const s=createHarness({sendFailure:true});await s.run([],true);assert.ok(s.sent.some(x=>x.content.text?.includes('± ')));});
 test('configured picture failure uses own profile then verified local fallback',async()=>{const h=createHarness();let count=0;h.sandbox.axios.get=async()=>{if(++count<=2)throw Error('unavailable');return {data:Buffer.alloc(0)}};await h.run();assert.ok(Buffer.isBuffer(image(h).image));assert.deepEqual(image(h).image,fs.readFileSync(path.join(ROOT,'mias/assets/allmenu.jpg')));});
 test('quote selector draws from complete old/new pool and never repeats at a bag boundary',()=>{const q=menu.createMenuQuoteSelector(()=>['old','new','old'],()=>0);assert.deepEqual([q('u'),q('u'),q('u'),q('u')],['old','new','old','new']);const bad=menu.createMenuQuoteSelector(()=>['old','new'],()=>{throw Error('rng')});assert.equal(bad('u'),'old');assert.equal(bad('u'),'new');for(const name of ['menu','allmenu']){const h=createHarness();let prev;for(let i=0;i<30;i++){const cur=h.sandbox._randomMenuQuoteForUser(name);assert.notEqual(cur,prev);assert.ok(quotes.includes(cur));prev=cur;}}});
-test('long image caption is attempted intact and not split merely for Read more',async()=>{const sent=[];const msg={key:{id:'in',remoteJid:'chat'}};const sock={sendMessage:async(j,p)=>sent.push(p)};const text=menu.quoteSection('old')+'± 𝐏𝐈𝐍𝐆\n'.repeat(6000);await menu.deliverMenuCaption(sock,msg,text,[async()=>Buffer.from('image')],async()=>{throw Error('unnecessary text')});assert.equal(sent.length,1);assert.equal(sent[0].caption,text);assert.ok(!sent[0].caption.includes('Read more'));});
+test('oversized image caption is bounded proactively without losing content',async()=>{const sent=[];const msg={key:{id:'in',remoteJid:'chat'}};const sock={sendMessage:async(j,p)=>sent.push(p)};const text=menu.quoteSection('old')+'± 𝐏𝐈𝐍𝐆\n'.repeat(6000);await menu.deliverMenuCaption(sock,msg,text,[async()=>Buffer.from('image')],async(s,m,t)=>sent.push({text:t}));assert.ok(sent.length>1);assert.ok(sent[0].caption.length<=16000);assert.equal(sent.map(p=>p.caption||p.text).join(''),text);assert.ok(!sent[0].caption.includes('Read more'));});
 test('explicit caption rejection uses image continuation without silent truncation',async()=>{const sent=[];const msg={key:{id:'in',remoteJid:'chat'}};const sock={sendMessage:async(j,p)=>{if(p.caption.length>2048)throw Error('caption exceeds maximum length');sent.push(p)}};const text=menu.quoteSection('old')+'± 𝐏𝐈𝐍𝐆\n'.repeat(900);await menu.deliverMenuCaption(sock,msg,text,[async()=>Buffer.from('image')],async(s,m,t)=>sent.push({text:t}));assert.equal(sent.filter(x=>x.image).length,1);assert.equal(sent.map(x=>x.caption||x.text).join(''),text);});
 test('cleanup blocks aliases, future registrations and removes only five categories; shared helpers survive',()=>{const commands=new Map(),aliases=new Map();const retained=async()=>42;const categories=[{name:'FUN',cmds:['shared','joke']},{name:'TOOLS',cmds:['shared']},{name:'DEBUG',cmds:['debug']}];commands.set('shared',{canonical:'shared',category:'FUN',handler:retained});commands.set('joke',{canonical:'joke',category:'FUN',handler:retained});commands.set('jokes',{canonical:'joke',isAlias:true,category:'FUN',handler:retained});aliases.set('jokes','joke');commands.set('debug',{category:'DEBUG',handler:retained});const policy=menu.installMenuCategoryPolicy(commands,aliases,categories);assert.equal(commands.get('shared').handler,retained);assert.ok(commands.has('debug'));assert.ok(!commands.has('joke'));assert.ok(!commands.has('jokes'));assert.ok(!aliases.has('jokes'));commands.set('joke',{category:'TOOLS',handler:retained});assert.ok(!commands.has('joke'));commands.set('secretGame',{category:'GAMES',handler:retained});assert.ok(!commands.has('secretGame'));assert.deepEqual(policy.clean().ambiguous,['shared']);assert.deepEqual(categories.map(c=>c.name),['TOOLS','DEBUG']);assert.equal(menu.canonicalMenuEntries(commands,aliases,categories).length,2);});
 test('retained aliases resolve to same handler, unique totals sum across categories',async()=>{const h=createHarness();assert.equal(h.commands.get('tt').handler,h.commands.get('tiktok').handler);assert.equal(h.aliases.get('tt'),'tiktok');const entries=menu.canonicalMenuEntries(h.commands,h.aliases,h.categories);const cats=menu.activeMenuCategories(h.commands,h.aliases,h.categories);assert.equal(entries.length,cats.reduce((n,c)=>n+c.cmds.length,0));assert.equal(h.sandbox.getPrimaryCommandCount(),entries.length);assert.equal(await h.commands.get('tt').handler(),undefined);});
 test('legacy aliases are denied before dispatch and obsolete category help blocks are absent',()=>{const s=fs.readFileSync(path.join(ROOT,'case.js'),'utf8');assert.match(s,/__removedLegacyMenus\.has\(command\)/);for(const n of ['gitprofile','instastalk','tiktoklookup','jokes','truthdare','compliment','ship'])assert.ok(s.includes('"'+n+'"'));for(const label of ['FUN MENU','LOGO & EPHOTO','GAME MENU'])assert.ok(!s.includes(label));assert.ok(!s.includes('"poem","quote"'));});
+
+test('actual menu and allmenu registrations route once, with exact branding and footer', async()=>{
+ const h=createHarness();
+ await h.commands.get('menu').handler(h.sock,h.msg,[]);
+ assert.equal(h.sent.filter(x=>x.content.image).length,1);
+ assert.match(image(h).caption, /\*MIA'S MDX\*/);
+ assert.match(image(h).caption, /powered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);
+ h.sent.length=0;
+ await h.commands.get('allmenu').handler(h.sock,h.msg,[]);
+ assert.equal(h.sent.filter(x=>x.content.image).length,1);
+ assert.equal(h.commands.get('fullmenu').handler,h.commands.get('allmenu').handler);
+});
+test('public, owner, creator, group-admin and adult visibility share exactly the same totals',async()=>{
+ for(const context of [
+   {owner:false,creator:false,adultMode:false},
+   {owner:true,creator:false,adultMode:true},
+   {owner:false,creator:false,group:true,admin:true,adultMode:true},
+   {owner:true,creator:true,safeMode:true},
+ ]){
+   const h=createHarness(context);
+   const add=(name,opts)=>h.commands.set(name,{canonical:name,handler:async()=>{},category:'TOOLS',...opts});
+   add('publicprobe',{});add('ownerprobe',{ownerOnly:true});add('creatorprobe',{creatorOnly:true});
+   add('groupprobe',{groupOnly:true});add('adminprobe',{category:'GROUP',ownerOnly:true,adminOnly:true});
+   add('risk',{});add('hiddenprobe',{hidden:true});add('internalprobe',{desc:'Internal: picker callback'});
+   const access=await h.sandbox.menuVisibilityContext(h.sock,h.msg);
+   const entries=menu.canonicalMenuEntries(h.commands,h.aliases,h.categories,access);
+   const names=new Set(entries.map(x=>x.name));
+   assert.ok(names.has('publicprobe'));
+   assert.equal(names.has('ownerprobe'),!!context.owner);
+   assert.equal(names.has('creatorprobe'),!!context.creator);
+   assert.equal(names.has('groupprobe'),!!context.group);
+   assert.equal(names.has('adminprobe'),!!context.owner || !!context.admin);
+   assert.equal(names.has('risk'),!context.safeMode);
+   assert.ok(!names.has('hiddenprobe'));assert.ok(!names.has('internalprobe'));
+   assert.equal(entries.some(e=>['HENTAI','NSFW','ADULT'].includes(e.category)),context.adultMode!==false && !context.safeMode);
+   await h.run();const main=image(h).caption;
+   assert.ok(main.includes('➜  '+entries.length+'\n'));
+   h.sent.length=0;await h.run([],true);
+   const all=h.sent.map(x=>x.content.caption||x.content.text||'').join('');
+   assert.equal(all.split('\n').filter(x=>x.startsWith('± ')).length,entries.length);
+   assert.equal(h.sandbox.getPrimaryCommandCount(access),entries.length);
+ }
+});
+test('inaccessible categories never leak via direct category routes; admin lookup failure fails closed',async()=>{
+ const h=createHarness({owner:false,creator:false,adultMode:false});
+ h.commands.set('privateentry',{canonical:'privateentry',category:'PRIVATE',ownerOnly:true,handler:async()=>{}});
+ for(const name of ['private','hentai','nsfw']){h.sent.length=0;await h.run([name]);assert.equal(image(h),undefined);assert.match(h.sent[0].content.text,/not found/);}
+ const g=createHarness({owner:false,creator:false,group:true,admin:true});
+ g.sandbox.isGroupAdmin=async()=>{throw Error('offline');};
+ assert.equal((await g.sandbox.menuVisibilityContext(g.sock,g.msg)).admin,false);
+});
+test('legacy labels are presentation mappings only and do not newly delete command implementations',()=>{
+ const labels=['NEXRAY-AI','NEXRAY-ANIME','NEXRAY-CANVAS','NEXRAY-DOWNLOADER','NEXRAY-EDITOR','NEXRAY-EPHOTO','NEXRAY-FUN','NEXRAY-GAMES','NEXRAY-INFO','NEXRAY-MAKER','NEXRAY-NEWS','NEXRAY-PAYMENT','NEXRAY-PRIMBON','NEXRAY-RANDOM','NEXRAY-SEARCH','NEXRAY-STALKER','NEXRAY-TEXTPRO','NEXRAY-TOOLS','NEXRAY-UPLOADER','GENERAL','AI','ANIME','MENU'];
+ const commands=new Map(labels.map((category,i)=>['probe'+i,{category,canonical:'probe'+i,handler:async()=>i}]));
+ const aliases=new Map(),categories=[];const originals=new Map(commands);
+ menu.installMenuCategoryPolicy(commands,aliases,categories);
+ for(const [name,entry] of originals)assert.equal(commands.get(name),entry);
+ const cats=menu.activeMenuCategories(commands,aliases,categories);
+ for(const label of labels){assert.ok(!cats.some(c=>c.name===label));assert.equal(menu.resolveMenuCategory([label],cats),null);}
+ assert.ok(cats.some(c=>c.name==='INTELLIGENCE'));assert.ok(cats.some(c=>c.name==='ANIMATION'));
+ assert.ok(!cats.some(c=>menu.REMOVED_MENU_CATEGORIES.has(c.name)));
+});
+test('disabled primary cannot leak through aliases; internal play callbacks are hidden without deleting them',()=>{
+ const fn=async()=>{};
+ const commands=new Map([
+ ['play',{canonical:'play',category:'DOWNLOAD',handler:fn}],['song',{canonical:'play',category:'DOWNLOAD',handler:fn}],
+ ['dead',{canonical:'dead',category:'TOOLS',disabled:true,handler:fn}],['deadalias',{canonical:'dead',category:'TOOLS',handler:fn}],
+ ['playget',{canonical:'playget',category:'DOWNLOAD',desc:'Internal: deliver audio after play!',handler:fn}],
+ ]);
+ assert.deepEqual(menu.canonicalMenuEntries(commands,new Map([['song','play'],['deadalias','dead']])).map(e=>e.name),['play']);
+ assert.ok(commands.has('playget'));assert.equal(commands.get('song').handler,fn);
+});
+test('new original quotes are unique, join every old collection, and preserve intentional spacing',()=>{
+ assert.equal(new Set(menu.ORIGINAL_PHASE1_QUOTES).size,24);
+ assert.ok(menu.ORIGINAL_PHASE1_QUOTES.every(q=>!quotes.includes(q)));
+ assert.ok(source.includes('...(_MASSIVE_QUOTES || []), ...ORIGINAL_PHASE1_QUOTES,'));
+ assert.equal(menu.quoteSection('test'),'✦ ─────────────────── ✦\n\n\n> 💬 *_"test"_*\n\n\n');
+ const select=menu.createMenuQuoteSelector(()=>[...quotes,...menu.ORIGINAL_PHASE1_QUOTES],()=>0.999999);
+ assert.equal(select('u'),menu.ORIGINAL_PHASE1_QUOTES.at(-1));assert.notEqual(select('u'),menu.ORIGINAL_PHASE1_QUOTES.at(-1));
+});
+test('long text fallback is bounded, sequential, lossless and Unicode-safe at newline boundaries',async()=>{
+ const text='x'.repeat(3999)+'\n😀'+'z'.repeat(8000)+'\n'+menu.quoteSection('unchanged');
+ const sent=[];
+ await menu.deliverMenuCaption({sendMessage:async()=>{throw Error('image offline');}},{key:{remoteJid:'chat',id:'in'}},text,[async()=>{throw Error('no picture');}],async(s,m,t)=>{sent.push(t);});
+ assert.ok(sent.length>1);assert.ok(sent.every(t=>t.length<=4000));assert.equal(sent.join(''),text);
+ for(const t of sent){assert.ok(!/[\uD800-\uDBFF]$/.test(t));assert.ok(!/^[\uDC00-\uDFFF]/.test(t));}
+ assert.throws(()=>menu.splitMenuText('x',0),RangeError);assert.throws(()=>menu.splitMenuText('x',1),RangeError);
+});
+test('successful image is never duplicated if a continuation fails',async()=>{
+ let images=0;
+ await assert.rejects(menu.deliverMenuCaption({sendMessage:async()=>{images++;}},{key:{remoteJid:'chat'}},'x'.repeat(20000),[async()=>Buffer.from('a'),async()=>Buffer.from('b')],async()=>{throw Error('offline continuation');}),/offline continuation/);
+ assert.equal(images,1);
+});
+test('main and all reactions are distinct from category aliases',()=>{
+ assert.equal(menu.menuReaction('MAIN'),'📋');assert.equal(menu.menuReaction('ALL'),'🏷️');assert.equal(menu.menuReaction('INFO'),'📊');
+});
+test('settings wrapper visibility mirrors owner/admin/public-mode guards',()=>{
+ const entry={handler:async()=>{},category:'SETTINGS',__v38OwnerGuard:true};
+ assert.equal(menu.isMenuEntryVisible('setting',entry,{owner:false,group:false}),false);
+ assert.equal(menu.isMenuEntryVisible('setting',entry,{owner:true}),true);
+ assert.equal(menu.isMenuEntryVisible('setting',entry,{owner:false,group:true,admin:true,publicMode:true}),true);
+ assert.equal(menu.isMenuEntryVisible('setting',entry,{owner:false,group:true,admin:true,publicMode:false}),false);
+ assert.equal(menu.isMenuEntryVisible('sudo',entry,{owner:false,group:true,admin:true,publicMode:true}),false);
+});
+test('protected registrations and useful commands still have actual declaration sites',()=>{
+ const files=[source,...fs.readdirSync(path.join(ROOT,'mias/features')).filter(f=>/\.(?:js|cjs)$/.test(f)).map(f=>fs.readFileSync(path.join(ROOT,'mias/features',f),'utf8')),...fs.readdirSync(path.join(ROOT,'mias')).filter(f=>/^precious.*\.cjs$/.test(f)).map(f=>fs.readFileSync(path.join(ROOT,'mias',f),'utf8'))];
+ const registrations=new Set();
+ for(const text of files){
+  for(const match of text.matchAll(/\bcmd\(\s*(\[(?:\s*(?:"[^"]*"|'[^']*')\s*,?)*\s*\]|"[^"]*"|'[^']*')\s*,/g)){
+   const names=vm.runInNewContext(match[1]);for(const name of [].concat(names))registrations.add(name.toLowerCase());
+  }
+ }
+ // Legacy fallback commands (for example myip) are switch routes, not
+ // canonical-registry entries; preserve them without inflating registry totals.
+ const legacy=fs.readFileSync(path.join(ROOT,'case.js'),'utf8');
+ for(const match of legacy.matchAll(/case\s+['"]([^'"]+)['"]\s*:/g))registrations.add(match[1].toLowerCase());
+ // .play's final binding is a Map override loop, not a cmd() call.
+ const start=source.lastIndexOf('for (const n of ["play", "music", "song"]) {');
+ const end=source.indexOf('\n    }',start)+6;
+ const livePlay=new Map();
+ vm.runInNewContext(source.slice(start,end),{commands:livePlay,aliases:new Map(),_cardHandler:async()=>{}});
+ for(const name of livePlay.keys())registrations.add(name);
+ assert.equal(livePlay.get('song').canonical,'play');
+ assert.equal(livePlay.get('music').handler,livePlay.get('play').handler);
+ for(const name of ['aio','tiktok','play','fulldp','setbio','setbotpic','setting','afk','unafk','calc','fetch','shazam','sticker','take','shorten','qr','ss','ip','myip','webinfo','save','time','vv','vv2','calendar','fdroid','getfile','codecompile','syntaxcheck'])assert.ok(registrations.has(name),name+' registration');
+ assert.ok(source.includes('__miasFullDpHandler'));
+ assert.equal((source.match(/cmd\(\['allmenu'/g)||[]).length,1);
+ assert.equal((source.match(/cmd\(\['menu'/g)||[]).length,1);
+});

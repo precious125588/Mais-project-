@@ -4,29 +4,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-// ── Make @whiskeysockets/baileys resolvable without doing npm install ──
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const BA = { proto: { Message: { InteractiveMessage: { create: () => ({}), Body: { create: x => x }, Footer: { create: x => x }, Header: { create: x => x }, NativeFlowMessage: { create: x => x } } } }, generateWAMessageFromContent: async (jid, content, opts) => ({ key: { id: "WAM_" + Math.random().toString(36).slice(2), participant: "bot@s.whatsapp.net", remoteJid: jid }, message: content }) };
-require.cache[require.resolve.paths("@whiskeysockets/baileys")] = undefined;
-try { require.cache["@whiskeysockets/baileys"] = { exports: BA }; } catch {}
-// Use a custom module resolver via a Map hook
-const Module = require("module");
-const _origResolve = Module._resolveFilename;
-Module._resolveFilename = function (request, parent, ...rest) {
-  if (request === "@whiskeysockets/baileys") return require.resolve("./fake-baileys.js");
-  return _origResolve.call(this, request, parent, ...rest);
-};
-
-import { writeFileSync } from "node:fs";
-writeFileSync(new URL("./fake-baileys.js", import.meta.url).pathname, `module.exports = ${JSON.stringify({})};`);
-
-// ── Re-import after faking ──
-const __dirname_fix = "/tmp/repo";
-const registry  = await import(`${__dirname_fix}/lib/pickerRegistry.js`);
-const buttons   = await import(`${__dirname_fix}/lib/universalButtons.js`);
-const videoFix  = await import(`${__dirname_fix}/lib/videoFix.js`);
-const shazamFix = await import(`${__dirname_fix}/lib/shazamFix.js`);
+// Use the existing ESM loader instead of mutating require internals or
+// rewriting a tracked stub file. No production socket is started.
+import { register } from 'node:module';
+register('./baileys-stub-loader.js', import.meta.url);
+globalThis.axios = { post: async () => { throw Error('simulated provider rejection'); } };
+const registry = await import('../lib/pickerRegistry.js');
+const buttons = await import('../lib/universalButtons.js');
+const videoFix = await import('../lib/videoFix.js');
+const shazamFix = await import('../lib/shazamFix.js');
 
 // ── Stub sock ──────────────────────────────────────────────────────
 function makeSock(opts = {}) {
@@ -38,6 +24,7 @@ function makeSock(opts = {}) {
       return { key: { id: "ms_" + sent.length, remoteJid: jid, participant: "bot@s.whatsapp.net" } };
     },
     relayMessage: async (jid, msg, sendOpts) => {
+      if (opts.relayShouldThrow) throw Error('simulated relay rejection');
       sent.push({ jid, msg, sendOpts });
       return { key: { id: "relay_" + sent.length } };
     },
@@ -166,7 +153,7 @@ test("shazam: when all providers fail, logs each one and returns ok:false", asyn
     },
   };
   // Re-import shazamFix with axios now visible
-  const shazamFix2 = await import(`${__dirname_fix}/lib/shazamFix.js?retry=1`);
+  const shazamFix2 = await import("../lib/shazamFix.js?retry=1");
   const lines = [];
   const log = (...m) => lines.push(m.join(" "));
   const r = await shazamFix2.shazamIdentify(Buffer.alloc(64 * 1024, 1), "audio/ogg", log);

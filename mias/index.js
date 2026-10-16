@@ -76,7 +76,7 @@ import {
   getStickerHash,
 } from "./lib/kevdraPatches.js";
 import { createStickerFromBuffer } from "./lib/stickerMedia.js";
-import { canonicalMenuEntries, activeMenuCategories, resolveMenuCategory, formatMenuCategory, boldCommand, quoteSection, createMenuQuoteSelector, menuReaction, installMenuCategoryPolicy, deliverMenuCaption } from "./lib/premiumMenus.js";
+import { ORIGINAL_PHASE1_QUOTES, canonicalMenuEntries, activeMenuCategories, resolveMenuCategory, formatMenuCategory, boldCommand, quoteSection, createMenuQuoteSelector, menuReaction, installMenuCategoryPolicy, deliverMenuCaption } from "./lib/premiumMenus.js";
 // ── MIAS HANDLER SYSTEM — universal messaging abstraction ─────────────────────
 import { installHandlerGlobals, updateHandlerSock } from "./handlers/globals.js";
 import { isGktwAvailable } from "./handlers/gktwAdapter.js";
@@ -7119,8 +7119,8 @@ function cmd(names, opts, handler) {
   }
 }
 
-function getPrimaryCommandCount() {
-  return canonicalMenuEntries(commands, aliases, MENU_CATEGORIES).length;
+function getPrimaryCommandCount(context = {}) {
+  return canonicalMenuEntries(commands, aliases, MENU_CATEGORIES, context).length;
 }
 
 function isCommandAlias(name) {
@@ -7128,8 +7128,8 @@ function isCommandAlias(name) {
   return commands.get(lower)?.isAlias === true || aliases.has(lower);
 }
 
-function getCategoryPrimaryCommands(cat) {
-  return canonicalMenuEntries(commands, aliases, MENU_CATEGORIES)
+function getCategoryPrimaryCommands(cat, context = {}) {
+  return canonicalMenuEntries(commands, aliases, MENU_CATEGORIES, context)
     .filter(item => item.category === cat?.name).map(item => item.name);
 }
 
@@ -8247,7 +8247,7 @@ try {
 
 const _randomMenuQuoteForUser = createMenuQuoteSelector(() => [
   ..._HOPE_QUOTES, ..._MENU_QUOTES_EXTRA, ..._SAD_QUOTES, ..._TRUTH_QUOTES,
-  ...(_MASSIVE_QUOTES || []),
+  ...(_MASSIVE_QUOTES || []), ...ORIGINAL_PHASE1_QUOTES,
 ]);
 globalThis._randomMenuQuoteForUser = _randomMenuQuoteForUser;
 
@@ -8380,7 +8380,7 @@ function _randomTruth() {
   return _TRUTH_QUOTES[Math.floor(Math.random() * _TRUTH_QUOTES.length)];
 }
 
-function buildMenu(jid, senderName, sender) {
+function buildMenu(jid, senderName, sender, context = {}) {
   const userQuote = _randomMenuQuoteForUser(sender || jid);
   const s = getSettings(jid);
   const up = process.uptime();
@@ -8392,15 +8392,16 @@ function buildMenu(jid, senderName, sender) {
   const hh12 = String(hh % 12 || 12).padStart(2, "0");
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const timeStr = `${hh12}:${mm} ${ampm} — ${months[ngTime.getMonth()]} ${ngTime.getDate()}`;
-  const totalCmds = getPrimaryCommandCount();
+  const totalCmds = getPrimaryCommandCount(context);
   const ramUsed = (mem.rss / 1048576).toFixed(0);
   const greet = hh < 5 ? "🌙 Late Night" : hh < 12 ? "🌅 Good Morning" : hh < 17 ? "☀️ Good Afternoon" : hh < 21 ? "🌆 Good Evening" : "🌙 Good Night";
 
   let t = "";
   t += quoteSection(userQuote);
   t += `✦ ─────────────────── ✦\n`;
-  t += `  *${CONFIG.BOT_NAME || "𝑴𝑰𝑨𝑺 𝑴𝑫𝑿"}*\n`;
+  t += `  🟨 *MIA'S MDX*\n`;
   t += `✦ ─────────────────── ✦\n\n`;
+  t += `*OWNER* · 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n`;
   t += `${greet}, *${senderName}* 👋\n\n`;
   t += `┌─────「 *𝗦𝗬𝗦𝗧𝗘𝗠 𝗦𝗧𝗔𝗧𝗦* 」─────\n`;
   t += `│  ◈ 𝗣𝗿𝗲𝗳𝗶𝘅    ➜  \`${CONFIG.PREFIX}\`\n`;
@@ -8412,15 +8413,16 @@ function buildMenu(jid, senderName, sender) {
   t += `│  ◈ 𝗧𝗶𝗺𝗲     ➜  ${timeStr}\n`;
   t += `└─────────────────────────\n\n`;
   t += `━━━━━「 🗂️ *CATEGORIES* 」━━━━━\n\n`;
-  for (const cat of activeMenuCategories(commands, aliases, MENU_CATEGORIES)) {
+  for (const cat of activeMenuCategories(commands, aliases, MENU_CATEGORIES, context)) {
     if (cat.adult && (!s.adultMode || s.safeMode)) continue;
-    const count = getCategoryPrimaryCommands(cat).length;
-    t += `  ╰➤ ${cat.emoji} *${boldCommand(cat.name)}*  ‹${count} cmds›\n`;
+    const count = getCategoryPrimaryCommands(cat, context).length;
+    t += `  ╰➤ ${cat.emoji} ${boldCommand(cat.name)}  ‹${count} cmds›\n`;
   }
   t += `\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
   t += `  ╰➤ _${CONFIG.PREFIX}menu <category>_ — open a category\n`;
   t += `  ╰➤ _${CONFIG.PREFIX}settings_ — configure the bot\n\n`;
-  t += `𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x`;
+  t += `  ╰➤ _${CONFIG.PREFIX}allmenu_ — all available commands\n\n`;
+  t += `powered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x`;
   return t;
 }
 
@@ -8447,6 +8449,22 @@ function menuPictureSources(sock, jid) {
   ];
 }
 
+async function menuVisibilityContext(sock, msg) {
+  const jid = msg.key.remoteJid;
+  const sender = getSender(msg);
+  const group = isGroup(msg);
+  const owner = !!(msg.key.fromMe || isOwner(sender) || (typeof isSudo === 'function' && isSudoIn(sender, jid)));
+  let admin = false;
+  if (group) { try { admin = await isGroupAdmin(sock, jid, sender); } catch {} }
+  const chatSettings = getSettings(jid);
+  const ownerJid = (CONFIG.OWNER_NUMBER || '').replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+  return { owner, creator: !!isCreator(sender), group, admin,
+    guardOwner: owner || (typeof isSudo === 'function' && isSudo(sender)),
+    publicMode: String(chatSettings.workMode || 'public').toLowerCase() !== 'private' && !chatSettings.privateMode,
+    adultMode: chatSettings.adultMode, safeMode: chatSettings.safeMode || getSettings(ownerJid)?.safeMode,
+    risky: RISKY_CMDS, banned: group ? settings.get(jid + '_banned') : null };
+}
+
 async function sendPremiumMenu(sock, msg, args, all = false) {
   const jid = msg?.key?.remoteJid;
   if (!jid || !msg.key.id) return;
@@ -8459,7 +8477,8 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
   let senderName = rawPushName || 'User';
   try { senderName = await getDisplayName(sock, sender, isGroup(msg) ? jid : null) || senderName; } catch {}
   if (/^\+?\d+$/.test(senderName) && rawPushName) senderName = rawPushName.trim();
-  const categories = activeMenuCategories(commands, aliases, MENU_CATEGORIES);
+  const context = await menuVisibilityContext(sock, msg);
+  const categories = activeMenuCategories(commands, aliases, MENU_CATEGORIES, context);
   const requested = Array.isArray(args) && args.length > 0;
   const cat = requested && !all ? resolveMenuCategory(args, categories) : null;
   if (requested && !all && !cat) {
@@ -8474,10 +8493,10 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
   try { await react(sock, msg, menuReaction(cat?.name || (all ? 'ALL' : 'MAIN'))); } catch {}
   let text;
   if (cat) {
-    const uniq = getCategoryPrimaryCommands(cat);
-    text = quoteSection(_randomMenuQuoteForUser(sender || jid)) + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\n𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
+    const uniq = getCategoryPrimaryCommands(cat, context);
+    text = quoteSection(_randomMenuQuoteForUser(sender || jid)) + "🟨 *MIA'S MDX*\n*OWNER* · 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n" + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\npowered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
   } else {
-    text = buildMenu(jid, senderName, sender);
+    text = buildMenu(jid, senderName, sender, context);
     if (all) {
       const start = text.indexOf('━━━━━「 🗂️');
       const end = text.indexOf('\n━━━━━━━━━━━━━━━━━━━━━━━━━', start);
