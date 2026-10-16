@@ -48,10 +48,10 @@ function createHarness({imageFailure=false,reactionFailure=false,sendFailure=fal
 }
 function image(h){return h.sent.find(x=>x.content.image)?.content;}
 test('actual main and allmenu handlers send one image caption with live stats, footer, quote spacing',async()=>{
- const h=createHarness();await h.run();const main=image(h);assert.ok(main.image);assert.match(main.caption,/^✦[^\n]*\n\n\n> 💬 \*_".+"_\*\n\n\n/);assert.match(main.caption,/5\.3\.1/);assert.match(main.caption,/private/);assert.match(main.caption,/2m 5s/);assert.match(main.caption,/𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);assert.equal(h.sent.filter(x=>x.content.react).length,1);assert.equal(h.sent[0].content.react.key,h.msg.key);
- h.sent.length=0;await h.run([],true);const all=image(h);assert.match(all.caption,/^✦[^\n]*\n\n\n> 💬 \*_".+"_\*\n\n\n/);assert.equal(h.sent.filter(x=>x.content.image).length,1);assert.equal(h.sent.filter(x=>x.content.text).length,0);assert.equal(h.sent[0].content.react.text,'🏷️');const lines=all.caption.split('\n').filter(l=>l.startsWith('± '));const entries=menu.canonicalMenuEntries(h.commands,h.aliases,h.categories);assert.equal(lines.length,entries.length);assert.equal(new Set(lines).size,lines.length);for(const e of entries)assert.ok(lines.includes('± '+menu.boldCommand(e.name)));assert.ok(!lines.includes('± '+menu.boldCommand('tt')));assert.ok(!lines.includes('± '+menu.boldCommand('disabled')));
+ const h=createHarness();await h.run();const main=image(h);assert.ok(main.image);assert.match(main.caption,/^────────────────────\n\*MIA'S MDX\*\n────────────────────\n\n/);assert.match(main.caption,/\n\n\n> _".+"_\n\n\n/);assert.match(main.caption,/VERSION: 5\.3\.1/);assert.match(main.caption,/MODE: PRIVATE/);assert.match(main.caption,/COMMANDS  →  \d+/);assert.match(main.caption,/𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);assert.equal(h.sent.filter(x=>x.content.react).length,1);assert.equal(h.sent[0].content.react.key,h.msg.key);
+ h.sent.length=0;await h.run([],true);const all=image(h);assert.match(all.caption,/\n\n\n> _".+"_\n\n\n/);assert.equal(h.sent.filter(x=>x.content.image).length,1);assert.equal(h.sent.filter(x=>x.content.text).length,0);assert.equal(h.sent[0].content.react.text,'💔');const lines=all.caption.split('\n').filter(l=>l.startsWith('± '));const entries=menu.canonicalMenuEntries(h.commands,h.aliases,h.categories);assert.equal(lines.length,entries.length);assert.equal(new Set(lines).size,lines.length);for(const e of entries)assert.ok(lines.includes('± '+menu.boldCommand(e.name)));assert.ok(!lines.includes('± '+menu.boldCommand('tt')));assert.ok(!lines.includes('± '+menu.boldCommand('disabled')));
 });
-test('every active category uses its own reaction, picture and ONLY canonical category entries',async()=>{const h=createHarness();for(const cat of menu.activeMenuCategories(h.commands,h.aliases,h.categories)){h.sent.length=0;await h.run([cat.name.toLowerCase()]);assert.equal(h.sent.filter(x=>x.content.react).length,1);assert.equal(h.sent[0].content.react.text,menu.menuReaction(cat.name));const outgoing=image(h);assert.ok(outgoing);const lines=outgoing.caption.split('\n').filter(l=>l.startsWith('± '));assert.deepEqual(lines,cat.cmds.map(n=>'± '+menu.boldCommand(n)));assert.match(outgoing.caption,/\n\n\n> 💬/);assert.equal(h.sent.filter(x=>x.content.image).length,1);}});
+test('every active category uses its own reaction, picture and ONLY canonical category entries',async()=>{const h=createHarness();for(const cat of menu.activeMenuCategories(h.commands,h.aliases,h.categories)){h.sent.length=0;await h.run([cat.name.toLowerCase()]);assert.equal(h.sent.filter(x=>x.content.react).length,1);assert.equal(h.sent[0].content.react.text,menu.menuReaction(cat.name));const outgoing=image(h);assert.ok(outgoing);const lines=outgoing.caption.split('\n').filter(l=>l.startsWith('± '));assert.deepEqual(lines,cat.cmds.map(n=>'± '+menu.boldCommand(n)));assert.match(outgoing.caption,/\n\n\n> _"/);assert.equal(h.sent.filter(x=>x.content.image).length,1);}});
 test('case-insensitive and unambiguous category aliases; invalid and removed requests do not become main menu',async()=>{const h=createHarness();for(const n of ['download','GROUP','audio','tools','owner','settings','groups','dl']){h.sent.length=0;await h.run([n]);assert.ok(image(h),n);}for(const n of ['not-real','games','game','stalk','stalker','logo','fun','textmaker']){h.sent.length=0;await h.run([n]);assert.equal(image(h),undefined);assert.match(h.sent[0].content.text,/not found/);assert.equal(h.sent.filter(x=>x.content.react).length,0);}});
 test('reaction errors do not prevent menu; image lookup/send failures exhaust fallbacks then safe text',async()=>{const r=createHarness({reactionFailure:true});await r.run();assert.ok(image(r));const f=createHarness({imageFailure:true});await f.run();assert.equal(image(f),undefined);assert.ok(f.sent.some(x=>x.content.text?.includes('𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x')));const s=createHarness({sendFailure:true});await s.run([],true);assert.ok(s.sent.some(x=>x.content.text?.includes('± ')));});
 test('configured picture failure uses own profile then verified local fallback',async()=>{const h=createHarness();let count=0;h.sandbox.axios.get=async()=>{if(++count<=2)throw Error('unavailable');return {data:Buffer.alloc(0)}};await h.run();assert.ok(Buffer.isBuffer(image(h).image));assert.deepEqual(image(h).image,fs.readFileSync(path.join(ROOT,'mias/assets/allmenu.jpg')));});
@@ -67,7 +67,7 @@ test('actual menu and allmenu registrations route once, with exact branding and 
  await h.commands.get('menu').handler(h.sock,h.msg,[]);
  assert.equal(h.sent.filter(x=>x.content.image).length,1);
  assert.match(image(h).caption, /\*MIA'S MDX\*/);
- assert.match(image(h).caption, /powered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);
+ assert.match(image(h).caption, /POWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);
  h.sent.length=0;
  await h.commands.get('allmenu').handler(h.sock,h.msg,[]);
  assert.equal(h.sent.filter(x=>x.content.image).length,1);
@@ -97,7 +97,7 @@ test('public, owner, creator, group-admin and adult visibility share exactly the
    assert.ok(!names.has('hiddenprobe'));assert.ok(!names.has('internalprobe'));
    assert.equal(entries.some(e=>['HENTAI','NSFW','ADULT'].includes(e.category)),context.adultMode!==false && !context.safeMode);
    await h.run();const main=image(h).caption;
-   assert.ok(main.includes('➜  '+entries.length+'\n'));
+   assert.ok(main.includes('→  '+entries.length+'\n'));
    h.sent.length=0;await h.run([],true);
    const all=h.sent.map(x=>x.content.caption||x.content.text||'').join('');
    assert.equal(all.split('\n').filter(x=>x.startsWith('± ')).length,entries.length);
@@ -137,7 +137,7 @@ test('new original quotes are unique, join every old collection, and preserve in
  assert.equal(new Set(menu.ORIGINAL_PHASE1_QUOTES).size,24);
  assert.ok(menu.ORIGINAL_PHASE1_QUOTES.every(q=>!quotes.includes(q)));
  assert.ok(source.includes('...(_MASSIVE_QUOTES || []), ...ORIGINAL_PHASE1_QUOTES,'));
- assert.equal(menu.quoteSection('test'),'✦ ─────────────────── ✦\n\n\n> 💬 *_"test"_*\n\n\n');
+ assert.equal(menu.quoteSection('test'),'────────────────────\n\n\n> _"test"_\n\n\n');
  const select=menu.createMenuQuoteSelector(()=>[...quotes,...menu.ORIGINAL_PHASE1_QUOTES],()=>0.999999);
  assert.equal(select('u'),menu.ORIGINAL_PHASE1_QUOTES.at(-1));assert.notEqual(select('u'),menu.ORIGINAL_PHASE1_QUOTES.at(-1));
 });
@@ -155,7 +155,7 @@ test('successful image is never duplicated if a continuation fails',async()=>{
  assert.equal(images,1);
 });
 test('main and all reactions are distinct from category aliases',()=>{
- assert.equal(menu.menuReaction('MAIN'),'📋');assert.equal(menu.menuReaction('ALL'),'🏷️');assert.equal(menu.menuReaction('INFO'),'📊');
+ assert.equal(menu.menuReaction('MAIN'),'💔');assert.equal(menu.menuReaction('ALL'),'💔');assert.equal(menu.menuReaction('INFO'),'💔');
 });
 test('settings wrapper visibility mirrors owner/admin/public-mode guards',()=>{
  const entry={handler:async()=>{},category:'SETTINGS',__v38OwnerGuard:true};
