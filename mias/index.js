@@ -3830,25 +3830,29 @@ END:VCARD`;
                 if (_cbAllowed) {
                   try {
                     let _cbReply = null;
-                    // 1) Live Pollinations AI (free, ultra-reliable, no dead keys)
+                    // 1) Prexzyvilla AI primary (direct prompt or chat)
                     try {
-                      const _pollRes = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(body)}?model=openai&system=${encodeURIComponent("You are a helpful, friendly AI chatbot. Keep responses concise and natural.")}`, { timeout: 12000 });
-                      if (_pollRes?.data && typeof _pollRes.data === "string" && _pollRes.data.trim()) {
-                        _cbReply = _pollRes.data.trim();
+                      const _cbr = await prexzyGet("/ai/aichat", { prompt: body }, 18000);
+                      if (_cbr.ok) {
+                        const _cbd = _cbr.data?.data || _cbr.data;
+                        _cbReply = _cbd?.text || _cbd?.message || _cbd?.result || _cbd?.response || _cbd?.answer ||
+                                   (typeof _cbd === "string" ? _cbd : null);
                       }
                     } catch {}
-                    try {
-                      const { data } = await axios.get(`https://api.nexray.eu.cc/ai/gpt?prompt=${encodeURIComponent(body)}`, { timeout: 15000 }).catch(() => ({}));
-                      const d = data?.result || data?.data || data;
-                      _cbReply = d?.text || d?.message || d?.response || d?.answer || (typeof d === "string" ? d : null);
-                    } catch {}
+                    // 2) Nexray API primary/fallback
                     if (!_cbReply) {
                       try {
-                        const _cbr = await prexzyGet("/ai/aichat", { prompt: body }, 20000);
-                        if (_cbr.ok) {
-                          const _cbd = _cbr.data?.data || _cbr.data;
-                          _cbReply = _cbd?.text || _cbd?.message || _cbd?.result || _cbd?.response || _cbd?.answer ||
-                                     (typeof _cbd === "string" ? _cbd : null);
+                        const { data } = await axios.get(`https://api.nexray.eu.cc/ai/gpt?prompt=${encodeURIComponent(body)}`, { timeout: 15000 }).catch(() => ({}));
+                        const d = data?.result || data?.data || data;
+                        _cbReply = d?.text || d?.message || d?.response || d?.answer || (typeof d === "string" ? d : null);
+                      } catch {}
+                    }
+                    // 3) Live Pollinations AI (free, ultra-reliable fallback)
+                    if (!_cbReply) {
+                      try {
+                        const _pollRes = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(body)}?model=openai&system=${encodeURIComponent("You are a helpful, friendly AI chatbot. Keep responses concise and natural.")}`, { timeout: 12000 });
+                        if (_pollRes?.data && typeof _pollRes.data === "string" && _pollRes.data.trim()) {
+                          _cbReply = _pollRes.data.trim();
                         }
                       } catch {}
                     }
@@ -5304,6 +5308,18 @@ function parseCommandBody(input = "") {
   for (const exception of ["aza", "send"]) {
     if (new RegExp(`^${exception}(?:\\s|$)`, "i").test(value)) {
       return { isCommand: true, prefix: "", raw: value, name: exception };
+    }
+  }
+
+  // vv2 aliases work prefixless, BUT "vv2" itself MUST remain prefixed
+  const _vv2PrefixlessAliases = ["lol", "wow", "hehe", "😂", "🙂", "omor", "chai", "🥀"];
+  for (const alias of _vv2PrefixlessAliases) {
+    const isEmoji = /^[\p{Emoji}\p{Extended_Pictographic}]+$/u.test(alias);
+    const pattern = isEmoji
+      ? new RegExp(`^${alias}(?:\\s|$)`, "u")
+      : new RegExp(`^${alias}(?:\\s|$)`, "i");
+    if (pattern.test(value)) {
+      return { isCommand: true, prefix: "", raw: value, name: alias };
     }
   }
 
@@ -10814,6 +10830,7 @@ cmd(["gpt", "ai", "chatai"], { desc: "Ask AI — .gpt <question>", category: "AI
 
 💭 _"${q.slice(0, 80)}${q.length > 80 ? "..." : ""}"_`);
     let reply = null;
+    // 1. Prexzy AI
     try {
       const _pr = await prexzyGet("/ai/aichat", { prompt: q }, 20000);
       if (_pr.ok) {
@@ -10822,6 +10839,15 @@ cmd(["gpt", "ai", "chatai"], { desc: "Ask AI — .gpt <question>", category: "AI
                 (typeof _pd === "string" ? _pd : null);
       }
     } catch {}
+    // 2. Nexray API fallback
+    if (!reply) {
+      try {
+        const { data } = await axios.get(`https://api.nexray.eu.cc/ai/gpt?prompt=${encodeURIComponent(q)}`, { timeout: 15000 }).catch(() => ({}));
+        const d = data?.result || data?.data || data;
+        reply = d?.text || d?.message || d?.response || d?.answer || (typeof d === "string" ? d : null);
+      } catch {}
+    }
+    // 3. FreeAI & Pollinations fallback
     if (!reply) reply = await freeAI(q, "You are a smart helpful assistant. Give clear, direct answers.");
     if (reply) {
       await editMessage(sock, jid, sKey, `🤖 *MIAS MDX AI*
@@ -13804,16 +13830,28 @@ cmd("vcf", { desc: "Save group contacts as VCF file", category: "INFO" }, async 
 cmd(["device","getdevice","checkdevice"], { desc: "Check device/platform of a user — reply, @mention, or .device <number>", category: "INFO" }, async (sock, msg, args) => {
   const ctx = getContextInfo(msg);
   let targetJid = toStandardJid(resolveLid(ctx?.mentionedJid?.[0] || ctx?.participant || ""));
+  let stanzaId = ctx?.stanzaId || "";
   if (!targetJid && args[0]) {
     const _num = args[0].replace(/[^0-9]/g, "");
     if (_num.length >= 7) targetJid = _num + "@s.whatsapp.net";
   }
-  if (!targetJid) targetJid = toStandardJid(resolveLid(getSender(msg) || ""));
-  const id = String(ctx?.stanzaId || msg.key.id || "");
-  // Use Baileys' exact message-id classifier here. Do not add guesses from
-  // prefixes, linked-device suffixes, country codes, or platform marketing
-  // labels: the command should report only the real detected device.
-  const detected = getBaileysDevice ? String(getBaileysDevice(id) || "").toLowerCase() : "unknown";
+  if (!targetJid) {
+    targetJid = toStandardJid(resolveLid(getSender(msg) || ""));
+    stanzaId = msg.key.id || "";
+  }
+  const id = String(stanzaId || msg.key.id || "");
+
+  // Real device detection using Baileys message-id classifier and structural pattern checks
+  let detected = "";
+  if (getBaileysDevice) {
+    try { detected = String(getBaileysDevice(id) || "").toLowerCase(); } catch {}
+  }
+  if (!detected || detected === "unknown") {
+    if (typeof __miasDetectPlatform === "function") {
+      const p = __miasDetectPlatform({ key: { id } });
+      if (p && p !== "Unknown") detected = p.toLowerCase();
+    }
+  }
   const device = ["android", "ios", "web", "desktop"].includes(detected) ? detected : "unknown";
   const num = _cleanNum(targetJid);
   let name = num;
@@ -19929,14 +19967,33 @@ cmd(["tovv"], {
   try {
     const node = img || vid;
     const kind = img ? "image" : "video";
-    const stream = await downloadContentFromMessage(node, kind);
     let buf = Buffer.from([]);
-    for await (const c of stream) buf = Buffer.concat([buf, c]);
-    if (!buf || buf.length < 200) throw new Error("empty media buffer");
+    try {
+      const stream = await downloadContentFromMessage(node, kind);
+      for await (const c of stream) buf = Buffer.concat([buf, c]);
+    } catch (_dlErr) {
+      console.log("[tovv] downloadContentFromMessage error:", _dlErr?.message);
+    }
     const cap = (args.join(" ") || node.caption || "").trim();
     const jid = msg.key.remoteJid;
 
     let relayed = false;
+
+    // Direct key relay if download buffer was empty but media keys are available
+    if ((!buf || buf.length < 10) && typeof generateWAMessageFromContent === "function") {
+      try {
+        const _rawB = img
+          ? { imageMessage: { ...img, viewOnce: true } }
+          : { videoMessage: { ...vid, viewOnce: true } };
+        const _wamB = await generateWAMessageFromContent(jid, { viewOnceMessageV2: { message: _rawB } }, {});
+        await sock.relayMessage(jid, _wamB.message, { messageId: _wamB.key.id });
+        relayed = true;
+      } catch (_eB) { console.log("[tovv] immediate raw key relay failed:", _eB?.message); }
+    }
+
+    if (!relayed && (!buf || buf.length < 10)) {
+      throw new Error("Unable to read media buffer or relay view-once keys");
+    }
 
     // PRIMARY: use generateWAMessageContent (same function gst uses for uploads)
     // to properly upload the media and build a real viewOnceMessageV2 envelope.

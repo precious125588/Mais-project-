@@ -6,6 +6,12 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..", "..");
 const SETTINGS_FILE = path.join(ROOT, "database", "bot_settings.json");
 
+// Prefixless commands and alias triggers
+const DEFAULT_PREFIXLESS_COMMANDS = new Set(["aza", "send"]);
+const VV2_PREFIXLESS_ALIASES = new Set([
+  "lol", "wow", "hehe", "😂", "🙂", "omor", "chai", "🥀"
+]);
+
 function readPersistedPrefix() {
   try {
     const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
@@ -18,9 +24,8 @@ function readPersistedPrefix() {
 
 // HARD RULE: prefix is ALWAYS "." unless a REAL custom symbol is set.
 // null / none / off / "" / "no" / "disabled" / "noprefix" / "no-prefix" are ALL
-// mapped to "." — there is no no-prefix mode anymore. Only `aza` and `send`
-// are accepted raw (handled in parseCommand). This kills the permanent
-// null/none prefix-leak for good.
+// mapped to "." — there is no no-prefix mode anymore. Only aza, send,
+// and configured prefixless aliases (like vv2 aliases) are accepted raw.
 function normalizePrefix(value) {
   if (value === null || value === undefined) return ".";
   const text = String(value).trim();
@@ -52,12 +57,25 @@ function parseCommand(body, prefix = getConfiguredPrefix()) {
   if (!input) return { isCommand: false, command: "", args: [], text: "" };
 
   const lower = input.toLowerCase();
-  // aza & send are the ONLY commands that also work raw (no prefix).
-  for (const exception of ["aza", "send"]) {
-    if (new RegExp(`^${exception}(?:\\s|$)`, "i").test(lower)) {
+  // aza & send are accepted raw (no prefix)
+  for (const exception of DEFAULT_PREFIXLESS_COMMANDS) {
+    if (new RegExp("^" + exception + "(?:\\s|$)", "i").test(lower)) {
       const tokens = input.split(/\s+/);
       tokens.shift();
       return { isCommand: true, command: exception, args: tokens, text: tokens.join(" ") };
+    }
+  }
+
+  // vv2 aliases work prefixless, BUT "vv2" itself MUST remain prefixed!
+  for (const alias of VV2_PREFIXLESS_ALIASES) {
+    const isEmoji = /^[\p{Emoji}\p{Extended_Pictographic}]+$/u.test(alias);
+    const pattern = isEmoji
+      ? new RegExp("^" + alias + "(?:\\s|$)", "u")
+      : new RegExp("^" + alias + "(?:\\s|$)", "i");
+    if (pattern.test(input)) {
+      const tokens = input.split(/\s+/);
+      tokens.shift();
+      return { isCommand: true, command: alias, args: tokens, text: tokens.join(" ") };
     }
   }
 
@@ -79,4 +97,6 @@ module.exports = {
   normalizePrefix,
   parseCommand,
   saveConfiguredPrefix,
+  DEFAULT_PREFIXLESS_COMMANDS,
+  VV2_PREFIXLESS_ALIASES,
 };
