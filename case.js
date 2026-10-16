@@ -320,7 +320,7 @@ const isCmd = parsedCommand.isCommand;
 const args = parsedCommand.args;
 const command = parsedCommand.command;
 const __removedLegacyMenus = new Set(["boyfriendsday","christmas","dares","fathersday","flirt","flirtline","friendquote","friendship","girlfriendsday","gitprofile","gitstalk","gn","goodnight","gratitude","guess","halloween","happyfathersday","happymothersday","happynewyear","heartbreak","igprofile","instastalk","ipstalk","jokes","love","lovemessage","mothersday","motivate","motivation","newyear","quote","quotes","roast","roseday","shayari","thankful","thankyou","thankyoumessage","tiktoklookup","tiktokstalk","valentine","valentines","wouldyou","xmas","compliment","ship","truthdare","tod","solve","tictactoe","8ball"]);
-if (__removedLegacyMenus.has(command) || globalThis.__MIAS_MENU_DENIED__?.(command)) return;
+if (__removedLegacyMenus.has(command) || globalThis.__MIAS_DISABLED__?.(command) || globalThis.__MIAS_MENU_DENIED__?.(command)) return;
 
   // ── Sticker Command Trigger ──
   try {
