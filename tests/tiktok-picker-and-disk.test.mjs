@@ -40,11 +40,22 @@ test("TikTok never substitutes another quality or watermark", () => {
   assert.equal(selectTikTokUrl(sdOnly, parseTikTokMode("1.1")), "https://cdn.example/sd.mp4");
 });
 
-test("TikTok info makes one provider request and no second link", async () => {
+test("TikTok info exhausts the independent provider routes for the same link", async () => {
   const calls = [];
   const failing = async (url) => { calls.push(url); return { ok: false, status: 500, json: async () => ({}) }; };
-  await assert.rejects(fetchTikTokInfo("https://vm.tiktok.com/abc/", failing), /HTTP 500/);
-  assert.equal(calls.length, 1);
+  await assert.rejects(fetchTikTokInfo("https://vm.tiktok.com/abc/", failing), (error) => {
+    assert.equal(error.code, "ALL_PROVIDERS_FAILED");
+    assert.match(error.message, /tikwm: HTTP 500/);
+    assert.match(error.message, /prexzy: HTTP 500/);
+    assert.match(error.message, /nexray-tiktok: HTTP 500/);
+    assert.match(error.message, /nexray-aio: HTTP 500/);
+    assert.match(error.message, /davidcyril-rapid: HTTP 500/);
+    assert.match(error.message, /davidcyril: HTTP 500/);
+    assert.match(error.message, /giftedtech: HTTP 500/);
+    return true;
+  });
+  assert.equal(calls.length, 7);
+  assert.ok(calls.every((url) => url.includes("abc")));
 });
 
 test("disk guard exposes usable space and classifies ENOSPC", () => {
