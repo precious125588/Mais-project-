@@ -162,25 +162,74 @@ export function buildTikTokPickerSections(info = null) {
   ];
 }
 
-export async function fetchTikTokInfo(url, fetchImpl = fetch) {
+// P7 fix: validate the link before any provider call, then try a bounded
+// provider chain. HTTP 403 from a provider is classified as an access/rate
+// denial (not an invalid link) and the next healthy provider is tried.
+export function isValidTikTokUrl(url) {
+  if (typeof url !== "string") return false;
+  const u = url.trim();
+  return /^https?:\/\/(www\.|m\.|vm\.|vt\.)?tiktok\.com\/\S+/i.test(u)
+      || /^https?:\/\/(vm|vt)\.tiktok\.com\/\S+/i.test(u)
+      || /^https?:\/\/www\.tiktok\.com\/@[\w.]+\/(video|photo)\/\d+/i.test(u);
+}
+
+const PROVIDER_CHAIN = [
+  { label: "tikwm", url: (u) => PROVIDER(u) },
+  { label: "tikwm-nohd", url: (u) => `https://www.tikwm.com/api/?url=${encodeURIComponent(u)}` },
+];
+
+async function _fetchOne(url, fetchImpl) {
   let response;
   try {
-    response = await fetchImpl(PROVIDER(url), { headers: { "User-Agent": "MIAS/1.0" } });
+    response = await fetchImpl(url, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MIAS/1.0" } });
   } catch (error) {
-    throw new Error(`TikTok provider is unreachable: ${error?.message || error}`);
+    const err = new Error(`TikTok provider is unreachable: ${error?.message || error}`);
+    err.code = "UNREACHABLE";
+    throw err;
   }
-  if (!response.ok) throw new Error(`TikTok provider returned HTTP ${response.status}`);
+  if (!response.ok) {
+    const err = new Error(`TikTok provider returned HTTP ${response.status}`);
+    err.code = response.status === 403 ? "FORBIDDEN" : (response.status === 429 ? "RATE_LIMIT" : "HTTP_" + response.status);
+    err.status = response.status;
+    throw err;
+  }
   let json;
   try {
     json = await response.json();
   } catch {
-    throw new Error("TikTok provider returned an invalid response");
+    const err = new Error("TikTok provider returned an invalid response");
+    err.code = "BAD_RESPONSE";
+    throw err;
   }
   const info = normalizeTikTokResponse(json);
   if (!info.videoHd && !info.videoSd && !info.videoWatermark && !info.audio && (!info.images || !info.images.length)) {
-    throw new Error("TikTok provider returned no media for this link");
+    const err = new Error("TikTok provider returned no media for this link");
+    err.code = "NO_MEDIA";
+    throw err;
   }
   return info;
+}
+
+export async function fetchTikTokInfo(url, fetchImpl = fetch) {
+  if (!isValidTikTokUrl(url)) {
+    const err = new Error("Invalid TikTok link");
+    err.code = "INVALID_URL";
+    throw err;
+  }
+  const errors = [];
+  for (const provider of PROVIDER_CHAIN) {
+    try {
+      return await _fetchOne(provider.url(url), fetchImpl);
+    } catch (error) {
+      errors.push(`${provider.label}: ${error?.message || error}`);
+      // Invalid link / no-media are definitive for this URL — do not retry other providers.
+      if (error?.code === "INVALID_URL" || error?.code === "NO_MEDIA") throw error;
+      // FORBIDDEN / RATE_LIMIT / UNREACHABLE / BAD_RESPONSE / HTTP_* -> try next provider.
+    }
+  }
+  const err = new Error(`All TikTok providers failed (${errors.join("; ")})`);
+  err.code = "ALL_PROVIDERS_FAILED";
+  throw err;
 }
 
 // Returns only the URL for the exact format requested, or null.
