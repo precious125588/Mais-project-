@@ -3,9 +3,38 @@
  * Provider responses are normalized here so the command layer only deals with
  * stable fields and safe media modes.
  */
-// One provider, one request. The bot sends exactly the format asked for and
-// never switches to another link, quality or watermark when something is missing.
+// The fallback changes the API source, not the user's selected command/mode or
+// delivery format. Normalization keeps provider quality/watermark fields distinct.
 const PROVIDER = (url) => `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`;
+const TIKTOK_PROVIDER_NAMES = Object.freeze([
+  "tikwm",
+  "prexzy",
+  "nexray-tiktok",
+  "nexray-aio",
+  "davidcyril-rapid",
+  "davidcyril",
+  "giftedtech",
+]);
+
+function providerBase(value, fallback) {
+  const base = String(value || fallback).trim().replace(/\/+$/, "");
+  return /^https?:\/\/[^/]+(?:\/.*)?$/i.test(base) ? base : fallback;
+}
+
+function fallbackProviderRequests(url) {
+  const encoded = encodeURIComponent(url);
+  const prexzy = providerBase(process.env.PREXZY_API, "https://prexzyapis.com");
+  const davidCyril = providerBase(process.env.DAVIDCYRIL_API_BASE, "https://apis.davidcyril.name.ng");
+  const giftedKey = encodeURIComponent(process.env.GIFTED_KEY || "gifted");
+  return [
+    { label: "prexzy", url: `${prexzy}/download/tiktok?url=${encoded}` },
+    { label: "nexray-tiktok", url: `https://api.nexray.eu.cc/downloader/tiktok?url=${encoded}` },
+    { label: "nexray-aio", url: `https://api.nexray.eu.cc/downloader/aio?url=${encoded}` },
+    { label: "davidcyril-rapid", url: `${davidCyril}/download/tiktokdl-rapid?url=${encoded}` },
+    { label: "davidcyril", url: `${davidCyril}/download/tiktok?url=${encoded}` },
+    { label: "giftedtech", url: `https://api.giftedtech.co.ke/api/download/tiktok?apikey=${giftedKey}&url=${encoded}` },
+  ];
+}
 
 const MODES = {
   "1.1": { kind: "video", quality: "sd", document: false, watermark: false },
@@ -26,7 +55,9 @@ const MODES = {
 const pick = (...values) => values.find((value) => typeof value === "string" && value);
 
 export function normalizeTikTokResponse(payload = {}) {
-  const data = payload?.data || payload?.result || payload;
+  const data = (payload?.data && typeof payload.data === "object")
+    ? payload.data
+    : ((payload?.result && typeof payload.result === "object") ? payload.result : payload);
   const rawImages = Array.isArray(data.images)
     ? data.images
     : (Array.isArray(data.image_post_info?.images)
@@ -173,17 +204,95 @@ export function isValidTikTokUrl(url) {
       || /^https?:\/\/www\.tiktok\.com\/@[\w.]+\/(video|photo)\/\d+/i.test(u);
 }
 
-const PROVIDER_CHAIN = [
-  { label: "tikwm", url: (u) => PROVIDER(u) },
-  { label: "tikwm-nohd", url: (u) => `https://www.tikwm.com/api/?url=${encodeURIComponent(u)}` },
-];
+function firstHttpUrl(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && /^https?:\/\/\S+$/i.test(value.trim())) return value.trim();
+    if (Array.isArray(value)) {
+      const found = firstHttpUrl(...value);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
-async function _fetchOne(url, fetchImpl) {
+function extractTikTokMedia(payload) {
+  const queue = [payload];
+  const seen = new Set();
+  let visited = 0;
+  while (queue.length && visited < 80) {
+    const current = queue.shift();
+    visited += 1;
+    if (typeof current === "string") {
+      const direct = firstHttpUrl(current);
+      if (direct) return { title: "TikTok video", author: "Unknown author", videoHd: direct };
+      continue;
+    }
+    if (Array.isArray(current)) {
+      queue.push(...current.slice(0, 20));
+      continue;
+    }
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+
+    const info = normalizeTikTokResponse(current);
+    const hd = firstHttpUrl(current.hdplay, current.hd_play, current.video_hd, current.videoHd, current.play_hd, current.hd);
+    const sd = firstHttpUrl(current.play, current.sd, current.sdplay, current.sd_play, current.video_sd, current.videoSd, current.wmplay);
+    const generic = firstHttpUrl(
+      current.video, current.url, current.video_url, current.videoUrl,
+      current.download_url, current.downloadUrl, current.download, current.link,
+      current.nowm, current.no_watermark, current.data,
+    );
+    const videoHd = info.videoHd || hd || generic;
+    const videoSd = info.videoSd || sd;
+    const videoWatermark = info.videoWatermark || firstHttpUrl(current.wmplay, current.watermark, current.watermarked);
+    const audio = info.audio || firstHttpUrl(current.music, current.audio, current.audio_url, current.audioUrl);
+    if (videoHd || videoSd || videoWatermark || audio || info.images?.length) {
+      return { ...info, videoHd, videoSd, videoWatermark, audio };
+    }
+
+    for (const key of ["data", "result", "response", "media", "video", "download", "links"]) {
+      if (current[key] && typeof current[key] === "object") queue.push(current[key]);
+      else if (typeof current[key] === "string" && /^https?:\/\//i.test(current[key])) queue.push(current[key]);
+    }
+  }
+  return null;
+}
+
+function requestSignal(parentSignal, timeoutMs) {
+  if (typeof AbortSignal === "undefined" || typeof AbortSignal.timeout !== "function") return parentSignal;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return parentSignal && typeof AbortSignal.any === "function"
+    ? AbortSignal.any([parentSignal, timeoutSignal])
+    : parentSignal || timeoutSignal;
+}
+
+function conciseProviderError(error) {
+  if (error?.status) return `HTTP ${error.status}`;
+  if (error?.code === "UNREACHABLE") return "unreachable";
+  return String(error?.code || "request failed").replace(/[^A-Z0-9_-]/gi, "").slice(0, 32) || "request failed";
+}
+
+async function _fetchOne(request, fetchImpl, parentSignal = null) {
   let response;
   try {
-    response = await fetchImpl(url, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MIAS/1.0" } });
+    response = await fetchImpl(request.url, {
+      method: request.method || "GET",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MIAS/1.0",
+        Accept: "application/json",
+      },
+      ...(request.body === undefined ? {} : {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MIAS/1.0",
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request.body),
+      }),
+      signal: requestSignal(parentSignal, 8000),
+    });
   } catch (error) {
-    const err = new Error(`TikTok provider is unreachable: ${error?.message || error}`);
+    const err = new Error("TikTok provider is unreachable");
     err.code = "UNREACHABLE";
     throw err;
   }
@@ -201,8 +310,8 @@ async function _fetchOne(url, fetchImpl) {
     err.code = "BAD_RESPONSE";
     throw err;
   }
-  const info = normalizeTikTokResponse(json);
-  if (!info.videoHd && !info.videoSd && !info.videoWatermark && !info.audio && (!info.images || !info.images.length)) {
+  const info = extractTikTokMedia(json);
+  if (!info) {
     const err = new Error("TikTok provider returned no media for this link");
     err.code = "NO_MEDIA";
     throw err;
@@ -216,18 +325,40 @@ export async function fetchTikTokInfo(url, fetchImpl = fetch) {
     err.code = "INVALID_URL";
     throw err;
   }
-  const errors = [];
-  for (const provider of PROVIDER_CHAIN) {
-    try {
-      return await _fetchOne(provider.url(url), fetchImpl);
-    } catch (error) {
-      errors.push(`${provider.label}: ${error?.message || error}`);
-      // Invalid link / no-media are definitive for this URL — do not retry other providers.
-      if (error?.code === "INVALID_URL" || error?.code === "NO_MEDIA") throw error;
-      // FORBIDDEN / RATE_LIMIT / UNREACHABLE / BAD_RESPONSE / HTTP_* -> try next provider.
-    }
+  const primaryError = [];
+  try {
+    return await _fetchOne({ label: "tikwm", url: PROVIDER(url) }, fetchImpl);
+  } catch (error) {
+    primaryError.push(`tikwm: ${conciseProviderError(error)}`);
   }
-  const err = new Error(`All TikTok providers failed (${errors.join("; ")})`);
+
+  // The previous "tikwm-nohd" retry hit the same TikWM host again, so a
+  // provider-level 403 still left the command without an independent fallback.
+  // Fan out only after the primary failure and stop once one real media result
+  // arrives; each of the six secondary routes has an 8-second ceiling.
+  const controller = new AbortController();
+  const fallbackErrors = [];
+  const attempts = fallbackProviderRequests(url).map(async (request) => {
+    try {
+      const info = await _fetchOne(request, fetchImpl, controller.signal);
+      controller.abort();
+      return info;
+    } catch (error) {
+      fallbackErrors.push(`${request.label}: ${conciseProviderError(error)}`);
+      throw error;
+    }
+  });
+  try {
+    return await Promise.any(attempts);
+  } catch {
+    controller.abort();
+  }
+  const failures = [...primaryError, ...fallbackErrors];
+  const summary = failures.join("; ");
+  const allWithoutMedia = failures.length > 0 && failures.every((failure) => failure.endsWith("NO_MEDIA"));
+  const err = new Error(allWithoutMedia
+    ? `TikTok providers returned no media (${summary})`
+    : `All TikTok providers failed (${summary})`);
   err.code = "ALL_PROVIDERS_FAILED";
   throw err;
 }
@@ -243,4 +374,4 @@ export function selectTikTokUrl(info, mode) {
   return (mode.quality === "hd" ? info.videoHd : info.videoSd) || null;
 }
 
-export { MODES };
+export { MODES, TIKTOK_PROVIDER_NAMES };
