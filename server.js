@@ -497,6 +497,22 @@ app.get('/api/pair/stream/:number', (req,res) => {
             if (_pair.hasPairedSession(jid)&&!linked) {
                 linked=true;
                 sendPairingEvent(res, 'linked', {number,msg:'WhatsApp linked! Starting the bot...'});
+                // ROOT-CAUSE FIX: pairing used to stop at "session saved" and only
+                // HOPE pair.js had spawned the bot — a failed handoff left the monitor
+                // on "Linked, bot not running" forever. The stream that confirms the
+                // link now starts the bot from the saved session itself. The launcher's
+                // single-flight guard makes this idempotent (no duplicate processes).
+                if (_launcher){
+                    try {
+                        const sd = path.join(PAIRING_DIR, jid);
+                        const already = _launcher.list().find(r=>r.number===jid&&r.alive);
+                        if (!already && fs.existsSync(path.join(sd,'creds.json'))) {
+                            _launcher.launch(jid, sd).catch(e=>{
+                                try { sendPairingEvent(res,'bot_error',{number,msg:'Startup failed: '+String(e&&e.message||e).slice(0,140)}); } catch {}
+                            });
+                        }
+                    } catch {}
+                }
                 if (_launcher){
                     let checks=0;
                     const bp=setInterval(()=>{
@@ -594,7 +610,7 @@ const BOT_CLOSE_HINTS = {
 };
 // Turns the raw facts (saved session, bot process, bot status record) into one phase
 // the monitor can show, plus a checklist of every condition behind it.
-function buildPairHealth({paired, live, botRunning, active, error, bs}) {
+function buildPairHealth({paired, live, botRunning, botStarting, startError, active, error, bs}) {
     const code  = (bs && bs.lastCloseCode != null) ? Number(bs.lastCloseCode) : null;
     const state = bs?.state || null;
     const hint  = code != null ? (BOT_CLOSE_HINTS[code] || {tone:'warn', text:`WhatsApp closed the connection with code ${code}.`}) : null;
@@ -603,6 +619,8 @@ function buildPairHealth({paired, live, botRunning, active, error, bs}) {
     else if (active && !paired)                 { phase='pairing';      label='Waiting for approval on your phone';   tone='info'; }
     else if (state==='unlinked' || code===401)  { phase='logged_out';   label='Logged out by WhatsApp';               tone='bad'; }
     else if (code===440)                        { phase='replaced';     label='Taken over by another device';         tone='bad'; }
+    else if (botStarting)                       { phase='starting';     label='Starting bot';                         tone='info'; }
+    else if (!botRunning && startError)         { phase='start_failed'; label='Startup failed — use Restart bot';     tone='bad'; }
     else if (!botRunning)                       { phase='stopped';      label='Linked, bot not running';              tone='warn'; }
     else if (state==='open' || !!live)          { phase='live';         label='Live and connected';                   tone='ok'; }
     else if (state==='closed')                  { phase='reconnecting'; label='Disconnected, reconnecting';           tone='warn'; }
@@ -614,6 +632,7 @@ function buildPairHealth({paired, live, botRunning, active, error, bs}) {
         {label:'Last disconnect',       ok:code==null || code===515,                   value: code != null ? ('code ' + code) : 'none'},
     ];
     if (error) checks.push({label:'Runtime error', ok:false, value:String(error).slice(0,160)});
+    if (startError) checks.push({label:'Startup error', ok:false, value:String((startError&&startError.message)||startError).slice(0,160)});
     return {
         phase, label, tone, checks,
         lastClose: code != null ? {code, message: bs?.lastCloseMsg || null, at: bs?.lastCloseAt || null, hint: hint.text} : null,
@@ -629,16 +648,18 @@ app.get('/api/pair/status/:number', (req,res) => {
     const live   = paired && _pair?.isSessionLive ? _pair.isSessionLive(jid) : false;
     const record = _pair?_pair.readPairingCodeRecord(jid):null;
     const botRunning = _launcher?_launcher.list().some(r=>r.number===jid&&r.alive):false;
+    const botStarting = _launcher&&_launcher.isLaunching ? _launcher.isLaunching(jid) : false;
+    const startError  = (!botRunning && _launcher && _launcher.lastError) ? (_launcher.lastError(jid)||null) : null;
     const selection = _selectionStore ? _selectionStore.get(number) : null;
     const bs = readBotStatus(number);
-    const health = buildPairHealth({paired, live, botRunning, active:!!runtime.active, error:runtime.error||null, bs});
+    const health = buildPairHealth({paired, live, botRunning, botStarting, startError, active:!!runtime.active, error:runtime.error||null, bs});
     res.json({
         ok:true,paired,live,
         code:record?.code||null,
         qr: !!_pair?.readPairingQrRecord?.(jid),
         mode: _pair?.readPairingQrRecord?.(jid) ? 'qr' : (record?.code ? 'code' : null),
         source:registry.get(jid)?.source||null,
-        ready:_ready,botRunning,
+        ready:_ready,botRunning,botStarting,startError,
         active:!!runtime.active,
         error:runtime.error||null,
         debug:runtime.debug||null,
@@ -801,7 +822,10 @@ app.post('/api/admin/restart/:jid', async (req,res) => {
     if (!isAdmin(req)) return res.status(403).json({ok:false,error:'Unauthorized'});
     if (!_launcher)    return res.status(503).json({ok:false,error:'Launcher not ready.'});
     const jid=decodeURIComponent(req.params.jid);
-    try { const ok=await _launcher.restart(jid); res.json({ok,message:ok?`Restarted ${jid}`:'Not found.'}); }
+    // Restart recycles ONLY the bot process; the saved session is resolved from
+    // disk when the process is down and is never deleted or regenerated here.
+    const _prevErr = _launcher.lastError ? _launcher.lastError(jid) : null;
+    try { const ok=await _launcher.restart(jid); res.json({ok,message:ok?`Restarted ${jid} (saved session kept).`:( _prevErr?`Startup failed: ${_prevErr.message}`:'No saved session for this number — pair it first.')}); }
     catch(e){ res.status(500).json({ok:false,error:e.message}); }
 });
 

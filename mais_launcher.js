@@ -41,6 +41,8 @@ const MAX_BACKOFF_MS = 5 * 60 * 1000;
 
 const running = new Map(); // jid -> { proc, sessionDir, startedAt, restartCount }
 const paused  = new Set(); // jids that are intentionally paused (no auto-restart)
+const _lastError     = new Map(); // jid -> { message, at } last startup/give-up failure (for the live monitor)
+const _watchdogTried = new Map(); // jid -> timestamp of last watchdog launch attempt
 
 // ── Profiling: one [perf] line every PERF_LOG_MIN minutes (default 10). ──
 // Logs bot count, per-bot resident memory (no numbers), and system load, so
@@ -207,12 +209,16 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
 
         const MAX_AUTO_RESTARTS = parseInt(process.env.MAX_AUTO_RESTARTS || '8', 10);
         if ((r?.restartCount || 0) >= MAX_AUTO_RESTARTS) {
+            _lastError.set(number, { message: `Gave up after ${MAX_AUTO_RESTARTS} auto-restarts (crash-loop protection). Use Restart bot to try again.`, at: Date.now() });
             console.log(chalk.red(`${tag} hit ${MAX_AUTO_RESTARTS} auto-restarts — giving up to avoid a crash loop.`));
             return;
         }
 
         if (!isClean && fs.existsSync(sessionDir)) {
-            const prev  = r ? (r.restartCount||0) : 0;
+            // A bot that stayed up more than 10 minutes was healthy: reset its
+            // budget so rare crashes spread over days never exhaust the limit.
+            const stable = r && (Date.now() - (r.startedAt || 0)) > 10 * 60 * 1000;
+            const prev  = stable ? 0 : (r ? (r.restartCount||0) : 0);
             const newCt = prev + 1;
             const delay = code === 75 ? 3000 : _backoffMs(newCt);
             console.log(chalk.cyan(`🔄 Auto-restarting ${number} in ${Math.round(delay/1000)}s`));
@@ -235,6 +241,7 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
 
     const entry = { proc, sessionDir, startedAt: Date.now(), lastOutputAt: Date.now(), restartCount, envOverrides };
     running.set(number, entry);
+    _lastError.delete(number); // spawned cleanly — any previous startup failure is obsolete
     paused.delete(number); // clear paused flag on fresh launch
     if (registry) { try { registry.updateStatus(number,'connected'); } catch {} }
     const launchedName = safeEnvOverrides.BOT_NAME || safeEnvOverrides.BOT_ID || 'MIAS MDX';
@@ -270,10 +277,12 @@ async function resume(number) {
     const last = running.get(number);
     let sessionDir = last?.sessionDir;
     if (!sessionDir) {
-        const PAIRING_DIR = require('path').join(__dirname,'nexstore','pairing');
-        const candidate   = require('path').join(PAIRING_DIR, number);
-        if (require('fs').existsSync(require('path').join(candidate,'creds.json'))) {
-            sessionDir = candidate;
+        // Resolve via sessionPaths so the Railway volume (/app/nexstore) is used —
+        // the old hardcoded <repo>/nexstore/pairing missed volume-backed sessions.
+        const sp = require('./sessionPaths');
+        const digits = String(number).split('@')[0].replace(/[^0-9]/g, '');
+        for (const cand of [sp.sessionDirFor(number), require('path').join(sp.ensureSessionRoot(), digits)]) {
+            if (require('fs').existsSync(require('path').join(cand, 'creds.json'))) { sessionDir = cand; break; }
         }
     }
     if (!sessionDir || !fs.existsSync(sessionDir)) {
@@ -292,7 +301,18 @@ async function resume(number) {
 
 async function restart(number) {
     const r = running.get(number);
-    const sessionDir = r?.sessionDir;
+    let sessionDir = r?.sessionDir;
+    // Admin "Restart bot" must also work when the process is NOT running: find
+    // the saved session on disk and start from it. Restart never deletes creds.
+    if (!sessionDir) {
+        try {
+            const sp = require('./sessionPaths');
+            const digits = String(number).split('@')[0].replace(/[^0-9]/g, '');
+            for (const cand of [sp.sessionDirFor(number), path.join(sp.ensureSessionRoot(), digits)]) {
+                if (fs.existsSync(path.join(cand, 'creds.json'))) { sessionDir = cand; break; }
+            }
+        } catch {}
+    }
     if (!sessionDir) return false;
     console.log(chalk.cyan(`🔄 Restarting MAIS for ${number}…`));
     stop(number);
@@ -336,6 +356,7 @@ function launch(number, sessionDir, envOverrides = {}) {
         return pending;
     }
     const p = _launch(number, sessionDir, envOverrides)
+        .catch(e => { _lastError.set(number, { message: String((e && e.message) || e).slice(0, 200), at: Date.now() }); throw e; })
         .finally(() => { _inFlight.delete(number); });
     _inFlight.set(number, p);
     return p;
@@ -357,7 +378,7 @@ function launchesInFlight() { return _inFlight.size; }
 // (see nexstore/adminRequests.js).
 async function deletePairing(digits) {
     const jid = `${digits}@s.whatsapp.net`;
-    const sessionDir = running.get(jid)?.sessionDir || path.join(__dirname, 'nexstore', 'pairing', digits);
+    const sessionDir = running.get(jid)?.sessionDir || require('./sessionPaths').sessionDirFor(digits);
     if (!fs.existsSync(path.join(sessionDir, 'creds.json')) && !running.has(jid)) {
         return { ok: false, message: `+${digits} is not paired.` };
     }
@@ -373,5 +394,51 @@ async function deletePairing(digits) {
 }
 require('./nexstore/adminRequests').createWatcher({ deletePairing });
 
+// ── Session watchdog: every saved session keeps a live bot ───────────────────
+// Covers "linked but never started" (handoff spawn error, boot autoload raced
+// the volume mount, a give-up after crash-loop protection) WITHOUT ever asking
+// the user to pair again. Bounded: max 2 launches per sweep, one attempt per
+// number per 10 minutes; the per-process MAX_AUTO_RESTARTS guard still applies.
+const WATCHDOG_MS            = Math.max(15000, parseInt(process.env.SESSION_WATCHDOG_MS || '60000', 10));
+const WATCHDOG_MAX_PER_SWEEP = 2;
+const WATCHDOG_RETRY_MS      = 10 * 60 * 1000;
+const _watchdog = setInterval(async () => {
+    try {
+        if (running.size >= MAX_INSTANCES) return;
+        let sessionRoot;
+        try { sessionRoot = require('./sessionPaths').ensureSessionRoot(); } catch { return; }
+        let entries;
+        try { entries = fs.readdirSync(sessionRoot, { withFileTypes: true }); } catch { return; }
+        let launched = 0;
+        for (const ent of entries) {
+            if (launched >= WATCHDOG_MAX_PER_SWEEP) break;
+            if (!ent.isDirectory()) continue;
+            const name = ent.name;
+            if (name.includes('.quarantine-')) continue; // never resurrect quarantined sessions
+            const jid = name.includes('@') ? name : name.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+            if (paused.has(jid)) continue;                       // intentional stop stays stopped
+            const cur = running.get(jid);
+            if (cur && isAlive(cur.proc)) continue;              // healthy bot — leave it alone
+            if (_inFlight.has(jid)) continue;                    // startup already in progress
+            const dir = path.join(sessionRoot, name);
+            if (!fs.existsSync(path.join(dir, 'creds.json'))) continue; // no saved session
+            const lastTry = _watchdogTried.get(jid) || 0;
+            if (Date.now() - lastTry < WATCHDOG_RETRY_MS) continue;
+            _watchdogTried.set(jid, Date.now());
+            try {
+                await launch(jid, dir);
+                launched++;
+                console.log(chalk.green(`🛟 Watchdog started bot for ${jid} from its saved session`));
+            } catch (e) {
+                console.log(chalk.yellow(`🛟 Watchdog launch failed for ${jid}: ${e.message}`));
+            }
+        }
+    } catch {}
+}, WATCHDOG_MS);
+if (_watchdog.unref) _watchdog.unref();
+
+function isLaunching(number) { return _inFlight.has(number); }
+function lastError(number)   { return _lastError.get(number) || null; }
+
 process.on('exit', () => { for (const [,r] of running) { try { r.proc.kill('SIGTERM'); } catch {} } });
-module.exports = { launch, stop, restart, pause, resume, isPaused, list, listAll, lastActivityAt, launchesInFlight };
+module.exports = { launch, stop, restart, pause, resume, isPaused, list, listAll, lastActivityAt, launchesInFlight, isLaunching, lastError };

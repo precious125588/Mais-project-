@@ -665,7 +665,9 @@ const readMore = '';
 const Richie = "ＺＵＫＯ－ＸＭＤ 👽";
 
 if (!devtrust.public) {
-    if (!isCreator && command !== 'aza' && command !== 'send') return;
+    // Private mode: hide the bot from everyone except owner + sudo users.
+    // Only the public gateways `aza` and `send` stay reachable for strangers.
+    if (!isCreator && !isSudo && command !== 'aza' && command !== 'send') return;
 }
 
 const example = (teks) => {
