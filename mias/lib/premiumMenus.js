@@ -201,10 +201,13 @@ export function createMenuQuoteSelector(getQuotes, random = Math.random) {
 export const MENU_REACTIONS = Object.freeze({ MAIN: '📋', ALL: '🏷️', INTELLIGENCE: '🤖', ANIMATION: '🍥', DOWNLOAD: '📥', GROUP: '👥', AUDIO: '🎵', TOOLS: '🔧', OWNER: '🔐', SETTINGS: '⚙️', CONFIG: '🎛️', CREATOR: '👑', CONVERT: '🔄', DEBUG: '🐛', STATUS: '🎬', INFO: '📊', MEDIA: '🖼️', MISC: '📁', SEARCH: '🔍', SESSION: '🔑', TTS: '🔊', UTILITY: '🛠️', WHATSAPP: '📱', AI: '🤖', ANIME: '🍥', ADULT: '🔞', HENTAI: '❤️‍🔥', NSFW: '🚨', NEXRAY: '⚡', 'NEXRAY-CANVAS': '🎴' });
 // Reactions are separate from menu text. Main/all retain the requested 💔;
 // category requests use their existing supported category-specific reactions.
+// P3 fix: ".menu" (MAIN) -> 🏷️, ".allmenu" (ALL) -> 🖇️. Each category returns
+// its own mapped reaction so a category never falls back to the main-menu emoji.
 export function menuReaction(category) {
   const raw = String(category || '').toUpperCase();
-  if (!raw || raw === 'MAIN' || raw === 'ALL') return '\uD83D\uDC94';
-  return MENU_REACTIONS[normalizeMenuCategory(raw)] || '\uD83D\uDC94';
+  if (!raw || raw === 'MAIN') return '\uD83C\uDFF7\uFE0F'; // 🏷️
+  if (raw === 'ALL') return '\uD83D\uDD17\uFE0F';          // 🖇️
+  return MENU_REACTIONS[normalizeMenuCategory(raw)] || '\uD83C\uDFF7\uFE0F';
 }
 export function installMenuCategoryPolicy(commands, aliases, categories, legacyNames = [], isDisabled = () => false) {
   // Category removal is presentation-only. Never delete handlers or alias maps.
