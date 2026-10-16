@@ -76,7 +76,8 @@ import {
   getStickerHash,
 } from "./lib/kevdraPatches.js";
 import { createStickerFromBuffer } from "./lib/stickerMedia.js";
-import { ORIGINAL_PHASE1_QUOTES, canonicalMenuEntries, activeMenuCategories, resolveMenuCategory, formatMenuCategory, boldCommand, quoteSection, createMenuQuoteSelector, menuReaction, installMenuCategoryPolicy, deliverMenuCaption } from "./lib/premiumMenus.js";
+import { ORIGINAL_PHASE1_QUOTES, canonicalMenuEntries, activeMenuCategories, resolveMenuCategory, formatMenuCategory, boldCommand, quoteSection, createMenuQuoteSelector, menuReaction, installMenuCategoryPolicy, deliverMenuCaption, withJustXFooter } from "./lib/premiumMenus.js";
+import { detectHostEnvironment } from "./lib/hostDetect.cjs";
 // ── MIAS HANDLER SYSTEM — universal messaging abstraction ─────────────────────
 import { installHandlerGlobals, updateHandlerSock } from "./handlers/globals.js";
 import { isGktwAvailable } from "./handlers/gktwAdapter.js";
@@ -112,6 +113,8 @@ function setButtonMode(value) { __buttonMode = Boolean(value); }
 function isButtonMode() { return __buttonMode; }
 let __miasPortableVideoModule = null;
 async function deliverVideoWithTTHD(sock, jid, buf, { caption = "", fileName = `video_${Date.now()}.mp4`, quoted = null } = {}) {
+  // Shared downloader delivery: one branding footer, idempotent.
+  caption = withJustXFooter(caption);
   let playBuf = buf;
   try {
     playBuf = await prepareTikTokVideo(buf);
@@ -4153,6 +4156,11 @@ END:VCARD`;
             } catch {}
           }
           const entry = commands.get(name);
+          // ── DISABLED COMMAND GUARD: blocked before permissions, aliases included ──
+          if (entry && (entry.disabled === true || isCommandDisabled(name))) {
+            __replyTrace(msg, "disabled-command", name);
+            return;
+          }
           // Check custom commands if no built-in found
           if (!entry) {
             const customReply = customCmds.get(name);
@@ -4213,7 +4221,7 @@ END:VCARD`;
             await entry.handler(sock, msg, args);
             // ── Execute joint commands queued from & chaining
             for (const _jP of _jointQueue) {
-              try { await new Promise(r=>setTimeout(r,750)); const _jT=_jP.split(/\s+/); const _jN=(_jT.shift()||"").toLowerCase(); const _jA=_jT; const _jE=commands.get(_jN); if(_jE) await _jE.handler(sock,msg,_jA); } catch(_je){ try{console.error("[JOINT]",_je?.message);}catch{} }
+              try { await new Promise(r=>setTimeout(r,750)); const _jT=_jP.split(/\s+/); const _jN=(_jT.shift()||"").toLowerCase(); const _jA=_jT; const _jE=commands.get(_jN); if(_jE && _jE.disabled !== true && !isCommandDisabled(_jN)) await _jE.handler(sock,msg,_jA); } catch(_je){ try{console.error("[JOINT]",_je?.message);}catch{} }
             }
           } catch (e) {
             console.error(`[CMD ${name}] error:`, e?.message || e);
@@ -7151,6 +7159,58 @@ function isCommandAlias(name) {
   return commands.get(lower)?.isAlias === true || aliases.has(lower);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  DISABLED COMMANDS (owner-selected) — single source of truth.
+//  A disabled command is blocked at dispatch, hidden from every menu, excluded
+//  from every displayed total, and its aliases cannot bypass the restriction.
+//  Handlers and source files are deliberately left untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+const DISABLED_COMMANDS = new Set([
+  "freesound", "fsounddl", "nonstick", "radio", "settheme", "pdftotext", "test",
+  "applemusic-dl", "igstory-dl", "nxytmp4", "pixiv-dl", "pinterest-search-dl",
+  "playlist", "playstore-dl", "reddit-dl", "reels-dl", "savefrom-dl", "sfile",
+  "rednote", "playsearch", "saavn-dl", "savetube", "snack", "stickerwa-dl",
+  "tt-dl", "tt-dl2", "tt-dl3", "twit-dl2", "vimeo-dl", "web2zip", "yt-audio",
+  "ytmp3", "ytv1", "zoho-dl", "ytv2", "wetv-dl", "timedadd", "cek-rekening",
+  "cuaca", "gempa", "hari-libur", "kurs", "menu3", "prakiraan", "richmode",
+  "qris", "kodepos", "isonline", "saweria-cek", "setaza", "sholat",
+  "tagihan-pln", "saweria-donate", "support", "musiccard", "music-card",
+  "animelib", "animelibrefresh", "bcheck", "btnmenu", "buttonsmode",
+  "chatbotscope", "debug", "debugclear", "creatoroff", "ghostmode", "enhance2",
+  "regionalindicator", "mathboldfraktur", "invertedtext",
+]);
+
+// Duplicate downloader names folded into their canonical parent. Only names
+// that do NOT already exist as real commands, and are NOT in the disabled set,
+// are ever registered (disabled always wins; no command is overwritten).
+const DUPLICATE_DOWNLOAD_ALIASES = {
+  "fbdl": "facebook", "fb-dl": "facebook", "fb-dl2": "facebook",
+  "facebook-dl": "facebook", "facebookdl": "facebook", "metadl": "facebook",
+  "insta": "instagram", "insta-dl": "instagram", "instadl": "instagram",
+  "ig-dl": "instagram", "ig-dl2": "instagram", "igdl2": "instagram",
+  "tiktok-dl": "tiktok", "tiktokdl": "tiktok",
+  "ytmp4-dl": "ytmp4", "ytmp4dl": "ytmp4",
+  "pinterest-dl": "pinterest", "pinterestdl": "pinterest", "pin-dl": "pinterest",
+  "twitter-dl": "twitter", "twitterdl2": "twitter", "tw-dl": "twitter",
+  "x-dl": "twitter", "xdownloader": "twitter",
+  "snap-dl": "snapchat", "snapchatdl": "snapchat",
+  "reddit-dl": "reddit", "redditdl2": "reddit",
+  "spotify-dl": "spotify", "spotdl2": "spotify",
+  "soundcloud-dl": "soundcloud", "scdl2": "soundcloud",
+  "threads-dl": "threads", "capcut-dl": "capcut", "capcutdl": "capcut",
+  "igstorydl": "igstory", "ighighlight": "ighighlights",
+};
+
+// A disabled canonical blocks every alias that resolves to it.
+function isCommandDisabled(name) {
+  const key = String(name || "").toLowerCase().trim();
+  if (!key) return false;
+  if (DISABLED_COMMANDS.has(key)) return true;
+  const entry = commands.get(key);
+  const canonical = String(entry?.canonical || aliases.get(key) || "").toLowerCase();
+  return Boolean(canonical) && DISABLED_COMMANDS.has(canonical);
+}
+
 function getCategoryPrimaryCommands(cat, context = {}) {
   return canonicalMenuEntries(commands, aliases, MENU_CATEGORIES, context)
     .filter(item => item.category === cat?.name).map(item => item.name);
@@ -7841,7 +7901,7 @@ const MENU_CATEGORIES = [
     "telegramchan","wagroupsearch",
     "applemusic","nik","trending2"] },
   { name: "SESSION",   emoji: "🔑", cmds: ["pair","pair1","pair2","getbot","pair4","paircode","pairlink","pairpop","sm1","listpair","validate","validate2"] },
-  { name: "SETTINGS",  emoji: "⚙️",  cmds: ["getprivacy","setprivacy","setpp","setpfp","setbotpic","botpic","setbio","setabout","setname","setbotname","fulldp","setfulldp","setfullpp","setting","settings","config2"] },
+  { name: "SETTINGS",  emoji: "⚙️",  cmds: ["getprivacy","setprivacy","setpp","setpfp","setbotpic","botpic","setbio","setabout","setname","setbotname","fulldp","setting","settings","config2"] },
   { name: "STALK",     emoji: "🕵️", cmds: ["igstalk","stalkinsta","instainfo","ttstalk","stalktiktok","ttinfo","twitterstalk","twitterinfo","xstalk","stalktw","ytstalk","stalkyoutube","ytinfo2","ffstalk","stalkff","freefire","githubstalk","ghstalk","gstalk","npmstalk","npmpkg","npminfo"] },
   { name: "TEXTMAKER", emoji: "✏️", cmds: ["glitchtext","watercolortext","neonglitch","glowingtext","luxurygold","underwatertext","gradienttext","galaxyneon","royaltext","cartoonstyle","papercutstyle","summerbeach","3dhologram","galaxystyle","typographytext","pixelglitch","advancedglow","deletetext","blackpinkstyle","effectclouds","multicolorneon","style1917","greenlight","glasswrites","ttp2","spongebobmeme"] },
   { name: "TOOLS",     emoji: "🔧", cmds: [
@@ -8483,52 +8543,40 @@ function _randomTruth() {
 }
 
 function buildMenu(jid, senderName, sender, context = {}) {
+  void senderName;
   const userQuote = _randomMenuQuoteForUser(sender || jid);
   const s = getSettings(jid);
-  const up = process.uptime();
-  const mem = process.memoryUsage();
-  const now = new Date();
-  const ngTime = new Date(now.toLocaleString("en-US", { timeZone: "Africa/Lagos" }));
-  const hh = ngTime.getHours(), mm = String(ngTime.getMinutes()).padStart(2, "0");
-  const ampm = hh >= 12 ? "PM" : "AM";
-  const hh12 = String(hh % 12 || 12).padStart(2, "0");
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const timeStr = `${hh12}:${mm} ${ampm} — ${months[ngTime.getMonth()]} ${ngTime.getDate()}`;
   const totalCmds = getPrimaryCommandCount(context);
-  const ramUsed = (mem.rss / 1048576).toFixed(0);
-  const greet = hh < 5 ? "Late Night" : hh < 12 ? "Good Morning" : hh < 17 ? "Good Afternoon" : hh < 21 ? "Good Evening" : "Good Night";
+  const mode = String(s.workMode || (s.privateMode ? "private" : "public")).toUpperCase();
+  // Real runtime host — never invented, never assumed.
+  let host = "UNKNOWN";
+  try { host = String(detectHostEnvironment().platform || "UNKNOWN").toUpperCase(); } catch {}
+  const rule = "────────────────────";
 
   let t = "";
+  t += rule + "\n";
+  t += "*MIA'S MDX*\n";
+  t += rule + "\n\n";
   t += quoteSection(userQuote);
-  t += `✦ ─────────────────── ✦\n`;
-  t += `  *MIA'S MDX*\n`;
-  t += `✦ ─────────────────── ✦\n\n`;
-  t += `*OWNER* · 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n`;
-  t += `${greet}, *${senderName}*\n\n`;
-  t += `┌─────「 *𝗦𝗬𝗦𝗧𝗘𝗠 𝗦𝗧𝗔𝗧𝗦* 」─────\n`;
-  t += `│  ◈ 𝗣𝗿𝗲𝗳𝗶𝘅    ➜  \`${CONFIG.PREFIX}\`\n`;
-  t += `│  ◈ 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀  ➜  ${totalCmds}\n`;
-  t += `│  ◈ 𝗩𝗲𝗿𝘀𝗶𝗼𝗻   ➜  ${CONFIG.VERSION}\n`;
-  t += `│  ◈ 𝗠𝗼𝗱𝗲     ➜  ${s.workMode || "public"}\n`;
-  t += `│  ◈ 𝗨𝗽𝘁𝗶𝗺𝗲   ➜  ${fmtUptime(up)}\n`;
-  t += `│  ◈ 𝗥𝗔𝗠      ➜  ${ramUsed} MB\n`;
-  t += `│  ◈ 𝗧𝗶𝗺𝗲     ➜  ${timeStr}\n`;
-  t += `└─────────────────────────\n\n`;
-  t += `━━━━━「 *CATEGORIES* 」━━━━━\n\n`;
+  t += "*BOT INFORMATION*\n\n";
+  t += `HOST: ${host}\n`;
+  t += `PREFIX: ${CONFIG.PREFIX}\n`;
+  t += `MODE: ${mode}\n`;
+  t += `VERSION: ${CONFIG.VERSION}\n`;
+  t += `OWNER: 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n`;
+  t += `COMMANDS  →  ${totalCmds}\n\n`;
+  t += rule + "\n";
+  t += "COMMAND CATEGORIES\n";
+  t += rule + "\n\n";
   for (const cat of activeMenuCategories(commands, aliases, MENU_CATEGORIES, context)) {
     if (cat.adult && (!s.adultMode || s.safeMode)) continue;
     const count = getCategoryPrimaryCommands(cat, context).length;
-    t += `  ╰➤ *${cat.name.toUpperCase()}*  ‹${count} cmds›\n`;
+    t += `${cat.name.toUpperCase()}  (${count})\n`;
   }
-  t += `\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-  t += `  ╰➤ _${CONFIG.PREFIX}menu <category>_ — open a category\n`;
-  t += `  ╰➤ _${CONFIG.PREFIX}settings_ — configure the bot\n\n`;
-  t += `  ╰➤ _${CONFIG.PREFIX}allmenu_ — all available commands\n\n`;
-  t += `powered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x`;
+  t += "\n" + rule + "\n";
+  t += `POWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x`;
   return t;
 }
-
-
 function menuPictureSources(sock, jid) {
   const scope = jid.endsWith('@g.us') ? jid : 'global_cuz';
   const custom = getSettings(scope)?.__cuz?.botProfile;
@@ -8596,14 +8644,16 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
   let text;
   if (cat) {
     const uniq = getCategoryPrimaryCommands(cat, context);
-    text = quoteSection(_randomMenuQuoteForUser(sender || jid)) + "*MIA'S MDX*\n*OWNER* · 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n" + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\npowered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
+    text = "────────────────────\n*MIA'S MDX*\n────────────────────\n\n" + quoteSection(_randomMenuQuoteForUser(sender || jid)) + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\nPOWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
   } else {
     text = buildMenu(jid, senderName, sender, context);
     if (all) {
-      let start = text.indexOf('━━━━━「 *CATEGORIES* 」'); if (start === -1) start = text.indexOf('━━━━━「 🗂️');
-      const end = text.indexOf('\n━━━━━━━━━━━━━━━━━━━━━━━━━', start);
-      const listing = categories.map(formatMenuCategory).join('\n\n');
-      text = text.slice(0, start) + listing + text.slice(end);
+      const start = text.indexOf('COMMAND CATEGORIES');
+      const end = start === -1 ? -1 : text.indexOf('\n────────────────────', start);
+      if (start !== -1 && end !== -1) {
+        const listing = categories.map(formatMenuCategory).join('\n\n');
+        text = text.slice(0, start) + listing + text.slice(end);
+      }
     }
   }
   const botJid = String(sock.user?.id || '').replace(/:[0-9]+@/, '@');
@@ -43350,6 +43400,83 @@ async function handleReaction(sock, r) {
 globalThis.handleReaction = handleReaction;
 
 // Targeted menu policy is installed after existing command overrides.
+// ─────────────────────────────────────────────────────────────────────────────
+//  MAINTENANCE PASS — disable selected commands, fold duplicates into hidden
+//  aliases, and keep exactly one visible full-DP command. Handlers are reused,
+//  never rewritten; disabled handlers are kept but never reachable.
+// ─────────────────────────────────────────────────────────────────────────────
+function __miasApplyMaintenance(registry, aliasMap, categories) {
+  const report = { disabled: [], aliases: [], fullDpAliases: [], setppAliases: [], skipped: [] };
+
+  // 1. Disable: flag only (handler + source stay intact).
+  for (const name of DISABLED_COMMANDS) {
+    const entry = registry.get(name);
+    if (!entry) { report.skipped.push(name); continue; }
+    entry.disabled = true;
+    entry.enabled = false;
+    registry.set(name, entry);
+    report.disabled.push(name);
+  }
+
+  // 2. Duplicate downloader names → hidden aliases of their canonical parent.
+  for (const [aliasName, parent] of Object.entries(DUPLICATE_DOWNLOAD_ALIASES)) {
+    if (DISABLED_COMMANDS.has(aliasName)) continue;        // disabled always wins
+    if (registry.has(aliasName)) continue;                 // never overwrite a real command
+    const parentEntry = registry.get(parent);
+    if (!parentEntry || typeof parentEntry.handler !== "function") continue;
+    registry.set(aliasName, { ...parentEntry, isAlias: true, canonical: parent });
+    aliasMap.set(aliasName, parent);
+    report.aliases.push(aliasName + " -> " + parent);
+  }
+
+  // 3. Full-DP: ".fulldp" is the only visible canonical; aliases stay callable.
+  const fullDp = registry.get("fulldp");
+  if (fullDp) {
+    fullDp.isAlias = false;
+    fullDp.canonical = "fulldp";
+    registry.set("fulldp", fullDp);
+    aliasMap.delete("fulldp");
+    for (const a of ["setfulldp", "setfullpp", "fullpp"]) {
+      const entry = registry.get(a);
+      if (!entry) continue;
+      entry.isAlias = true;
+      entry.canonical = "fulldp";
+      registry.set(a, entry);
+      aliasMap.set(a, "fulldp");
+      report.fullDpAliases.push(a);
+    }
+  }
+
+  // 4. ".setpp" stays its own normal profile-picture command — never aliased
+  //    to ".fulldp", never hidden just because it sets a picture.
+  const setpp = registry.get("setpp");
+  if (setpp && setpp.handler && setpp.handler !== fullDp?.handler) {
+    setpp.isAlias = false;
+    setpp.canonical = "setpp";
+    registry.set("setpp", setpp);
+    aliasMap.delete("setpp");
+    for (const a of ["setpfp", "setbotpic", "botpic"]) {
+      const entry = registry.get(a);
+      if (!entry || entry.handler !== setpp.handler) continue;
+      entry.isAlias = true;
+      entry.canonical = "setpp";
+      registry.set(a, entry);
+      aliasMap.set(a, "setpp");
+      report.setppAliases.push(a);
+    }
+  }
+
+  // 5. Disabled commands never render in any category listing either.
+  for (const cat of categories || []) {
+    if (!Array.isArray(cat.cmds)) continue;
+    cat.cmds = cat.cmds.filter(name => !isCommandDisabled(name));
+  }
+  return report;
+}
+globalThis.__MIAS_DISABLED__ = isCommandDisabled;
+globalThis.__MIAS_DISABLED_COMMANDS__ = DISABLED_COMMANDS;
+
+__miasApplyMaintenance(commands, aliases, MENU_CATEGORIES);
 const __menuCategoryPolicy = installMenuCategoryPolicy(commands, aliases, MENU_CATEGORIES, ["boyfriendsday","christmas","dares","fathersday","flirt","flirtline","friendquote","friendship","girlfriendsday","gitprofile","gitstalk","gn","goodnight","gratitude","guess","halloween","happyfathersday","happymothersday","happynewyear","heartbreak","igprofile","instastalk","ipstalk","jokes","love","lovemessage","mothersday","motivate","motivation","newyear","quote","quotes","roast","roseday","shayari","thankful","thankyou","thankyoumessage","tiktoklookup","tiktokstalk","valentine","valentines","wouldyou","xmas","compliment","ship","truthdare","tod","solve","tictactoe","8ball"]);
 globalThis.__MIAS_MENU_DENIED__ = name => __menuCategoryPolicy.denied(name, commands.get(String(name).toLowerCase()));
 globalThis.__MIAS_MENU_POLICY_REPORT__ = __menuCategoryPolicy.clean();
