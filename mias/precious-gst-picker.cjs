@@ -384,18 +384,24 @@ module.exports = {
       };
 
       const bind = (names, handler) => {
-        try { cmd(names, { desc: 'Post to group status with media conversion & gclink support', category: 'GROUP' }, handler); } catch {}
         const list = Array.isArray(names) ? names : [names];
-        for (const n of list) {
+        const canonical = list[0];
+        try { cmd(list, { desc: 'Post to group status with media conversion & gclink support', category: 'GROUP' }, handler); } catch {}
+        for (let i = 0; i < list.length; i++) {
+          const n = list[i];
           try {
-            const ex = (ctx.commands && ctx.commands.get(n)) || { desc: 'Group status', category: 'GROUP' };
+            const ex = (ctx.commands && ctx.commands.get(n)) || { desc: 'Group status', category: 'GROUP', canonical };
             ex.handler = handler;
+            ex.canonical = canonical;
+            ex.isAlias = i > 0;
+            if (i > 0) ex.hidden = true;
             if (ctx.commands) ctx.commands.set(n, ex);
+            if (ctx.aliases && i > 0) ctx.aliases.set(n, canonical);
           } catch {}
         }
       };
 
-      bind(['gst', 'gstatus', 'groupstatus', 'gcstatus'], gstHandler);
+      bind(['groupstatus', 'gst', 'gstatus', 'gcstatus'], gstHandler);
 
       for (const n of ['gstpick', 'gstcancel']) {
         try { if (ctx.commands && ctx.commands.delete(n)) {} } catch {}

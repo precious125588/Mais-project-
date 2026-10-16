@@ -128,6 +128,22 @@ module.exports = function registerNexrayCmds(cmd, CONFIG, sendReply, react, down
     return;
   }
 
+  const _origCmd = cmd;
+  cmd = function(names, opts, handler) {
+    const list = [].concat(names || []).map(n => String(n || '').trim().toLowerCase()).filter(Boolean);
+    if (!list.length) return;
+    const cat = String(opts?.category || '').toLowerCase();
+    if (cat.includes('anime') || cat.includes('random') || cat.includes('primbon') || cat.includes('canvas')) return;
+    if (list.some(n =>
+      n.startsWith('canvas-') ||
+      n.startsWith('ramalan') ||
+      n.startsWith('random') ||
+      n.startsWith('dc') ||
+      ['wanted', 'wasted', 'editor-wanted', 'editor-wasted', 'ewanted', 'ewasted', 'musiccard', 'music-card', 'spotifycard', 'mcard', 'nomer-hoki', 'nomerhoki', 'arti-nama', 'artinama', 'weton', 'fb-dl', 'fbdl', 'facebook-dl'].includes(n)
+    )) return;
+    return _origCmd(names, opts, handler);
+  };
+
   const P = CONFIG.PREFIX || '/';
 
   // Convenience wrapper so handlers get clean sendReply bound to sock+msg

@@ -224,11 +224,8 @@ function install(ctx) {
 
   if (try_(() => {
     for (const n of ['gst_v20_disabled', 'gstatus_v20_disabled', 'groupstatus_v20_disabled']) {
-      const e = ctx.commands.get(n) || { category: 'GROUP' };
-      e.handler = gstHandler;
-      e.desc = 'Legacy disabled';
-      e.category = 'GROUP';
-      ctx.commands.set(n, e);
+      if (ctx.commands) ctx.commands.delete(n);
+      if (ctx.aliases) ctx.aliases.delete(n);
     }
     return true;
   }, 'gst')) report.gst = true;

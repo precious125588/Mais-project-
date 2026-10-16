@@ -7120,7 +7120,14 @@ function cmd(names, opts, handler) {
   if (typeof names === "object" && names !== null && !Array.isArray(names)) {
     handler = opts; opts = names; names = [];
   }
-  const list = [].concat(names || []).map(n => typeof n === "string" ? n.trim().toLowerCase() : "").filter(Boolean);
+  const rawList = [].concat(names || []).map(n => typeof n === "string" ? n.trim().toLowerCase() : "").filter(Boolean);
+  if (!rawList.length) return;
+  const cat = String(opts?.category || "").trim().toUpperCase();
+  if (cat === "TTS") return;
+  const isTts = (n) => (n.startsWith("tts") && !["ttsearch", "ttstalk", "ttstatus"].includes(n)) || ["texttospeech2", "speak2", "listvoices", "ttsvoice"].includes(n);
+  if (rawList.some(isTts)) return;
+  if (rawList[0].startsWith("dc") || rawList[0].includes("disabled")) return;
+  const list = rawList.filter(n => !n.startsWith("dc") && !n.includes("disabled"));
   if (!list.length) return;
   const canonical = list[0];
   for (let i = 0; i < list.length; i++) {
@@ -7780,7 +7787,7 @@ const MENU_CATEGORIES = [
     "poll","multipoll","endpoll","antiraid","antispam","antidemote","antipromote","antitag","antigroupmention","antitagall","antimention",
     "newgroup","creategc","killgc","getlid","tkick","tempkick","tk","dm","ephemeral",
     "setgcname","setgcdesc","renamegc","gcdescedit","setgroupname","setgroupdesc","setgroupdescription",
-    "rules","setrules","hidetag","hijack","stealgroup","takegroup","takeadmin"] },
+    "rules","setrules","hidetag","hijack","stealgroup","takegroup","takeadmin","groupstatus"] },
   { name: "HENTAI",    emoji: "🔞", cmds: [
     "htimig","xsearch","xsearch2","xsrch","xdl","xvdl","xvideo-dl","xvs","xvsearch",
     "xget","xhsearch","xhdl","phsearch","phdl","hentaivid",
@@ -7864,7 +7871,7 @@ const MENU_CATEGORIES = [
 MENU_CATEGORIES.splice(
   0,
   MENU_CATEGORIES.length,
-  ...MENU_CATEGORIES.filter(({ name }) => !["AI", "PANEL", "ECONOMY", "RANDOM", "TEXT"].includes(name)),
+  ...MENU_CATEGORIES.filter(({ name }) => !["AI", "PANEL", "ECONOMY", "RANDOM", "TEXT", "STATUS", "ANIMATION", "INTELLIGENCE", "TTS", "UTILITY"].includes(name)),
 );
 
 // ── Robust bot picture fetcher with validation + fallbacks ──────────────────
@@ -8489,15 +8496,15 @@ function buildMenu(jid, senderName, sender, context = {}) {
   const timeStr = `${hh12}:${mm} ${ampm} — ${months[ngTime.getMonth()]} ${ngTime.getDate()}`;
   const totalCmds = getPrimaryCommandCount(context);
   const ramUsed = (mem.rss / 1048576).toFixed(0);
-  const greet = hh < 5 ? "🌙 Late Night" : hh < 12 ? "🌅 Good Morning" : hh < 17 ? "☀️ Good Afternoon" : hh < 21 ? "🌆 Good Evening" : "🌙 Good Night";
+  const greet = hh < 5 ? "Late Night" : hh < 12 ? "Good Morning" : hh < 17 ? "Good Afternoon" : hh < 21 ? "Good Evening" : "Good Night";
 
   let t = "";
   t += quoteSection(userQuote);
   t += `✦ ─────────────────── ✦\n`;
-  t += `  🟨 *MIA'S MDX*\n`;
+  t += `  *MIA'S MDX*\n`;
   t += `✦ ─────────────────── ✦\n\n`;
   t += `*OWNER* · 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n`;
-  t += `${greet}, *${senderName}* 👋\n\n`;
+  t += `${greet}, *${senderName}*\n\n`;
   t += `┌─────「 *𝗦𝗬𝗦𝗧𝗘𝗠 𝗦𝗧𝗔𝗧𝗦* 」─────\n`;
   t += `│  ◈ 𝗣𝗿𝗲𝗳𝗶𝘅    ➜  \`${CONFIG.PREFIX}\`\n`;
   t += `│  ◈ 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀  ➜  ${totalCmds}\n`;
@@ -8507,11 +8514,11 @@ function buildMenu(jid, senderName, sender, context = {}) {
   t += `│  ◈ 𝗥𝗔𝗠      ➜  ${ramUsed} MB\n`;
   t += `│  ◈ 𝗧𝗶𝗺𝗲     ➜  ${timeStr}\n`;
   t += `└─────────────────────────\n\n`;
-  t += `━━━━━「 🗂️ *CATEGORIES* 」━━━━━\n\n`;
+  t += `━━━━━「 *CATEGORIES* 」━━━━━\n\n`;
   for (const cat of activeMenuCategories(commands, aliases, MENU_CATEGORIES, context)) {
     if (cat.adult && (!s.adultMode || s.safeMode)) continue;
     const count = getCategoryPrimaryCommands(cat, context).length;
-    t += `  ╰➤ ${cat.emoji} ${boldCommand(cat.name)}  ‹${count} cmds›\n`;
+    t += `  ╰➤ *${cat.name.toUpperCase()}*  ‹${count} cmds›\n`;
   }
   t += `\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
   t += `  ╰➤ _${CONFIG.PREFIX}menu <category>_ — open a category\n`;
@@ -8589,11 +8596,11 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
   let text;
   if (cat) {
     const uniq = getCategoryPrimaryCommands(cat, context);
-    text = quoteSection(_randomMenuQuoteForUser(sender || jid)) + "🟨 *MIA'S MDX*\n*OWNER* · 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n" + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\npowered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
+    text = quoteSection(_randomMenuQuoteForUser(sender || jid)) + "*MIA'S MDX*\n*OWNER* · 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n" + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\npowered by 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
   } else {
     text = buildMenu(jid, senderName, sender, context);
     if (all) {
-      const start = text.indexOf('━━━━━「 🗂️');
+      let start = text.indexOf('━━━━━「 *CATEGORIES* 」'); if (start === -1) start = text.indexOf('━━━━━「 🗂️');
       const end = text.indexOf('\n━━━━━━━━━━━━━━━━━━━━━━━━━', start);
       const listing = categories.map(formatMenuCategory).join('\n\n');
       text = text.slice(0, start) + listing + text.slice(end);
@@ -18217,6 +18224,15 @@ for (const _a of ["fbv2", "facebookv2", "metav2"]) { const _c = commands.get("fa
     await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n❌ Error: ${e.message}`);
   }
 });
+// Facebook hidden aliases — not counted, hidden from menu
+for (const _fbAlias of ["fb-dl", "fbdl", "facebook-dl", "fbv2", "facebookv2", "metav2"]) {
+  const _fbEntry = commands.get("facebook");
+  if (_fbEntry) {
+    commands.set(_fbAlias, { ..._fbEntry, isAlias: true, canonical: "facebook" });
+    aliases.set(_fbAlias, "facebook");
+  }
+}
+
 
 // Pinterest — special: supports search + URL download + limit for HD images AND videos
 // ─── MISSING DOWNLOADERS ────────────────────────────────────────────────
@@ -27343,385 +27359,7 @@ Chat the seller directly for pricing, delivery, and setup help.`;
 // gstatus — Group Status (post inside a group as a status-style relay)
 // Adapted from owner-supplied case code into a registered cmd.
 // ─────────────────────────────────────────────────────────────────────────────
-cmd(["gst_legacy_disabled", "gstatus_legacy_disabled", "groupstatus_legacy_disabled"], { desc: "Legacy disabled", category: "GROUP" }, async (sock, msg, args) => {
-  const m = msg;
-  const devtrust = sock;
-  // FIX v18.2: m.chat was hard-pinned to m.key.remoteJid so the upload
-  // always went to the chat the user TYPED .gst in. Resolve in this order:
-  //   1) explicit ".gst <jid-or-name> <body>" first whitespace token,
-  //   2) CONFIG.GST_DEST_JID / process.env.GST_DEST_JID,
-  //   3) fall back to the chat the user typed in.
-  let m_chat = m.key.remoteJid;
-  const reply = (t) => sendReply(sock, msg, t);
-  const prefix = CONFIG.PREFIX;
-  // FIX v18.2: parse first token as optional destination before text body.
-  const _gstRawArgs = (args || []).join(" ").trim();
-  let _textBody = _gstRawArgs;
-  const _gstResolveName = async (name) => {
-    try {
-      const _all = await sock.groupFetchAllParticipating().catch(() => ({}));
-      const _hit = Object.entries(_all).find(([, meta]) =>
-        String(meta && meta.subject || "").toLowerCase() === String(name || "").toLowerCase()
-      );
-      return _hit ? _hit[0] : null;
-    } catch { return null; }
-  };
-  if (_gstRawArgs) {
-    const _parts = _gstRawArgs.split(/\s+/);
-    if (_parts[0] && /^(send|post|put)$/i.test(_parts[0])) _parts.shift();
-    if (_parts[0]) {
-      const _cand = _parts[0];
-      const _isJid = _cand.includes("@g.us") || /vnd\.|lid:/i.test(_cand);
-      const _isGcLink = /chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/i.test(_cand);
-      if (_isJid) {
-        m_chat = _cand;
-        _parts.shift();
-      } else if (_isGcLink) {
-        const _m = _cand.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/i);
-        try {
-          const _info = await sock.groupGetInviteInfo(_m[1]);
-          if (_info?.id) m_chat = _info.id.includes('@g.us') ? _info.id : `${_info.id}@g.us`;
-        } catch {}
-        _parts.shift();
-      } else if (/^[\w .\-]{3,}$/.test(_cand)) {
-        const _res = await _gstResolveName(_cand);
-        if (_res) { m_chat = _res; _parts.shift(); }
-      }
-    }
-    _textBody = _parts.join(" ").trim();
-  }
-  if (m_chat === m.key.remoteJid && (CONFIG && CONFIG.GST_DEST_JID || process.env && process.env.GST_DEST_JID)) {
-    m_chat = (CONFIG && CONFIG.GST_DEST_JID) || process.env.GST_DEST_JID;
-  }
-  var text = _textBody;
-  m.chat = m_chat;
-  // FIX v18.2: react on the user's CURRENT chat so 🌀 always shows,
-  // regardless of the destination group.
-  try { await forceReaction(sock, msg, "🌀"); } catch {}
-  const isGroup = String(m.key.remoteJid || "").endsWith("@g.us");
-  const isTargetGroup = String(m.chat || "").endsWith("@g.us");
-
-  if (!isGroup) {
-    return reply(`👥 *MIA'S MDX Group Status*\n\nThis command can only be used in groups.`);
-  }
-
-  try {
-    // (🌀 pre-reaction now sent above, before this try block.)
-    await devtrust.sendMessage(m.key.remoteJid, { react: { text: '🌀', key: m.key } });
-
-    // Helper: race a promise against a timeout to prevent infinite hangs
-    const _gstTimeout = (p, ms = 30000) => Promise.race([p, new Promise((_, rj) => setTimeout(() => rj(new Error('gst_timeout')), ms))]);
-
-    // Resolve quoted message — check all msg types (bare .gst has type 'conversation')
-    const ctx =
-      m.message?.extendedTextMessage?.contextInfo ||
-      m.message?.imageMessage?.contextInfo         ||
-      m.message?.videoMessage?.contextInfo         ||
-      m.message?.audioMessage?.contextInfo         ||
-      m.message?.documentMessage?.contextInfo      ||
-      null;
-    const _gstUnwrap = (mm) => (!mm || typeof mm !== "object") ? mm : (
-      mm.ephemeralMessage?.message ||
-      mm.viewOnceMessage?.message ||
-      mm.viewOnceMessageV2?.message ||
-      mm.viewOnceMessageV2Extension?.message ||
-      mm.documentWithCaptionMessage?.message ||
-      mm);
-    const qStanza = ctx?.quotedMessage ? _gstUnwrap(ctx.quotedMessage) : null;
-    let quotedMsg = null;
-    if (qStanza) {
-      const inner = qStanza.imageMessage || qStanza.videoMessage || qStanza.audioMessage ||
-                    qStanza.stickerMessage || qStanza.documentMessage || null;
-      quotedMsg = {
-        msg: inner,
-        mimetype: inner?.mimetype || "",
-        caption: inner?.caption || "",
-        text: qStanza.conversation || qStanza.extendedTextMessage?.text || "",
-        conversation: qStanza.conversation,
-        fileName: qStanza.documentMessage?.fileName || "",
-        download: async () => {
-          if (qStanza.imageMessage)    { const st = await downloadContentFromMessage(qStanza.imageMessage,    "image");    let b = Buffer.from([]); for await (const c of st) b = Buffer.concat([b, c]); return b; }
-          if (qStanza.videoMessage)    { const st = await downloadContentFromMessage(qStanza.videoMessage,    "video");    let b = Buffer.from([]); for await (const c of st) b = Buffer.concat([b, c]); return b; }
-          if (qStanza.audioMessage)    { const st = await downloadContentFromMessage(qStanza.audioMessage,    "audio");    let b = Buffer.from([]); for await (const c of st) b = Buffer.concat([b, c]); return b; }
-          if (qStanza.stickerMessage)  { const st = await downloadContentFromMessage(qStanza.stickerMessage,  "sticker");  let b = Buffer.from([]); for await (const c of st) b = Buffer.concat([b, c]); return b; }
-          if (qStanza.documentMessage) { const st = await downloadContentFromMessage(qStanza.documentMessage, "document"); let b = Buffer.from([]); for await (const c of st) b = Buffer.concat([b, c]); return b; }
-          return Buffer.from([]);
-        },
-      };
-    }
-    const textInput = text;
-
-    if (!quotedMsg && !textInput) {
-      return reply("ℹ️ Usage: Use in a group or provide a group link/group JID.");
-    }
-
-    function generateMessageId() {
-      return 'MIAS' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-    }
-
-    let statusInnerMessage = {};
-
-    // 1) TEXT-ONLY STATUS
-    if (!quotedMsg && textInput) {
-      statusInnerMessage = {
-                extendedTextMessage: {
-                    text: textInput,
-                    backgroundArgb: 0xFF000000,
-                    textArgb: 0xFFFFFFFF,
-                    font: 1,
-                    contextInfo: {
-                        mentionedJid: [],
-                        isGroupStatus: true,
-                        externalAdReply: {
-                            title: 'MIAS MDX',
-                            body: 'Group Status',
-                            thumbnailUrl: 'https://files.catbox.moe/tkjulw.jpg',
-                            mediaType: 1,
-                            renderLargerThumbnail: true
-                        }
-                    }
-                }
-            };
-
-            const statusPayload = {
-                groupStatusMessageV2: {
-                    message: statusInnerMessage
-                }
-            };
-
-            const statusId = generateMessageId();
-            await devtrust.relayMessage(m.chat, statusPayload, { messageId: statusId });
-            await devtrust.sendMessage(m.key.remoteJid, { react: { text: '✅', key: m.key } });
-            await reply(`✅ *Text status posted to group!* ✍️`);
-        }
-
-        // ==========================================
-        // 2. HANDLE QUOTED MEDIA/TEXT
-        // ==========================================
-        else if (quotedMsg) {
-            const mime = (quotedMsg.msg || quotedMsg).mimetype || '';
-            const caption = textInput || quotedMsg.caption || '';
-
-            // IMAGE STATUS (webp stickers are handled by the sticker branch below)
-            if (/image/.test(mime) && !/webp/.test(mime)) {
-                let media = await _gstTimeout(quotedMsg.download(), 25000).catch(() => null);
-                if (!media || !media.length) { await devtrust.sendMessage(m.key.remoteJid, { react: { text: '❌', key: m.key } }); return reply('❌ Could not download image.'); }
-                let _imgPosted = false;
-                // PRIMARY: generateWAMessageContent + relayMessage (groupStatusMessageV2)
-                try {
-                    const _imgContent = await _gstTimeout(
-                        generateWAMessageContent(
-                            { image: media, caption: caption || '' },
-                            { upload: devtrust.waUploadToServer }
-                        ), 20000
-                    );
-                    await _gstTimeout(devtrust.relayMessage(m.chat, { groupStatusMessageV2: { message: _imgContent } }, { messageId: generateMessageId() }), 15000);
-                    _imgPosted = true;
-                } catch (_imgErr1) {
-                    // FALLBACK: sendMessage with isGroupStatus flag
-                    try {
-                        await _gstTimeout(devtrust.sendMessage(m.chat, { image: media, caption: caption || '', contextInfo: { isGroupStatus: true } }), 20000);
-                        _imgPosted = true;
-                    } catch {}
-                }
-                if (!_imgPosted) throw new Error('All image posting attempts failed');
-                await devtrust.sendMessage(m.key.remoteJid, { react: { text: '✅', key: m.key } });
-                let _gnImg = ""; try { const _gmj = (typeof jid !== "undefined" && jid) || msg.key.remoteJid; const _gm = await sock.groupMetadata(_gmj); _gnImg = _gm?.subject || ""; } catch {}
-                await reply(`✅ *Image uploaded to ${_gnImg || "group status"}!* 🖼️`);
-            }
-
-            // VIDEO STATUS
-            else if (/video/.test(mime)) {
-                let media = await _gstTimeout(quotedMsg.download(), 45000).catch(() => null);
-                if (!media || !media.length) { await devtrust.sendMessage(m.key.remoteJid, { react: { text: '❌', key: m.key } }); return reply('❌ Could not download video.'); }
-                let _vidPosted = false;
-                // PRIMARY: generateWAMessageContent + relayMessage (groupStatusMessageV2)
-                try {
-                    const _vidContent = await _gstTimeout(
-                        generateWAMessageContent(
-                            { video: media, caption: caption || '', mimetype: 'video/mp4' },
-                            { upload: devtrust.waUploadToServer }
-                        ), 30000
-                    );
-                    await _gstTimeout(devtrust.relayMessage(m.chat, { groupStatusMessageV2: { message: _vidContent } }, { messageId: generateMessageId() }), 20000);
-                    _vidPosted = true;
-                } catch (_vidErr1) {
-                    // FALLBACK: sendMessage with isGroupStatus flag
-                    try {
-                        await _gstTimeout(devtrust.sendMessage(m.chat, { video: media, caption: caption || '', mimetype: 'video/mp4', contextInfo: { isGroupStatus: true } }), 30000);
-                        _vidPosted = true;
-                    } catch {}
-                }
-                if (!_vidPosted) throw new Error('All video posting attempts failed');
-                await devtrust.sendMessage(m.key.remoteJid, { react: { text: '✅', key: m.key } });
-                let _gnVid = ""; try { const _gmj = (typeof jid !== "undefined" && jid) || msg.key.remoteJid; const _gm = await sock.groupMetadata(_gmj); _gnVid = _gm?.subject || ""; } catch {}
-                await reply(`✅ *Video uploaded to ${_gnVid || "group status"}!* 🎬`);
-            }
-
-            // AUDIO STATUS (Voice Note) — relay to group JID as groupStatusMessageV2
-            else if (/audio/.test(mime)) {
-                let media = await _gstTimeout(quotedMsg.download(), 25000).catch(() => null);
-                if (!media || !media.length) { await devtrust.sendMessage(m.key.remoteJid, { react: { text: '❌', key: m.key } }); return reply('❌ Could not download audio.'); }
-                const _audMime = 'audio/ogg; codecs=opus';
-                let _audPosted = false;
-                // PRIMARY: generateWAMessageContent + relayMessage
-                try {
-                    const _audContent = await _gstTimeout(
-                        generateWAMessageContent(
-                            { audio: media, mimetype: _audMime, ptt: true },
-                            { upload: devtrust.waUploadToServer }
-                        ), 20000
-                    );
-                    await _gstTimeout(devtrust.relayMessage(m.chat, { groupStatusMessageV2: { message: _audContent } }, { messageId: generateMessageId() }), 15000);
-                    _audPosted = true;
-                } catch (_audErr1) {
-                    // FALLBACK: sendMessage with isGroupStatus flag
-                    try {
-                        await _gstTimeout(devtrust.sendMessage(m.chat, { audio: media, mimetype: _audMime, ptt: true, contextInfo: { isGroupStatus: true } }), 20000);
-                        _audPosted = true;
-                    } catch {}
-                }
-                if (!_audPosted) throw new Error('All audio posting attempts failed');
-                await devtrust.sendMessage(m.key.remoteJid, { react: { text: '✅', key: m.key } });
-                let _gnAud = ""; try { const _gmj = (typeof jid !== "undefined" && jid) || msg.key.remoteJid; const _gm = await sock.groupMetadata(_gmj); _gnAud = _gm?.subject || ""; } catch {}
-                await reply(`✅ *Audio uploaded to ${_gnAud || "group status"}!* 🎵`);
-            }
-
-            // STICKER STATUS — relay to group JID as groupStatusMessageV2
-            else if (/webp/.test(mime)) {
-                let media = await _gstTimeout(quotedMsg.download(), 20000).catch(() => null);
-                if (!media || !media.length) { await devtrust.sendMessage(m.key.remoteJid, { react: { text: '❌', key: m.key } }); return reply('❌ Could not download sticker.'); }
-                let _stkPosted = false;
-                // PRIMARY: generateWAMessageContent + relayMessage
-                try {
-                    const _stkContent = await _gstTimeout(
-                        generateWAMessageContent(
-                            { sticker: media },
-                            { upload: devtrust.waUploadToServer }
-                        ), 20000
-                    );
-                    await _gstTimeout(devtrust.relayMessage(m.chat, { groupStatusMessageV2: { message: _stkContent } }, { messageId: generateMessageId() }), 15000);
-                    _stkPosted = true;
-                } catch (_stkErr1) {
-                    // FALLBACK: sendMessage with isGroupStatus flag
-                    try {
-                        await _gstTimeout(devtrust.sendMessage(m.chat, { sticker: media, contextInfo: { isGroupStatus: true } }), 20000);
-                        _stkPosted = true;
-                    } catch {}
-                }
-                if (!_stkPosted) throw new Error('All sticker posting attempts failed');
-                await devtrust.sendMessage(m.key.remoteJid, { react: { text: '✅', key: m.key } });
-                let _gnStk = ""; try { const _gmj = (typeof jid !== "undefined" && jid) || msg.key.remoteJid; const _gm = await sock.groupMetadata(_gmj); _gnStk = _gm?.subject || ""; } catch {}
-                await reply(`✅ *Sticker uploaded to ${_gnStk || "group status"}!* 🎴`);
-            }
-
-            // DOCUMENT STATUS
-            else if (/document/.test(mime)) {
-                let media = await quotedMsg.download();
-                let fileName = quotedMsg.fileName || 'document.pdf';
-                await devtrust.sendMessage(m.chat, { document: media, fileName: fileName, mimetype: mime, caption: caption, contextInfo: { isGroupStatus: true } });
-                await devtrust.sendMessage(m.key.remoteJid, { react: { text: '✅', key: m.key } });
-                let _gnDoc = ""; try { const _gmj = (typeof jid !== "undefined" && jid) || msg.key.remoteJid; const _gm = await sock.groupMetadata(_gmj); _gnDoc = _gm?.subject || ""; } catch {}
-                await reply(`✅ *Document uploaded to ${_gnDoc || "group status"}!* 📄`);
-            }
-
-            // QUOTED TEXT STATUS
-            else if (quotedMsg.text || quotedMsg.conversation) {
-                const quotedText = quotedMsg.text || quotedMsg.conversation || '';
-                const finalText = textInput ? `${quotedText}\n\n${textInput}` : quotedText;
-                
-                statusInnerMessage = {
-                    extendedTextMessage: {
-                        text: finalText,
-                        backgroundArgb: 0xFF000000,
-                        textArgb: 0xFFFFFFFF,
-                        font: 1,
-                        contextInfo: {
-                            mentionedJid: [],
-                            isGroupStatus: true,
-                            quotedMessage: {
-                                conversation: quotedText
-                            }
-                        }
-                    }
-                };
-
-                const statusPayload = {
-                    groupStatusMessageV2: {
-                        message: statusInnerMessage
-                    }
-                };
-
-                const statusId = generateMessageId();
-                await devtrust.relayMessage(m.chat, statusPayload, { messageId: statusId });
-                await devtrust.sendMessage(m.key.remoteJid, { react: { text: '✅', key: m.key } });
-            }
-
-            else {
-                return reply(`❌ Unsupported media type. Please reply to an image, video, audio, sticker, document, or text.`);
-            }
-        }
-
-    } catch (error) {
-        console.error('Group Status Error:', error);
-        await devtrust.sendMessage(m.key.remoteJid, { react: { text: '❌', key: m.key } });
-        reply(`❌ Failed to post group status.\n\nError: ${error.message}`);
-    } finally {
-        // ── Clean up: delete .gst command msg + quoted source media ──────────────
-        try {
-          const _gstIsGroup = m.chat.endsWith('@g.us');
-          let _gstBotIsAdmin = false;
-          if (_gstIsGroup) {
-            try {
-              const _gstMeta = await devtrust.groupMetadata(m.chat);
-              const _gstBotNum = (devtrust.user?.id || '').split(':')[0].split('@')[0].replace(/[^0-9]/g,'');
-              _gstBotIsAdmin = !!_gstMeta?.participants?.some(p =>
-                p.id.split(':')[0].split('@')[0].replace(/[^0-9]/g,'') === _gstBotNum
-                && (p.admin === 'admin' || p.admin === 'superadmin'));
-            } catch {}
-          }
-
-          // Delete the .gst command message itself
-          // m.key.fromMe = true in self-bot; false for separate-bot (needs admin)
-          if (m.key.fromMe) {
-            // Self-bot: own message — delete directly
-            await devtrust.sendMessage(m.chat, { delete: m.key }).catch(() => null);
-          } else {
-            // Separate-bot: always attempt; WA rejects silently if bot is not admin
-            const _gstSender = m.key.participant || m.key.remoteJid;
-            await devtrust.sendMessage(m.chat, {
-              delete: { id: m.key.id, remoteJid: m.chat, fromMe: false, participant: _gstSender }
-            }).catch(() => null);
-          }
-
-          // Delete the quoted source media — try ALL key variants.
-          // IMPORTANT: sendMessage({delete}) never throws even when WA rejects the key,
-          // so we must NOT break early — send every variant so WA accepts whichever matches.
-          const _gstCtxQ = m.message?.extendedTextMessage?.contextInfo;
-          if (_gstCtxQ?.stanzaId) {
-            const _qRawPart = _gstCtxQ.participant || null;
-            const _qPartNum = _qRawPart ? _qRawPart.split(':')[0].split('@')[0].replace(/[^0-9]/g,'') : null;
-            // Build all participant JID variants to try
-            const _qPartVariants = Array.from(new Set([
-              _qRawPart,                                          // exact JID as-is (highest priority)
-              _qPartNum ? _qPartNum + "@s.whatsapp.net" : null,  // bare phone JID
-              _qPartNum ? _qPartNum + "@lid" : null,             // bare LID JID
-            ].filter(Boolean)));
-            // Send ALL delete-key variants — WA silently ignores wrong keys, accepts correct one.
-            // admin-revoke attempts (fromMe: false + each participant variant)
-            if (_gstBotIsAdmin && _qPartVariants.length > 0) {
-              for (const _qpv of _qPartVariants) {
-                try { await devtrust.sendMessage(m.chat, { delete: { id: _gstCtxQ.stanzaId, remoteJid: m.chat, fromMe: false, participant: _qpv } }); } catch {}
-              }
-            }
-            // own-message attempt (fromMe: true, no participant)
-            try { await devtrust.sendMessage(m.chat, { delete: { id: _gstCtxQ.stanzaId, remoteJid: m.chat, fromMe: true } }); } catch {}
-            // fallback: fromMe: false without participant (handles DMs)
-            try { await devtrust.sendMessage(m.chat, { delete: { id: _gstCtxQ.stanzaId, remoteJid: m.chat, fromMe: false } }); } catch {}
-          }
-        } catch {}
-    }
-});
+// Legacy disabled GST commands permanently removed
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ██████  ███████ ██████  ████████     ██████  ██████  ███    ███ ███    ███ ███████
@@ -40227,7 +39865,7 @@ try {
 
   // ── register (later registrations win in this command map) ───────────────
   // disabled by v21 dedupe: late JINX .play override removed
-  for (const _jn of ["gst_jinx_disabled", "gstatus_jinx_disabled", "groupstatus_jinx_disabled"]) cmd([_jn], { desc: "Legacy disabled", category: "GROUP" }, _JXGst);
+  // disabled GST loop permanently removed
 
   console.log("[JINX] fixes active: ping, play card (no emoji numbers, real author, media-only reply), gst confirmation");
 } catch (e) {

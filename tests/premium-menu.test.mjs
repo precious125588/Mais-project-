@@ -120,7 +120,7 @@ test('legacy labels are presentation mappings only and do not newly delete comma
  for(const [name,entry] of originals)assert.equal(commands.get(name),entry);
  const cats=menu.activeMenuCategories(commands,aliases,categories);
  for(const label of labels){assert.ok(!cats.some(c=>c.name===label));assert.equal(menu.resolveMenuCategory([label],cats),null);}
- assert.ok(cats.some(c=>c.name==='INTELLIGENCE'));assert.ok(cats.some(c=>c.name==='ANIMATION'));
+ assert.ok(!cats.some(c=>c.name==='INTELLIGENCE'));assert.ok(!cats.some(c=>c.name==='ANIMATION'));
  assert.ok(!cats.some(c=>menu.REMOVED_MENU_CATEGORIES.has(c.name)));
 });
 test('disabled primary cannot leak through aliases; internal play callbacks are hidden without deleting them',()=>{

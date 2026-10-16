@@ -1,5 +1,6 @@
 // Node-hosted menu helpers. No sockets, sessions, timers or startup side effects.
-export const REMOVED_MENU_CATEGORIES = new Set(['GAMES', 'TEXTMAKER', 'STALK', 'LOGO', 'FUN']);
+export const REMOVED_MENU_CATEGORIES = new Set(['GAMES', 'TEXTMAKER', 'STALK', 'LOGO', 'FUN', 'INTELLIGENCE', 'ANIMATION', 'TTS', 'UTILITY']);
+const DISPATCHER_REMOVED = new Set(['GAMES', 'TEXTMAKER', 'STALK', 'LOGO', 'FUN']);
 // Presentation-only labels; API/command metadata and handlers stay untouched.
 const LEGACY_LABELS = {
   GENERAL: 'INFO', MENU: 'INFO', AI: 'INTELLIGENCE', ANIME: 'ANIMATION',
@@ -118,7 +119,7 @@ export function resolveMenuCategory(args, categories) {
   return matches.length === 1 ? matches[0] : null;
 }
 export function formatMenuCategory(cat) {
-  return ['╭━〔 🟨 ' + boldCommand(cat.name) + ' · ' + cat.cmds.length + ' 〕━━╮', '', ...cat.cmds.map(name => '± ' + boldCommand(name)), '', '╰━━━━━━━━━━━━━━━━━━╯'].join('\n');
+  return ['╭━〔 *' + String(cat.name).toUpperCase() + '* · ' + cat.cmds.length + ' 〕━━╮', '', ...cat.cmds.map(name => '± ' + boldCommand(name)), '', '╰━━━━━━━━━━━━━━━━━━╯'].join('\n');
 }
 export function quoteSection(quote) {
   return '✦ ─────────────────── ✦\n\n\n> 💬 *_"' + quote + '"_*\n\n\n';
@@ -159,7 +160,7 @@ export function installMenuCategoryPolicy(commands, aliases, categories, legacyN
   const shared = new Set();
   const candidates = new Set(legacyNames);
   for (const cat of categories) {
-    const removed = REMOVED_MENU_CATEGORIES.has(policyCategory(cat.name));
+    const removed = DISPATCHER_REMOVED.has(policyCategory(cat.name));
     for (const name of cat.cmds || []) {
       const key = String(name).toLowerCase();
       const canonical = String(commands.get(key)?.canonical || aliases.get(key) || key).toLowerCase();
@@ -168,7 +169,7 @@ export function installMenuCategoryPolicy(commands, aliases, categories, legacyN
     }
   }
   for (const [name, entry] of commands) {
-    if (REMOVED_MENU_CATEGORIES.has(policyCategory(entry?.category))) {
+    if (DISPATCHER_REMOVED.has(policyCategory(entry?.category))) {
       candidates.add(name); candidates.add(String(entry?.canonical || aliases.get(name) || name).toLowerCase());
     }
   }
@@ -176,17 +177,17 @@ export function installMenuCategoryPolicy(commands, aliases, categories, legacyN
   const denied = (name, entry) => {
     const key = String(name).toLowerCase();
     const canonical = String(entry?.canonical || aliases.get(key) || key).toLowerCase();
-    return !shared.has(canonical) && (candidates.has(key) || candidates.has(canonical) || REMOVED_MENU_CATEGORIES.has(policyCategory(entry?.category)));
+    return !shared.has(canonical) && (candidates.has(key) || candidates.has(canonical) || DISPATCHER_REMOVED.has(policyCategory(entry?.category)));
   };
   const removed = new Set(), ambiguous = new Set();
   function clean() {
     for (const [name, entry] of commands) {
       const canonical = String(entry?.canonical || aliases.get(name) || name).toLowerCase();
       if (denied(name, entry)) { candidates.add(name); candidates.add(canonical); removed.add(canonical); commands.delete(name); aliases.delete(name); }
-      else if (shared.has(canonical) && REMOVED_MENU_CATEGORIES.has(policyCategory(entry?.category))) ambiguous.add(canonical);
+      else if (shared.has(canonical) && DISPATCHER_REMOVED.has(policyCategory(entry?.category))) ambiguous.add(canonical);
     }
     for (const [alias, canonical] of aliases) if (denied(alias, commands.get(alias)) || candidates.has(canonical) && !shared.has(canonical)) { commands.delete(alias); aliases.delete(alias); }
-    categories.splice(0, categories.length, ...categories.filter(cat => !REMOVED_MENU_CATEGORIES.has(policyCategory(cat.name))));
+    categories.splice(0, categories.length, ...categories.filter(cat => !DISPATCHER_REMOVED.has(policyCategory(cat.name))));
     for (const cat of categories) cat.cmds = (cat.cmds || []).filter(name => !denied(name, commands.get(name)));
     return { removed: [...removed].sort(), ambiguous: [...ambiguous].sort() };
   }
