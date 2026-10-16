@@ -6746,13 +6746,18 @@ async function sendLongText(sock, jid, text, quoted = null, mentions = []) {
   }
 }
 
-// react() honors the per-owner autoReact toggle (.autoreact ON/OFF). When OFF,
-// every command's react() call becomes a no-op so the bot stays silent.
+// react() honors BOTH the per-chat AND the per-owner autoReact toggles
+// (.autoreact ON/OFF). When OFF in the chat OR for the owner, react() is a
+// no-op so the bot stays silent. Diagnostics never leak message content.
 const react = (sock, msg, emoji) => {
   try {
     const ownerJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-    const _s = (typeof getSettings === "function" ? getSettings(ownerJ) : null);
-    if (_s && _s.autoReact === false) return Promise.resolve();
+    const _chatS = (typeof getSettings === "function" ? getSettings(msg?.key?.remoteJid) : null);
+    const _ownS  = (typeof getSettings === "function" ? getSettings(ownerJ) : null);
+    if ((_chatS && _chatS.autoReact === false) || (_ownS && _ownS.autoReact === false)) {
+      if (process.env.MIAS_REACT_DEBUG === "1") console.log("[react] suppressed (autoReact OFF) in", msg?.key?.remoteJid);
+      return Promise.resolve();
+    }
   } catch {}
   const _reactKey = {
     remoteJid: msg.key.remoteJid,
@@ -7222,6 +7227,20 @@ const DISABLED_COMMANDS = new Set([
   "ttp2", "yttranscript", "zhtoid",
   // WHATSAPP (4)
   "channelreact", "channelupdate", "channelstats", "blocked",
+  // ── User-requested disable list (2026-10-16). Blocked at dispatch, hidden
+  //    from every menu, excluded from counts; aliases cannot bypass. ──
+  // DOWNLOAD (18)
+  "googledrive-dl","gdrive-dl","gdrive2","douyin-dl","capcut-dl","github-dl",
+  "gofile2","gofile-dl","likee-dl","leaktube","mediafire-dl","mega-dl","pinterest-dl",
+  "soundcloud-dl","spotify-dl","threads-dl","twit-dl","video-dl",
+  // GROUP (3)
+  "gcstory","gcstatus","gstatus",
+  // OWNER (3; setcmdaliasv2 already listed above)
+  "debugtail","welcomedm",
+  // TOOLS (1)
+  "flag3dtext",
+  // WHATSAPP (1)
+  "channelinfo",
 ]);
 
 // Duplicate downloader names folded into their canonical parent. Only names
@@ -8604,8 +8623,7 @@ function buildMenu(jid, senderName, sender, context = {}) {
     return " ".repeat(pad) + txt;
   };
   let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
-  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n";
-  t += "𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n";
+  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
   t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
@@ -8712,13 +8730,52 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
 globalThis.__MIAS_PREMIUM_MENU__ = sendPremiumMenu;
 globalThis.__MIAS_MENU_SNAPSHOT__ = async (sock, msg) => activeMenuCategories(commands, aliases, MENU_CATEGORIES, await menuVisibilityContext(sock, msg));
 
-cmd(['allmenu', 'fullmenu'], { desc: 'Show all active canonical commands', category: 'INFO' }, async (sock, msg, args) => {
-  await sendPremiumMenu(sock, msg, args, true);
-});
+// ── Independent menu handlers ──────────────────────────────────────────────
+// ".menu" -> main OVERVIEW only (categories + counts, no full catalogue).
+// ".allmenu" -> the complete eligible catalogue. They must never share a
+// handler: cmdMenu !== cmdAll so a regression that routes one through the
+// other is caught by tests immediately.
+function buildMenuOverview(jid, sender, context = {}) {
+  const userQuote = _randomMenuQuoteForUser(sender || jid);
+  const s = getSettings(jid);
+  const totalCmds = getPrimaryCommandCount(context);
+  const mode = String(s.workMode || (s.privateMode ? "private" : "public")).toUpperCase();
+  let host = "UNKNOWN";
+  try { host = String(detectHostEnvironment().platform || "UNKNOWN").toUpperCase(); } catch {}
+  const rule = "\u2500".repeat(20);
+  const centerLine = (txt) => {
+    const w = [...String(txt)].length;
+    const pad = Math.max(0, Math.floor((rule.length - w) / 2));
+    return " ".repeat(pad) + txt;
+  };
+  let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
+  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
+  t += quoteSection(userQuote);
+  t += "*BOT INFORMATION*\n";
+  t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
+  t += `UPTIME: ${fmtUptime(process.uptime())}\nMEMORY: ${(process.memoryUsage().rss / 1048576).toFixed(1)} MB\n`;
+  t += `COMMANDS  →  ${totalCmds}\n\n`;
+  t += "COMMAND CATEGORIES\n";
+  // Overview = category name + count ONLY; never the full command catalogue.
+  for (const cat of activeMenuCategories(commands, aliases, MENU_CATEGORIES, context)) {
+    t += `*${cat.name}*  (${cat.cmds.length})\n`;
+  }
+  t += "\n\n" + rule + "\nPOWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x";
+  return t;
+}
+async function cmdMenu(sock, msg, args) {
+  if (Array.isArray(args) && args.length > 0) return sendPremiumMenu(sock, msg, args, false); // ".menu <cat>"
+  const context = await menuVisibilityContext(sock, msg);
+  const text = buildMenuOverview(msg.key.remoteJid, getSender(msg), context);
+  const botJid = String(sock.user?.id || '').replace(/:[0-9]+@/, '@');
+  await react(sock, msg, menuReaction('MAIN')).catch(() => {});
+  return deliverMenuCaption(sock, msg, text, menuPictureSources(sock, msg.key.remoteJid), sendReply, [getSender(msg), botJid].filter(Boolean));
+}
+async function cmdAll(sock, msg, args) { return sendPremiumMenu(sock, msg, args, true); }
 
-cmd(['menu', 'help', 'commands', '.menu', 'start'], { desc: 'Show menu or category', category: 'INFO' }, async (sock, msg, args) => {
-  await sendPremiumMenu(sock, msg, args, false);
-});
+cmd(['allmenu', 'fullmenu'], { desc: 'Show all active canonical commands', category: 'INFO' }, cmdAll);
+
+cmd(['menu', 'help', 'commands', '.menu', 'start'], { desc: 'Show menu or category', category: 'INFO' }, cmdMenu);
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -43478,6 +43535,18 @@ function __miasApplyMaintenance(registry, aliasMap, categories) {
     if (registry.has(aliasName)) continue;                 // never overwrite a real command
     const parentEntry = registry.get(parent);
     if (!parentEntry || typeof parentEntry.handler !== "function") continue;
+    registry.set(aliasName, { ...parentEntry, isAlias: true, canonical: parent });
+    aliasMap.set(aliasName, parent);
+    report.aliases.push(aliasName + " -> " + parent);
+  }
+
+  // 4. Hidden parent->alias pairs the owner requested. The alias stays CALLABLE
+  //    (invokes the parent's handler, inherits permissions) but is flagged
+  //    isAlias so it is hidden from every menu listing and command count.
+  for (const [aliasName, parent] of Object.entries({ gclockmedia: "lockmedia", gst: "groupstatus" })) {
+    if (DISABLED_COMMANDS.has(aliasName)) continue;
+    const parentEntry = registry.get(parent);
+    if (!parentEntry || typeof parentEntry.handler !== "function") { report.skipped.push(aliasName); continue; }
     registry.set(aliasName, { ...parentEntry, isAlias: true, canonical: parent });
     aliasMap.set(aliasName, parent);
     report.aliases.push(aliasName + " -> " + parent);
