@@ -4048,7 +4048,7 @@ END:VCARD`;
 
           // ── SETTINGS/UI OWNER-ONLY GATE — nobody but owner/sudo may toggle settings ──
           try {
-            const _setNames = new Set(["settings","setting","set","setprefix","prefix","settheme","config","btnmenu","buttonmenu","buttonsui","listui","listmenuui","interactivelist","flowmenu","flowui","radiomenu","autobio","autoreact","autoview","autolike","antilink","antispam","antiraid","antidelete","antidel","antiedit","antiview","welcome","goodbye","setwelcome","setgoodbye","blockcalls","autoblock","antibroadcast","anticall","autoread","autotyping","autorecording","alwaysonline","chatbot","autochat","mode","workmode","private","public","self","selfmode","ownermode","solobot","publicmode","openbot","goopen","setsudo","delsudo","listsudo","sudo","addsudo","cuz","setcuz","cuzmenu"]);
+            const _setNames = OWNER_SETTINGS_COMMANDS;
             const _cmdName = (String(_command.raw||"").split(/\s+/)[0]||"").toLowerCase();
             if (_setNames.has(_cmdName) && !fromOwner) {
               await sendReply(sock, msg, "🔒 *Owner only.* You can't change bot settings.");
@@ -4157,7 +4157,7 @@ END:VCARD`;
           }
           const entry = commands.get(name);
           // ── DISABLED COMMAND GUARD: blocked before permissions, aliases included ──
-          if (entry && (entry.disabled === true || isCommandDisabled(name))) {
+          if (entry?.disabled === true || isCommandDisabled(name)) {
             __replyTrace(msg, "disabled-command", name);
             return;
           }
@@ -4221,7 +4221,18 @@ END:VCARD`;
             await entry.handler(sock, msg, args);
             // ── Execute joint commands queued from & chaining
             for (const _jP of _jointQueue) {
-              try { await new Promise(r=>setTimeout(r,750)); const _jT=_jP.split(/\s+/); const _jN=(_jT.shift()||"").toLowerCase(); const _jA=_jT; const _jE=commands.get(_jN); if(_jE && _jE.disabled !== true && !isCommandDisabled(_jN)) await _jE.handler(sock,msg,_jA); } catch(_je){ try{console.error("[JOINT]",_je?.message);}catch{} }
+              try {
+                await new Promise(resolve => setTimeout(resolve, 750));
+                const tokens = _jP.split(/\s+/);
+                const jointName = (tokens.shift() || '').toLowerCase();
+                const jointEntry = commands.get(jointName);
+                const ownerJid = (CONFIG.OWNER_NUMBER || '').replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                const jointContext = { owner: fromOwner, creator: isCreator(sender), group: isGroup(msg), admin: fromGroupAdmin,
+                  banned: settings.get(msg.key.remoteJid + '_banned'), safeMode: !!getSettings(ownerJid)?.safeMode };
+                if (isCommandAllowedInContext(msg, fromOwner, false) && jointCommandAllowed(jointName, jointEntry, jointContext)) {
+                  await jointEntry.handler(sock, msg, tokens);
+                }
+              } catch (error) { console.error('[JOINT]', error?.message); }
             }
           } catch (e) {
             console.error(`[CMD ${name}] error:`, e?.message || e);
@@ -7123,6 +7134,23 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
 const commands = new Map();
 const aliases = new Map(); // alias -> canonical
 
+const OWNER_SETTINGS_COMMANDS = new Set(["settings","setting","set","setprefix","prefix","settheme","config","btnmenu","buttonmenu","buttonsui","listui","listmenuui","interactivelist","flowmenu","flowui","radiomenu","autobio","autoreact","autoview","autolike","antilink","antispam","antiraid","antidelete","antidel","antiedit","antiview","welcome","goodbye","setwelcome","setgoodbye","blockcalls","autoblock","antibroadcast","anticall","autoread","autotyping","autorecording","alwaysonline","chatbot","autochat","mode","workmode","private","public","self","selfmode","ownermode","solobot","publicmode","openbot","goopen","setsudo","delsudo","listsudo","sudo","addsudo","cuz","setcuz","cuzmenu"]);
+
+function jointCommandAllowed(name, entry, context) {
+  if (!entry || typeof entry.handler !== 'function' || entry.disabled || entry.enabled === false || isCommandDisabled(name)) return false;
+  const canonical = String(entry.canonical || aliases.get(name) || name).toLowerCase();
+  if (isCommandDisabled(canonical)) return false;
+  if (!context.owner && (OWNER_SETTINGS_COMMANDS.has(name) || OWNER_SETTINGS_COMMANDS.has(canonical))) return false;
+  if (entry.groupOnly && !context.group) return false;
+  if (entry.creatorOnly && !context.creator) return false;
+  const adminAllowed = context.admin && entry.category === 'GROUP' && !['hijack', 'takegroup', 'stealgroup'].includes(canonical);
+  if (entry.ownerOnly && !context.owner && !adminAllowed) return false;
+  if (entry.adminOnly && context.group && !context.owner && !context.admin) return false;
+  if (!context.owner && (context.banned?.has(name) || context.banned?.has(canonical))) return false;
+  if (context.safeMode && (RISKY_CMDS.has(name) || RISKY_CMDS.has(canonical))) return false;
+  return true;
+}
+
 function cmd(names, opts, handler) {
   // Defensive: a malformed registration must never abort module evaluation.
   if (typeof names === "object" && names !== null && !Array.isArray(names)) {
@@ -7173,7 +7201,7 @@ const DISABLED_COMMANDS = new Set([
   "tt-dl", "tt-dl2", "tt-dl3", "twit-dl2", "vimeo-dl", "web2zip", "yt-audio",
   "ytmp3", "ytv1", "zoho-dl", "ytv2", "wetv-dl", "timedadd", "cek-rekening",
   "cuaca", "gempa", "hari-libur", "kurs", "menu3", "prakiraan", "richmode",
-  "qris", "kodepos", "isonline", "saweria-cek", "setaza", "sholat",
+  "qris", "kodepos", "isonline", "saweria-cek", "sholat",
   "tagihan-pln", "saweria-donate", "support", "musiccard", "music-card",
   "animelib", "animelibrefresh", "bcheck", "btnmenu", "buttonsmode",
   "chatbotscope", "debug", "debugclear", "creatoroff", "ghostmode", "enhance2",
@@ -8553,28 +8581,16 @@ function buildMenu(jid, senderName, sender, context = {}) {
   try { host = String(detectHostEnvironment().platform || "UNKNOWN").toUpperCase(); } catch {}
   const rule = "────────────────────";
 
-  let t = "";
-  t += rule + "\n";
-  t += "*MIA'S MDX*\n";
-  t += rule + "\n\n";
+  let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
+  t += "*BOT OWNER*\n𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n\n";
   t += quoteSection(userQuote);
-  t += "*BOT INFORMATION*\n\n";
-  t += `HOST: ${host}\n`;
-  t += `PREFIX: ${CONFIG.PREFIX}\n`;
-  t += `MODE: ${mode}\n`;
-  t += `VERSION: ${CONFIG.VERSION}\n`;
-  t += `OWNER: 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\n`;
+  t += "*BOT INFORMATION*\n";
+  t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
+  t += `UPTIME: ${fmtUptime(process.uptime())}\nMEMORY: ${(process.memoryUsage().rss / 1048576).toFixed(1)} MB\n`;
   t += `COMMANDS  →  ${totalCmds}\n\n`;
-  t += rule + "\n";
   t += "COMMAND CATEGORIES\n";
-  t += rule + "\n\n";
-  for (const cat of activeMenuCategories(commands, aliases, MENU_CATEGORIES, context)) {
-    if (cat.adult && (!s.adultMode || s.safeMode)) continue;
-    const count = getCategoryPrimaryCommands(cat, context).length;
-    t += `${cat.name.toUpperCase()}  (${count})\n`;
-  }
-  t += "\n" + rule + "\n";
-  t += `POWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x`;
+  t += activeMenuCategories(commands, aliases, MENU_CATEGORIES, context).map(cat => formatMenuCategory(cat)).join("\n\n");
+  t += "\n\n" + rule + "\nPOWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x";
   return t;
 }
 function menuPictureSources(sock, jid) {
@@ -8647,20 +8663,16 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
     text = "────────────────────\n*MIA'S MDX*\n────────────────────\n\n" + quoteSection(_randomMenuQuoteForUser(sender || jid)) + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\nPOWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
   } else {
     text = buildMenu(jid, senderName, sender, context);
-    if (all) {
-      const start = text.indexOf('COMMAND CATEGORIES');
-      const end = start === -1 ? -1 : text.indexOf('\n────────────────────', start);
-      if (start !== -1 && end !== -1) {
-        const listing = categories.map(formatMenuCategory).join('\n\n');
-        text = text.slice(0, start) + listing + text.slice(end);
-      }
-    }
+    // Main/all share exactly one complete canonical listing; only the reaction differs.
   }
   const botJid = String(sock.user?.id || '').replace(/:[0-9]+@/, '@');
   await deliverMenuCaption(sock, msg, text, menuPictureSources(sock, jid), sendReply, [sender, botJid].filter(Boolean));
-  // Preserve the existing main-menu song; category/all menus remain one menu.
+  // Preserve the existing optional main-menu song; never send a second menu/image.
   if (!cat && !all) { try { await sendMenuSong(sock, jid, msg); } catch {} }
 }
+
+globalThis.__MIAS_PREMIUM_MENU__ = sendPremiumMenu;
+globalThis.__MIAS_MENU_SNAPSHOT__ = async (sock, msg) => activeMenuCategories(commands, aliases, MENU_CATEGORIES, await menuVisibilityContext(sock, msg));
 
 cmd(['allmenu', 'fullmenu'], { desc: 'Show all active canonical commands', category: 'INFO' }, async (sock, msg, args) => {
   await sendPremiumMenu(sock, msg, args, true);
@@ -13569,13 +13581,12 @@ cmd("botinfo", { desc: "Bot information — stats, host, commands", category: "I
   const arch = os.arch();
   const nodev = process.version;
   const sudoCount = Array.isArray(CONFIG.SUDO_NUMBERS) ? CONFIG.SUDO_NUMBERS.length : 0;
-  // Tally commands per category
-  const catMap = {};
-  for (const [, entry] of commands) {
-    const cat = entry.category || "OTHER";
-    catMap[cat] = (catMap[cat] || 0) + 1;
-  }
-  const topCats = Object.entries(catMap).sort((a,b) => b[1]-a[1]).slice(0,6).map(([k,v]) => `  • ${k}: ${v}`).join("\n");
+  // Status totals use the exact same context and visible canonical inventory as menus.
+  const visibility = await menuVisibilityContext(sock, msg);
+  const visibleCategories = activeMenuCategories(commands, aliases, MENU_CATEGORIES, visibility);
+  const visibleTotal = visibleCategories.reduce((sum, cat) => sum + cat.cmds.length, 0);
+  const topCats = [...visibleCategories].sort((a,b) => b.cmds.length-a.cmds.length).slice(0,6)
+    .map(cat => '  ' + cat.name + ': ' + cat.cmds.length).join("\n");
   const infoText =
 `🤖 *${CONFIG.BOT_NAME} — BOT INFO*
 ━━━━━━━━━━━━━━━━━━━━
@@ -13583,7 +13594,7 @@ cmd("botinfo", { desc: "Bot information — stats, host, commands", category: "I
 👑 *Owner:* ${CONFIG.OWNER_NAME}
 📌 *Version:* v${CONFIG.VERSION}
 🔑 *Prefix:* ${CONFIG.PREFIX}
-⌨️ *Total Commands:* ${getPrimaryCommandCount()}+
+⌨️ *Total Commands:* ${visibleTotal}
 ⏱️ *Uptime:* ${up}
 👤 *Sudo Users:* ${sudoCount || "None"}
 
@@ -13606,7 +13617,7 @@ ${topCats}
     } catch { await sendReply(sock, msg, infoText); }
   } else { await sendReply(sock, msg, infoText); }
   try {
-    await sendCTAButtons(sock, msg.key.remoteJid, msg, `⚡ ${CONFIG.BOT_NAME} v${CONFIG.VERSION} — ${getPrimaryCommandCount()}+ Commands`, [
+    await sendCTAButtons(sock, msg.key.remoteJid, msg, `⚡ ${CONFIG.BOT_NAME} v${CONFIG.VERSION} — ${visibleTotal} Commands`, [
       { type: "url",  text: "🌐 Bot Website",    url: CONFIG.BOT_URL || `https://wa.me/${CONFIG.OWNER_NUMBER || ""}` },
       { type: "url",  text: "💬 Contact Owner",  url: `https://wa.me/${CONFIG.OWNER_NUMBER || ""}` },
       { type: "copy", text: "📋 Copy Bot Name",  value: `${CONFIG.BOT_NAME} v${CONFIG.VERSION}`, id: "botinfo_name" },
@@ -40371,7 +40382,12 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
           const d = r?.data?.data || r?.data?.result || r?.data;
           return d?.download_url || d?.url || d?.video;
         },
-        async () => { const { data } = await axios.get(`https://api.nexoracle.com/downloader/ytmp4`, { params: { apikey: "free_key@maher_apis", url }, timeout: 45000 }); return data?.result?.download_url || data?.result?.url || data?.download_url; },
+        async () => {
+          const apikey = process.env.NEXORACLE_API_KEY;
+          if (!apikey) return null; // optional fallback: never ship a baked-in credential
+          const { data } = await axios.get('https://api.nexoracle.com/downloader/ytmp4', { params: { apikey, url }, timeout: 45000 });
+          return data?.result?.download_url || data?.result?.url || data?.download_url;
+        },
         async () => { const { data } = await axios.get(`https://api.davidcyril.name.ng/download/ytmp4`, { params: { url }, timeout: 45000 }); const d = data?.result || data?.data || data; return d?.download_url || d?.url; },
       ];
       for (const p of providers) { try { dl = await p(); if (dl) break; } catch {} }
@@ -43477,6 +43493,11 @@ globalThis.__MIAS_DISABLED__ = isCommandDisabled;
 globalThis.__MIAS_DISABLED_COMMANDS__ = DISABLED_COMMANDS;
 
 __miasApplyMaintenance(commands, aliases, MENU_CATEGORIES);
-const __menuCategoryPolicy = installMenuCategoryPolicy(commands, aliases, MENU_CATEGORIES, ["boyfriendsday","christmas","dares","fathersday","flirt","flirtline","friendquote","friendship","girlfriendsday","gitprofile","gitstalk","gn","goodnight","gratitude","guess","halloween","happyfathersday","happymothersday","happynewyear","heartbreak","igprofile","instastalk","ipstalk","jokes","love","lovemessage","mothersday","motivate","motivation","newyear","quote","quotes","roast","roseday","shayari","thankful","thankyou","thankyoumessage","tiktoklookup","tiktokstalk","valentine","valentines","wouldyou","xmas","compliment","ship","truthdare","tod","solve","tictactoe","8ball"]);
+const __menuCategoryPolicy = installMenuCategoryPolicy(commands, aliases, MENU_CATEGORIES, [], isCommandDisabled);
 globalThis.__MIAS_MENU_DENIED__ = name => __menuCategoryPolicy.denied(name, commands.get(String(name).toLowerCase()));
 globalThis.__MIAS_MENU_POLICY_REPORT__ = __menuCategoryPolicy.clean();
+
+// Read-only consumers share the actual registry, including late registrations.
+globalThis.__MIAS_COMMANDS__ = commands;
+globalThis.__MIAS_ALIASES__ = aliases;
+globalThis.__MIAS_MENU_CATEGORIES__ = MENU_CATEGORIES;
