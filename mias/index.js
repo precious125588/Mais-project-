@@ -1682,11 +1682,11 @@ try {
 function defaultSettings() {
   return {
     adultMode: false, privateMode: false, antiLink: false,
-    welcome: false, goodbye: false, adminOnly: false, autoReact: true,
+    welcome: false, goodbye: false, adminOnly: false, autoReact: false,
     stickerWm: false, antiSpam: false, antiDelete: false,
     antiEdit: false, antiBad: false, antiSticker: false,
     antiStatus: false, antiRaid: false,
-    blockCalls: false, linkGuard: "delete", badWordGuard: "delete",
+    blockCalls: true, linkGuard: "delete", badWordGuard: "delete",
     callAction: "cut", antiDelScope: "all", antiEditScope: "all",
     antiMention: false, autoBlock: false, readMsgs: false,
     viewStatus: false, reactStatus: false, statusMention: false, welcomeMsg: false, viewStatusExclude: [],
@@ -7601,6 +7601,85 @@ cmd(["dbase", "dbase2", "base64dec", "b64decode", "decode64"], { desc: "Base64 D
   } catch (e) { await sendReply(sock, msg, `❌ Error: ${e.message}`); }
 });
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SECURE FILE ENCRYPTION & DECRYPTION (AES-256-GCM / scrypt)
+// ═══════════════════════════════════════════════════════════════════════════════
+cmd(["encfile", "encryptfile"], { desc: "Encrypt a document/media file with AES-256-GCM password protection", category: "TOOLS" }, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  const password = args.join(" ").trim();
+  if (!password) {
+    return await sendReply(sock, msg, `🔐 *Secure File Encryption*\n\nUsage: Reply to any document or file with:\n*${CONFIG.PREFIX}encfile <your-password>*`);
+  }
+  const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const doc = msg.message?.documentMessage || q?.documentMessage || msg.message?.imageMessage || q?.imageMessage || msg.message?.videoMessage || q?.videoMessage || msg.message?.audioMessage || q?.audioMessage;
+  if (!doc) {
+    return await sendReply(sock, msg, `❌ Please reply to a document, audio, video, or image file to encrypt.`);
+  }
+  await react(sock, msg, "🔐");
+  try {
+    const { encryptBuffer } = require("./lib/secureCrypto.cjs");
+    const docType = (msg.message?.documentMessage || q?.documentMessage) ? "document" :
+                    (msg.message?.imageMessage || q?.imageMessage) ? "image" :
+                    (msg.message?.videoMessage || q?.videoMessage) ? "video" : "audio";
+    const stream = await downloadContentFromMessage(doc, docType);
+    let buf = Buffer.from([]);
+    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+    if (!buf.length) return await sendReply(sock, msg, "❌ File is empty or could not be downloaded.");
+
+    const encrypted = encryptBuffer(buf, password);
+    const origName = doc.fileName || "file.bin";
+    const encName = origName + ".enc";
+
+    await sock.sendMessage(jid, {
+      document: encrypted,
+      mimetype: "application/octet-stream",
+      fileName: encName,
+      caption: `🔐 *File Encrypted Successfully*\n\n📄 Original: *${origName}*\n📦 Cipher: *AES-256-GCM (scrypt)*\n⚠️ *Remember your password!* It cannot be recovered without it.`
+    }, { quoted: msg });
+    await react(sock, msg, "✅");
+  } catch (e) {
+    await sendReply(sock, msg, `❌ Encryption failed: ${e.message}`);
+    await react(sock, msg, "❌");
+  }
+});
+
+cmd(["decfile", "decryptfile"], { desc: "Decrypt an AES-256-GCM encrypted file (.enc)", category: "TOOLS" }, async (sock, msg, args) => {
+  const jid = msg.key.remoteJid;
+  const password = args.join(" ").trim();
+  if (!password) {
+    return await sendReply(sock, msg, `🔓 *Secure File Decryption*\n\nUsage: Reply to an encrypted .enc file with:\n*${CONFIG.PREFIX}decfile <your-password>*`);
+  }
+  const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const doc = msg.message?.documentMessage || q?.documentMessage;
+  if (!doc) {
+    return await sendReply(sock, msg, `❌ Please reply to an encrypted .enc document to decrypt.`);
+  }
+  await react(sock, msg, "🔓");
+  try {
+    const { decryptBuffer } = require("./lib/secureCrypto.cjs");
+    const stream = await downloadContentFromMessage(doc, "document");
+    let buf = Buffer.from([]);
+    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+    if (!buf.length) return await sendReply(sock, msg, "❌ File is empty or could not be downloaded.");
+
+    const decrypted = decryptBuffer(buf, password);
+    let origName = doc.fileName || "decrypted.bin";
+    if (origName.endsWith(".enc")) origName = origName.slice(0, -4);
+
+    await sock.sendMessage(jid, {
+      document: decrypted,
+      mimetype: "application/octet-stream",
+      fileName: origName,
+      caption: `🔓 *File Decrypted Successfully*\n\n📄 File: *${origName}*\n✅ Authentication: *Verified*`
+    }, { quoted: msg });
+    await react(sock, msg, "✅");
+  } catch (e) {
+    await sendReply(sock, msg, `❌ Decryption failed: ${e.message}`);
+    await react(sock, msg, "❌");
+  }
+});
+
 // ─────── End of Prince API commands ───────────────────────────────────────
 
 const MENU_CATEGORIES = [
@@ -13386,24 +13465,12 @@ cmd("guesssong", { desc: "Guess the song", category: "GAMES" }, async (sock, msg
 //  INFO COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 function _detectHost() {
-  // Try to identify the hosting platform from common env-var signatures
-  if (process.env.REPL_ID || process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS || process.env.REPL_OWNER) return "Replit";
-  if (process.env.HEROKU_APP_NAME || process.env.DYNO) return "Heroku";
-  if (process.env.RAILWAY_PROJECT_NAME || process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_ENVIRONMENT) return "Railway";
-  if (process.env.RENDER || process.env.RENDER_SERVICE_NAME) return "Render";
-  if (process.env.VERCEL || process.env.VERCEL_URL) return "Vercel";
-  if (process.env.NETLIFY || process.env.NETLIFY_DEV) return "Netlify";
-  if (process.env.KOYEB_APP_NAME) return "Koyeb";
-  if (process.env.FLY_APP_NAME) return "Fly.io";
-  if (process.env.CYCLIC_APP_ID) return "Cyclic";
-  if (process.env.TERMUX_VERSION || process.env.PREFIX?.includes("com.termux")) return "Termux (Android)";
-  if (process.env.CODESPACE_NAME || process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN) return "GitHub Codespaces";
-  if (process.env.GITPOD_WORKSPACE_ID) return "Gitpod";
-  if (process.env.AWS_EXECUTION_ENV) return "AWS";
-  if (process.env.GOOGLE_CLOUD_PROJECT || process.env.K_SERVICE) return "Google Cloud";
-  if (process.env.WEBSITE_INSTANCE_ID || process.env.AzureWebJobsStorage) return "Azure";
-  if (process.platform === "android" || /android/i.test(process.env.OSTYPE || "")) return "Android (PRoot)";
-  return os.platform() === "linux" ? "Linux VPS" : (os.platform() === "win32" ? "Windows" : os.platform());
+  try {
+    const { getHostName } = require("./lib/hostDetect.cjs");
+    return getHostName(process.env);
+  } catch {
+    return os.platform() === "linux" ? "Linux (VPS/Local)" : (os.platform() === "win32" ? "Windows" : os.platform());
+  }
 }
 
 cmd("botinfo", { desc: "Bot information — stats, host, commands", category: "INFO" }, async (sock, msg) => {
@@ -23635,16 +23702,30 @@ _Reply to a ZIP file with *${CONFIG.PREFIX}unzip*_
     let zipBuf = Buffer.from([]);
     for await (const chunk of stream) zipBuf = Buffer.concat([zipBuf, chunk]);
 
-    // Use JSZip (or AdmZip if available) to extract
+    // Use fflate (or AdmZip if available) to extract securely
     let entries = [];
     try {
-      const AdmZip = require("adm-zip");
-      const zip = new AdmZip(zipBuf);
-      entries = zip.getEntries().filter(e => !e.isDirectory && e.getData().length > 0);
+      const { unzipSync } = require("fflate");
+      const unzipped = unzipSync(zipBuf);
+      entries = Object.keys(unzipped)
+        .filter(name => !name.endsWith("/"))
+        .map(name => {
+          const buf = Buffer.from(unzipped[name]);
+          return {
+            entryName: name,
+            getData: () => buf,
+          };
+        })
+        .filter(e => e.getData().length > 0);
     } catch {
-      // Fallback: manual zip central directory parse
-      await editMessage(sock, jid, null, `❌ Could not parse ZIP. Make sure it's a valid .zip file.`);
-      return;
+      try {
+        const AdmZip = require("adm-zip");
+        const zip = new AdmZip(zipBuf);
+        entries = zip.getEntries().filter(e => !e.isDirectory && e.getData().length > 0);
+      } catch {
+        await editMessage(sock, jid, null, "❌ Could not parse ZIP. Make sure it is a valid .zip file.");
+        return;
+      }
     }
 
     if (!entries.length) {
