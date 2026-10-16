@@ -8636,7 +8636,7 @@ function menuPictureSources(sock, jid) {
     if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
     const cached = _menuPicCached(url);
     if (cached) return cached;
-    const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 8000, maxContentLength: 8 * 1024 * 1024 });
+    const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 2500, maxContentLength: 8 * 1024 * 1024 });
     const buf = Buffer.from(response.data || []);
     const signature = buf.subarray(0, 4).toString('hex');
     const ok = buf.length > 500 && (signature.startsWith('ffd8') || signature === '89504e47' || signature === '52494646') ? buf : null;
@@ -8644,14 +8644,14 @@ function menuPictureSources(sock, jid) {
     return ok;
   };
   return [
-    async () => downloadImage(custom || _BOT_PIC_FALLBACKS[0]),
+    ...(custom ? [async () => downloadImage(custom)] : []),
+    ..._LOCAL_BOT_PICS.map(file => async () => fs.readFileSync(file)),
     async () => {
       const botJid = String(sock.user?.id || '').replace(/:[0-9]+@/, '@');
       if (!botJid || typeof sock.profilePictureUrl !== 'function') return null;
       return downloadImage(await sock.profilePictureUrl(botJid, 'image'));
     },
-    ..._LOCAL_BOT_PICS.map(file => async () => fs.readFileSync(file)),
-    ..._BOT_PIC_FALLBACKS.filter(url => url !== custom && url !== _BOT_PIC_FALLBACKS[0]).map(url => async () => downloadImage(url)),
+    ..._BOT_PIC_FALLBACKS.filter(url => url !== custom).map(url => async () => downloadImage(url)),
   ];
 }
 
@@ -8680,9 +8680,7 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
     const snum = _cleanNum(sender);
     if (snum) pushNameCache.set(snum, rawPushName.trim());
   }
-  let senderName = rawPushName || 'User';
-  try { senderName = await getDisplayName(sock, sender, isGroup(msg) ? jid : null) || senderName; } catch {}
-  if (/^\+?\d+$/.test(senderName) && rawPushName) senderName = rawPushName.trim();
+  const senderName = rawPushName || 'User';
   const context = await menuVisibilityContext(sock, msg);
   const categories = activeMenuCategories(commands, aliases, MENU_CATEGORIES, context);
   const requested = Array.isArray(args) && args.length > 0;

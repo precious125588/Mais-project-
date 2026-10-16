@@ -185,59 +185,30 @@ async function getBuf(url, timeout = 90000) {
   return _fetch();
 }
 
-// ── TikTok info resolvers (multi-API with fallback) ──────────────────────
-async function tikwmInfo(videoUrl) {
-  const d = await getJson('https://www.tikwm.com/api/?url=' + encodeURIComponent(videoUrl) + '&hd=1');
-  const v = d && d.data;
-  if (!v || !v.play) return null;
-  const host = 'https://www.tikwm.com';
-  const abs = u => (u && u.startsWith('/') ? host + u : u);
-  return {
-    title: v.title || 'TikTok edit',
-    author: (v.author && (v.author.unique_id || v.author.nickname)) || '',
-    play: abs(v.play), hd: abs(v.hdplay || v.play), music: abs(v.music),
-    cover: abs(v.cover || v.origin_cover), digg: v.digg_count || 0, plays: v.play_count || 0,
-  };
-}
-// P6 fix: ordered provider chain with per-provider classification. One failed
-// source never blocks the next; each provider is wrapped so a timeout/HTTP
-// error/parse failure is logged (not swallowed) and the chain continues.
-async function _tryProvider(label, fn) {
-  try {
-    const out = await fn();
-    if (out) return out;
-    console.log('[anime-edits][resolve] ' + label + ' returned no media');
-  } catch (e) {
-    console.log('[anime-edits][resolve] ' + label + ' failed:', (e && e.message) || e);
-  }
-  return null;
-}
+// ── Shared TikTok info resolver ─────────────────────────────────────────
+let _sharedTikTokApi;
 async function resolveTikTok(videoUrl) {
-  // 1) tikwm (primary)
-  let i = await _tryProvider('tikwm', () => tikwmInfo(videoUrl));
-  if (i) return i;
-  // 2) giftedtech
-  i = await _tryProvider('giftedtech', async () => {
-    const d = await getJson('https://api.giftedtech.co.ke/api/download/tiktok?apikey=gifted&url=' + encodeURIComponent(videoUrl));
-    const r = d && (d.result || d.data);
-    const v = r && (r.video || r.nowm || r.no_watermark);
-    if (v) return { title: r.title || 'TikTok edit', author: '', play: v, hd: r.hd || v, music: r.music || r.audio, cover: r.cover || r.thumbnail, digg: 0, plays: 0 };
+  try {
+    _sharedTikTokApi ||= import('./features/tiktok.js');
+    const { fetchTikTokInfo } = await _sharedTikTokApi;
+    const info = await fetchTikTokInfo(videoUrl);
+    const bestVideo = info.videoHd || info.videoSd || info.videoWatermark;
+    const play = info.videoSd || bestVideo || info.videoWatermark;
+    if (!play) return null;
+    return {
+      title: info.title || 'TikTok edit',
+      author: info.author || '',
+      play,
+      hd: bestVideo || play,
+      music: info.audio || '',
+      cover: info.thumbnail || info.covers?.[0] || '',
+      digg: 0,
+      plays: 0,
+    };
+  } catch (e) {
+    console.log('[anime-edits][resolve] TikTok provider chain failed:', (e && e.message) || 'request failed');
     return null;
-  });
-  if (i) return i;
-  // 3) tikwm (no-hd variant) — same host, lighter endpoint; still documented
-  i = await _tryProvider('tikwm-lite', async () => {
-    const d = await getJson('https://www.tikwm.com/api/?url=' + encodeURIComponent(videoUrl));
-    const v = d && d.data;
-    if (v && v.play) {
-      const host = 'https://www.tikwm.com';
-      const abs = u => (u && u.startsWith('/') ? host + u : u);
-      return { title: v.title || 'TikTok edit', author: (v.author && (v.author.unique_id || v.author.nickname)) || '', play: abs(v.play), hd: abs(v.hdplay || v.play), music: abs(v.music), cover: abs(v.cover || v.origin_cover), digg: v.digg_count || 0, plays: v.play_count || 0 };
-    }
-    return null;
-  });
-  if (i) return i;
-  return null;
+  }
 }
 async function tikwmUserPosts(uniqueId) {
   const d = await getJson('https://www.tikwm.com/api/user/posts?unique_id=' + encodeURIComponent(uniqueId) + '&count=35&hd=1', 20000);
