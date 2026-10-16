@@ -13,7 +13,7 @@ test("Menu format has bold uppercase labels and no emojis in categories or heade
 
   // Check buildMenu header and category format in index.js
   assert.ok(indexSource.includes('"COMMAND CATEGORIES\\n"'), "Menu header must be clean text without emojis");
-  assert.ok(indexSource.includes("${cat.name.toUpperCase()}"), "Categories must be uppercase");
+  assert.ok(premiumMenu.formatMenuCategory({ name: "tools", cmds: ["time"] }).includes("*TOOLS*"), "Categories must be uppercase");
   assert.ok(!indexSource.includes("🗂️ *CATEGORIES*"), "Old emoji category header must not exist in index.js");
   assert.ok(!indexSource.includes("━━━━━「 *CATEGORIES* 」━━━━━"), "Decorative header must be gone from index.js");
 

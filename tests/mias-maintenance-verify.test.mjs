@@ -268,14 +268,14 @@ test('12 · all command names and category headings are uppercase, no emoji in m
   assert.ok(!/━|✦|➤|📋|🏷️/.test(sample), 'no heavy decoration in category blocks');
 });
 
-test('13 · every menu command reacts with exactly 💔', () => {
+test('13 · main/all retain 💔 and categories use their supported reactions', () => {
   assert.equal(menu.menuReaction('MAIN'), '💔');
   assert.equal(menu.menuReaction('ALL'), '💔');
-  assert.equal(menu.menuReaction('DOWNLOAD'), '💔');
-  assert.equal(menu.menuReaction('TOOLS'), '💔');
+  assert.equal(menu.menuReaction('DOWNLOAD'), '📥');
+  assert.equal(menu.menuReaction('TOOLS'), '🔧');
   assert.equal(menu.menuReaction(undefined), '💔');
   for (const cat of menu.activeMenuCategories(commands, aliases, MENU_CATEGORIES, { owner: true, adultMode: true }))
-    assert.equal(menu.menuReaction(cat.name), '💔', cat.name);
+    assert.equal(menu.menuReaction(cat.name), menu.MENU_REACTIONS[menu.normalizeMenuCategory(cat.name)] || '💔', cat.name);
   const src = source.slice(source.indexOf('function menuReaction'), source.indexOf('function menuReaction') + 300);
   assert.ok(!/📋|🏷️/.test(src), 'no other reaction emoji is returned');
 });

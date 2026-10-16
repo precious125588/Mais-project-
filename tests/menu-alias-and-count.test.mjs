@@ -23,7 +23,7 @@ test("Menu & Alias filtering - Menus display only primary commands", () => {
   assert.ok(miasIndex.includes("const totalCmds = getPrimaryCommandCount(context);"), "buildMenu must use getPrimaryCommandCount()");
 
   // Category counts in buildMenu must use getCategoryPrimaryCommands
-  assert.ok(miasIndex.includes("const count = getCategoryPrimaryCommands(cat, context).length;"), "buildMenu category count must use primary commands");
+  assert.ok(miasIndex.includes("activeMenuCategories(commands, aliases, MENU_CATEGORIES, context).map(cat => formatMenuCategory(cat))"), "buildMenu counts and listing must use the same canonical category snapshot");
 
   // .menu <category> must use getCategoryPrimaryCommands
   assert.ok(miasIndex.includes("const uniq = getCategoryPrimaryCommands(cat, context);"), ".menu must use getCategoryPrimaryCommands");
