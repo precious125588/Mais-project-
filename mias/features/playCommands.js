@@ -189,6 +189,8 @@ async function _fetchYtAudioBuf(videoUrl, preferFmt = "mp3") {
     async () => { const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/download/ytmp3?apikey=${CONFIG.GIFTED_KEY}&url=${encodeURIComponent(videoUrl)}`, { timeout: 60000 }); if (data?.success && data?.result) return data.result.download_url || data.result.url || data.result.audio || data.result.mp3; },
     async () => { const r = await APIs.getEliteProTechDownloadByUrl(videoUrl); return r?.download; },
     async () => { const r = await APIs.getYupraDownloadByUrl(videoUrl); return r?.download; },
+    // Nexray YouTube MP3 (added last; live and returns a real MP3)
+    async () => { const { data } = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp3?url=${encodeURIComponent(videoUrl)}`, { timeout: 60000, headers: { "User-Agent": "Mozilla/5.0" } }); return data?.result?.url || null; },
   ];
   for (const fn of dlApis) {
     let dlUrl = null;
