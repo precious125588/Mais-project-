@@ -1,9 +1,21 @@
+200
 // Spotify command: music card (cover, title, artist, duration) and a quoted 1/2/3 picker.
 // Built the same way as the .play card, but with its own pending store and reply
 // listener, so .play / .play2 code is not touched.
 //   1 = music file (MP3)   2 = voice note   3 = video file (or "video not available")
 import axios from "axios";
 import { nxGet } from "../api.js";
+import { prepareTikTokVideo } from "./ttVideo.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { createRequire } from "node:module";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+const { resolveFfmpeg } = require("../lib/portableVideo.cjs");
 
 const SPOT_TTL = 20 * 60 * 1000;          // card stays pickable for 20 minutes
 const SPOT_FIND_BUDGET_MS = 75 * 1000;    // max time spent finding a working provider
@@ -64,8 +76,11 @@ export function parseSpotifyPayload(data) {
   const artist = pickAll(pairs, ["artist", "artists", "artistname", "channel", "author", "uploader", "singer"]).join(", ");
   const durRaw = pickOne(pairs, ["duration", "duration_ms", "durationms", "durationsec", "length"]);
   const cover = pickOne(pairs, ["cover", "thumbnail", "thumb", "image", "album_art", "albumart", "cover_url", "coverurl", "picture", "img", "artwork"], (v) => /^https?:\/\//i.test(v));
+  // Video only from the Spotify provider payload (Canvas / video fields). No YouTube.
+  const videoUrl = pickOne(pairs, ["video", "videourl", "video_url", "canvas", "canvasurl", "canvas_url", "mp4", "videolink"], (v) => /^https?:\/\//i.test(v) && !NOT_AUDIO_RE.test(v));
   return {
     audioUrl,
+    videoUrl: videoUrl || "",
     meta: { title: title || "Spotify Track", artist: artist || "Unknown artist", durationSec: parseDurationSec(durRaw), cover: cover || "" },
   };
 }
@@ -86,7 +101,7 @@ export function audioFormat(buf) {
 const EXT = { mp3: ".mp3", ogg: ".ogg", m4a: ".m4a", wav: ".wav", flac: ".flac", webm: ".webm" };
 
 export function installSpotifyCommands(ctx) {
-  const { cmd, sendReply, react, CONFIG, dcGet, prexzyGet, ytSearch, __miasMapSet, __miasMapDelete, getSender, isPrivateBlocked, transcodeAudio, voiceBuffer } = ctx;
+  const { cmd, sendReply, react, CONFIG, dcGet, prexzyGet, __miasMapSet, __miasMapDelete, getSender, isPrivateBlocked, transcodeAudio, voiceBuffer } = ctx;
   const brand = () => `${CONFIG.BOT_NAME || "MIAS"} • SPOTIFY`;
 
   // Providers, tried in order. Prexzy and Nexray first, then the rest.
@@ -151,17 +166,67 @@ export function installSpotifyCommands(ctx) {
     return null;
   }
 
-  // Video: a YouTube result whose title matches the track title. Null means "video not available".
-  async function findVideoUrl(meta) {
+  // Fallback, used only when the Spotify provider returns no video: the YouTube match for this track.
+  async function findYouTubeUrl(meta) {
     const want = normTitle(meta.title);
     if (!want) return null;
     try {
-      const list = await ytSearch(`${meta.artist} ${meta.title}`);
-      for (const v of (Array.isArray(list) ? list : []).slice(0, 5)) {
+      const r = await nxGet("/search/youtube", { q: `${meta.artist} ${meta.title}` }, 20000);
+      const list = r && r.ok && Array.isArray(r.result) ? r.result : [];
+      for (const v of list.slice(0, 5)) {
         if (normTitle(v.title).includes(want) && v.url) return v.url;
       }
     } catch {}
     return null;
+  }
+
+  // Best YouTube MP4 link at 720p or lower (provider lists can include 1080p, which is too large).
+  function pickYouTubeVideoLink(data) {
+    const found = [];
+    (function walk(o) {
+      if (!o || typeof o !== "object") return;
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      if (typeof o.download_url === "string" && /^https?:\/\//i.test(o.download_url) && !/youtube\.com|youtu\.be/i.test(o.download_url)) {
+        found.push({ url: o.download_url, h: Number(o.height) || 0 });
+      }
+      for (const v of Object.values(o)) if (v && typeof v === "object") walk(v);
+    })(data);
+    const ok = found.filter((c) => c.h <= 720).sort((a, b) => b.h - a.h);
+    return ok.length ? ok[0].url : "";
+  }
+
+  async function fetchYouTubeMp4Buf(ytUrl) {
+    const tries = [
+      async () => { const r = await prexzyGet("/download/ytmp4", { url: ytUrl, quality: "720" }, 45000); return r && r.ok ? r.data : null; },
+      async () => { const r = await dcGet("/download/ytmp4", { url: ytUrl }, 40000); return r && r.ok ? r.data : null; },
+      async () => { const r = await nxGet("/downloader/ytmp4", { url: ytUrl }, 60000); return r && r.ok ? r.data : null; },
+    ];
+    for (const t of tries) {
+      try {
+        const link = pickYouTubeVideoLink(await t());
+        if (!link) continue;
+        const buf = await fetchBuf(link, 300000);
+        if (buf.length > 10000 && buf.length < 60 * 1024 * 1024 && buf.toString("latin1", 4, 8) === "ftyp") return buf;
+      } catch {}
+    }
+    return null;
+  }
+
+  // YouTube links are often video-only, so the Spotify track audio is put on the picture.
+  async function muxSpotifyAudio(videoBuf, audioBuf) {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "mias-spot-mux-"));
+    const vIn = path.join(dir, "v.mp4"), aIn = path.join(dir, "a.bin"), out = path.join(dir, "out.mp4");
+    try {
+      await fsp.writeFile(vIn, videoBuf);
+      await fsp.writeFile(aIn, audioBuf);
+      await execFileAsync(resolveFfmpeg(), ["-hide_banner", "-loglevel", "error", "-y", "-i", vIn, "-i", aIn,
+        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest",
+        "-movflags", "+faststart", "-f", "mp4", out], { timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
+      const res = await fsp.readFile(out);
+      return res.length > 10000 && res.toString("latin1", 4, 8) === "ftyp" ? res : null;
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   async function fetchBuf(url, timeout = 120000) {
@@ -173,23 +238,13 @@ export function installSpotifyCommands(ctx) {
     const fmt = audioFormat(buf);
     return fmt ? { buf, fmt } : null;
   }
+  // Video: the Spotify provider's own MP4 link only (no YouTube). The file must be a real
+  // MP4, then goes through the same processing as the TikTok 1.3 HD video before delivery.
   async function fetchVideoBuf(url) {
-    const tries = [
-      async () => { const r = await prexzyGet("/download/ytmp4", { url, quality: "720" }, 45000); return r && r.ok ? r.data : null; },
-      async () => { const r = await dcGet("/download/ytmp4", { url }, 40000); return r && r.ok ? r.data : null; },
-      async () => { if (!CONFIG.GIFTED_KEY) return null; return (await axios.get(`${CONFIG.GIFTED_API}/api/download/ytmp4?apikey=${CONFIG.GIFTED_KEY}&url=${encodeURIComponent(url)}`, { timeout: 60000 })).data; },
-    ];
-    for (const t of tries) {
-      try {
-        const d = await t();
-        const pairs = walkPairs(d);
-        const link = pickOne(pairs, ["download_url", "downloadurl", "download", "url", "dl", "link", "video"], (v) => /^https?:\/\//i.test(v) && !/youtube\.com|youtu\.be/i.test(v));
-        if (!link) continue;
-        const buf = await fetchBuf(link, 300000);
-        if (buf.length > 50000) return buf;
-      } catch {}
-    }
-    return null;
+    if (!url || !/^https?:\/\//i.test(url) || NOT_AUDIO_RE.test(url)) return null;
+    const buf = await fetchBuf(url, 300000).catch(() => null);
+    if (!buf || buf.length < 10000 || buf.toString("latin1", 4, 8) !== "ftyp") return null;
+    return prepareTikTokVideo(buf);
   }
 
   // Premium caption: Unicode-styled fixed labels only. Song title and artist are
@@ -243,9 +298,18 @@ export function installSpotifyCommands(ctx) {
     const title = entry.meta.title;
     const safe = `${entry.meta.artist} - ${title}`.replace(/[^\w\s.-]/g, "_").trim().slice(0, 70) || "track";
     if (n === 3) {
-      if (!entry.videoUrl) { await sendReply(sock, m, `🎬 *Video not available* for *${title}*.`); return; }
-      const vbuf = await fetchVideoBuf(entry.videoUrl);
-      if (!vbuf) { await sendReply(sock, m, `🎬 *Video not available* right now for *${title}*. Try again later.`); return; }
+      // 1) The Spotify provider's own video. 2) If none, the YouTube match with the Spotify audio.
+      let vbuf = entry.videoUrl ? await fetchVideoBuf(entry.videoUrl) : null;
+      if (!vbuf) {
+        const yt = await findYouTubeUrl(entry.meta);
+        const picture = yt ? await fetchYouTubeMp4Buf(yt) : null;
+        if (picture) {
+          const audio = await getAudioFor(entry).catch(() => null);
+          const muxed = audio ? await muxSpotifyAudio(picture, audio.buf).catch(() => null) : null;
+          vbuf = muxed ? await prepareTikTokVideo(muxed) : null;
+        }
+      }
+      if (!vbuf) { await sendReply(sock, m, `🎬 *Video not available* right now for *${title}*.`); return; }
       await sock.sendMessage(jid, { video: vbuf, mimetype: "video/mp4", caption: `🎵 ${title} — ${entry.meta.artist}` }, { quoted: m });
       return;
     }
@@ -290,7 +354,8 @@ export function installSpotifyCommands(ctx) {
           try { await sock.sendMessage(jid, { react: { text: "⏳", key: m.key } }); } catch {}
           try {
             await deliver(sock, entry, Number(text), m);
-            try { await sock.sendMessage(jid, { react: { text: "✅", key: m.key } }); } catch {}
+            // Option 3 (video) gets no ✅: the video or its "not available" reply is the result.
+            if (Number(text) !== 3) { try { await sock.sendMessage(jid, { react: { text: "✅", key: m.key } }); } catch {} }
           } catch (e) {
             try { await sock.sendMessage(jid, { react: { text: "❌", key: m.key } }); } catch {}
             try { await sendReply(sock, m, `❌ Spotify download failed: ${e?.message || e}`); } catch {}
@@ -321,7 +386,7 @@ export function installSpotifyCommands(ctx) {
       if (!trackUrl) throw new Error("I couldn't find that song on Spotify. Try sending the Spotify link.");
       const track = await resolveCard(trackUrl);
       if (!track) throw new Error("all Spotify providers are busy right now. Try again in a minute.");
-      const videoUrl = await findVideoUrl(track.meta);
+      const videoUrl = track.videoUrl || "";
       const cover = track.meta.cover ? await fetchBuf(track.meta.cover, 15000).catch(() => null) : null;
       const card = buildCard(track.meta);
       const sent = cover && cover.length > 2000
@@ -352,3 +417,4 @@ export function installSpotifyCommands(ctx) {
 
   return { spotifyCard, resolveCard, parseSpotifyPayload, audioFormat };
 }
+
