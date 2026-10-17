@@ -79,7 +79,8 @@ test("Downloader consolidation - Unique commands remain untouched", () => {
   assert.ok(miasIndex.includes('cmd(["video","yt","ytdl"'), "Unique command .video must remain");
   assert.ok(miasIndex.includes('cmd(["facebook", "fb"]'), "Unique command .facebook must remain");
   assert.ok(miasIndex.includes('cmd(["instagram","ig","igdl"]'), "Unique command .instagram must remain");
-  assert.ok(miasIndex.includes('cmd(["spotify","spot","spotdl"]'), "Unique command .spotify must remain");
+  const spotifyModule = fs.readFileSync(path.join(ROOT, "mias/features/spotifyCommands.js"), "utf8");
+  assert.ok(spotifyModule.includes('cmd(["spotify", "spot", "spotdl"'), "Unique command .spotify must remain");
   assert.ok(miasIndex.includes('cmd(["pinterest", "pinsearch"'), "Unique command .pinterest must remain");
   assert.ok(miasIndex.includes('cmd("savetube"'), "Unique command .savetube must remain");
   assert.ok(miasIndex.includes('cmd("leaktube"'), "Unique command .leaktube must remain");

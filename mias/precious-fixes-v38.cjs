@@ -158,7 +158,7 @@ function migrateVcardOff() {
   } catch (_) {}
   saveNow();
   log('vCard auto-popup switched OFF (statusVcard=false, statusReply/contactReply reset) — ' +
-      touched + ' toggle(s) changed. Re-enable any time with .setting 38.1 / 32.1 / 31.1');
+      touched + ' toggle(s) changed. The vCard setting has been removed from the settings menu.');
   return true;
 }
 

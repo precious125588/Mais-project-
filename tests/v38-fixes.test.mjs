@@ -30,8 +30,8 @@ console.log('\n[2] settings');
 const idx = fs.readFileSync(IDX, 'utf8');
 ok('default statusVcard: false', /statusVcard: false,/.test(idx));
 ok('default protectAlways: true', /protectAlways: true,/.test(idx));
-ok('SETTINGS_MAP has 38.1/38.2/39.1/39.2',
-  idx.includes('"38.1"') && idx.includes('"38.2"') && idx.includes('"39.1"') && idx.includes('"39.2"'));
+ok('SETTINGS_MAP has the renumbered 30.x/31.x/33.x/35.x toggles and 38.x status forwarder',
+  idx.includes('"30.1"') && idx.includes('"31.1"') && idx.includes('"35.1"') && idx.includes('"38.1"') && !idx.includes('"39.1"'));
 ok('every SETTINGS_MAP toggle persists (_v38Persist wrapper)', idx.includes('__v38Persist'));
 ok('settings menu renders section 38 and 39',
   /Status vCard/.test(idx) && /Group Protections/.test(idx));

@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const req = createRequire(import.meta.url);
 const hostDetect = req('../mias/lib/hostDetect.cjs');
-const source = fs.readFileSync(path.join(ROOT, 'mias/index.js'), 'utf8');
+const source = fs.readFileSync(path.join(ROOT, 'mias/index.js'), 'utf8') + '\n' + fs.readFileSync(path.join(ROOT, 'mias/features/spotifyCommands.js'), 'utf8');
 const caseSource = fs.readFileSync(path.join(ROOT, 'case.js'), 'utf8');
 
 // ── source extraction (brace matched, real production code) ────────────────

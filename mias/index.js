@@ -99,6 +99,7 @@ import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPending
 import { runTikTokBulk, formatBulkSummary, bulkModeId } from "./features/ttBulk.js";
 import { prepareTikTokVideo, createTikTokSliderVideo } from "./features/ttVideo.js";
 import { installPlayCards, installPlayAudio, installPlayPickers, installPlaySearchPicker, installPlayOutputPicker, installPlayWrappers } from "./features/playCommands.js";
+import { installSpotifyCommands } from "./features/spotifyCommands.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1685,8 +1686,8 @@ try {
 function defaultSettings() {
   return {
     adultMode: false, privateMode: false, antiLink: false,
-    // autoReact defaults ON (owner request) — .autoreact off still disables it.
-    welcome: false, goodbye: false, adminOnly: false, autoReact: true,
+    // autoReact (legacy per-chat key) defaults OFF; message auto-react lives in autoReactMsgs.
+    welcome: false, goodbye: false, adminOnly: false, autoReact: false,
     stickerWm: false, antiSpam: false, antiDelete: false,
     antiEdit: false, antiBad: false, antiSticker: false,
     antiStatus: false, antiRaid: false,
@@ -1725,7 +1726,7 @@ function defaultSettings() {
     //                 (which gates the per-command reactions only).
     // reactMeOwner  : when ON, every owner message is reacted with 👑
     //                 (overrides random emoji for the owner).
-    autoReactMsgs: true,   // default ON (owner request): react to ordinary messages too
+    autoReactMsgs: false,  // default OFF (owner request): message auto-react is opt-in. Command reactions are separate (cmdReact).
     cmdReact: true,        // command reactions (⏳/✅/❌ on commands) — independent of autoReactMsgs, default ON
     reactMeOwner: false,
     // Owner gateways (settings UI 40.x / 41.x). Default ON = previous behavior.
@@ -1773,20 +1774,26 @@ const GUARD_GLOBAL_KEYS = [
 const GUARD_DB_FILE = path.join(DB_DIR, "guard_settings.json");
 let _guardLoaded = false;
 let _guardLastJson = "";
+let _guardNeedsSave = false;
 function _loadGuardDb(owner) {
   if (_guardLoaded || !owner) return;
   _guardLoaded = true;
+  let data = {};
   try {
-    if (!fs.existsSync(GUARD_DB_FILE)) return;
-    const data = JSON.parse(fs.readFileSync(GUARD_DB_FILE, "utf8") || "{}");
-    for (const k of GUARD_GLOBAL_KEYS) if (k in data) owner[k] = data[k];
+    if (fs.existsSync(GUARD_DB_FILE)) data = JSON.parse(fs.readFileSync(GUARD_DB_FILE, "utf8") || "{}") || {};
   } catch (e) { console.error("[guard-db] load failed:", e?.message || e); }
+  for (const k of GUARD_GLOBAL_KEYS) if (k in data) owner[k] = data[k];
+  // One-time migration (owner request): message auto-react defaults OFF.
+  // Runs once; after that the owner's own choice is kept.
+  if (!data.__autoreact_off_v1) { owner.autoReactMsgs = false; _guardNeedsSave = true; }
+  if (_guardNeedsSave) { _guardNeedsSave = false; saveGuardDb(owner); }
 }
 function saveGuardDb(owner) {
-  if (!owner) return;
+  if (!owner || !_guardLoaded) return;
   try {
     const snap = {};
     for (const k of GUARD_GLOBAL_KEYS) if (k in owner) snap[k] = owner[k];
+    snap.__autoreact_off_v1 = true;
     const json = JSON.stringify(snap, null, 2);
     if (json === _guardLastJson) return;
     fs.mkdirSync(DB_DIR, { recursive: true });
@@ -3132,7 +3139,7 @@ async function connectToWA(force = false) {
                 if (_ownerSStatus?.statusReply && author && author.endsWith("@s.whatsapp.net") && author !== _botSelfJid2) {
                   // v38: the contact card is OPT-IN (setting 38.1). Default OFF
                   // so nothing pops up in a viewer's DM unless the owner asks.
-                  const _sendVcard = _ownerSStatus?.statusVcard === true;
+                  const _sendVcard = false; // Status vCard removed from settings: never sent
                   const _srNum = _cleanNum(sock.user?.id || _ownerJStatus || CONFIG.OWNER_NUMBER || "");
                   const _srName = (sock.user?.name || sock.user?.verifiedName || "").trim() || CONFIG.BOT_NAME || "Bot Owner";
                   if (_srNum && _srNum.length > 4) {
@@ -9025,8 +9032,6 @@ function buildSettingsMenu(jid) {
 ┃ 28.1 ᴇɴᴀʙʟᴇ  ${s.forcePrivate ? "✅" : ""}
 ┃ 28.2 ᴅɪsᴀʙʟᴇ  ${!s.forcePrivate ? "✅" : ""}
 ╰━━━━━━━━━━━╯
-╭━━❮ *𝗔𝘂𝘁𝗼-𝗗𝗟 𝗧𝗵𝗶𝘀 𝗖𝗵𝗮𝘁* ❯━━╮
-╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝘂𝘁𝗼 𝗗𝗼𝘄𝗻𝗹𝗼𝗮𝗱𝗲𝗿* ❯━━╮
 ┃ 29.1 ᴏꜰꜰ  ${s.autoDownload === 'off' || !s.autoDownload ? "✅" : ""}
 ┃ 29.2 ᴅᴍ ᴏɴʟʏ  ${s.autoDownload === 'dm' ? "✅" : ""}
@@ -9039,39 +9044,35 @@ function buildSettingsMenu(jid) {
 ┃ _ᴀʟʟ ᴅʟ ᴇɴᴅᴘᴏɪɴᴛs (ɴᴇxʀᴀʏ/ᴘʀᴇxᴢʏ) ɪɴᴄʟᴜᴅᴇᴅ ᴀꜱ ꜰᴀʟʟʙᴀᴄᴋ_
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝗻𝘁𝗶-𝗕𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁* ❯━━╮
-┃ 34.1 ᴇɴᴀʙʟᴇ  ${s.antiBroadcast ? "✅" : ""}
-┃ 34.2 ᴅɪsᴀʙʟᴇ  ${!s.antiBroadcast ? "✅" : ""}
+┃ 30.1 ᴇɴᴀʙʟᴇ  ${s.antiBroadcast ? "✅" : ""}
+┃ 30.2 ᴅɪsᴀʙʟᴇ  ${!s.antiBroadcast ? "✅" : ""}
 ┃ _ᴀᴜᴛᴏ-ʙʟᴏᴄᴋs ʙʀᴏᴀᴅᴄᴀsᴛ sᴇɴᴅᴇʀs_
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝘂𝘁𝗼-𝗕𝗹𝗼𝗰𝗸 𝗖𝗼𝘂𝗻𝘁𝗿𝗶𝗲𝘀* ❯━━╮
 ┃ _ᴀᴘᴘʟɪᴇs ᴡʜᴇɴ ᴀᴜᴛᴏ ʙʟᴏᴄᴋ (8.x) ɪs ᴏɴ_
 ┃ _ʙʟᴏᴄᴋɪɴɢ: ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).map(c => "+" + c).join(", ")}_
-┃ 35.1 🇵🇰 +92 ᴘᴀᴋɪsᴛᴀɴ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("92") ? "✅" : ""}
-┃ 35.2 🇲🇦 +212 ᴍᴏʀᴏᴄᴄᴏ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("212") ? "✅" : ""}
-┃ 35.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("234") ? "✅" : ""}
+┃ 31.1 🇵🇰 +92 ᴘᴀᴋɪsᴛᴀɴ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("92") ? "✅" : ""}
+┃ 31.2 🇲🇦 +212 ᴍᴏʀᴏᴄᴄᴏ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("212") ? "✅" : ""}
+┃ 31.3 🇳🇬 +234 ɴɪɢᴇʀɪᴀ  ${(Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]).includes("234") ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗠𝗲𝘁𝗮 𝗕𝗮𝗱𝗴𝗲* ❯━━╮
 ┃ 32.1 ᴇɴᴀʙʟᴇ  ${s.statusReply ? "✅" : ""}
 ┃ 32.2 ᴅɪsᴀʙʟᴇ  ${!s.statusReply ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
-╭━━❖ *𝗦𝘁𝗮𝘁𝘂𝘀 𝗩𝗰𝗮𝗿𝗱* ❖━━╮
-┃ 38.1 ᴇɴᴀʙʟᴇ  ${s.statusVcard ? "✅" : ""}
-┃ 38.2 ᴅɪᴜᴀʙʟᴇ  ${!s.statusVcard ? "✅" : ""}
-╰━━━━━━━━━━━╯
 ╭━━❖ *𝗚𝗿𝗼𝘂𝗽 𝗣𝗿𝗼𝘁𝗲𝗰𝘁𝗶𝗼𝗻𝘀* ❖━━╮
-┃ 39.1 ᴀʟᴡᴀʏ𝘀 ᴏ𝈇  ${s.protectAlways !== false ? "✅" : ""}
-┃ 39.2 ᴘᴀᴜ𝘀ᴇ ᴏɴ ᴘʀɪᴠᴀᴛᴇ  ${s.protectAlways === false ? "✅" : ""}
+┃ 33.1 ᴀʟᴡᴀʏ𝘀 ᴏ𝈇  ${s.protectAlways !== false ? "✅" : ""}
+┃ 33.2 ᴘᴀᴜ𝘀ᴇ ᴏɴ ᴘʀɪᴠᴀᴛᴇ  ${s.protectAlways === false ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
 ╭━━❖ *𝗔𝘂𝘁𝗼 𝗦𝗲𝗻𝗱 𝗦𝘁𝗮𝘁𝘂𝘀* ❖━━╮
-┃ 40.1 ᴇɴᴀʙʟᴇ  ${s.autoSendStatus !== false ? "✅" : ""}
-┃ 40.2 ᴅɪꜱᴀʙʟᴇ  ${s.autoSendStatus === false ? "✅" : ""}
+┃ 34.1 ᴇɴᴀʙʟᴇ  ${s.autoSendStatus !== false ? "✅" : ""}
+┃ 34.2 ᴅɪꜱᴀʙʟᴇ  ${s.autoSendStatus === false ? "✅" : ""}
 ┃ _\"ꜱᴇɴᴅ ᴘʟꜱ\"/\"ꜱʜᴀʀᴇ ᴘʟꜱ\" ʀᴇᴘʟɪᴇꜱ ᴛᴏ ʏᴏᴜʀ ꜱᴛᴀᴛᴜꜱ_
 ╰━━━━━━━━━━━╯
 ╭━━❖ *𝗔𝘂𝘁𝗼 𝗦𝗲𝗻𝗱 𝗔𝘇𝗮* ❖━━╮
-┃ 41.1 ᴇɴᴀʙʟᴇ  ${s.autoSendAza !== false ? "✅" : ""}
-┃ 41.2 ᴅɪꜱᴀʙʟᴇ  ${s.autoSendAza === false ? "✅" : ""}
+┃ 35.1 ᴇɴᴀʙʟᴇ  ${s.autoSendAza !== false ? "✅" : ""}
+┃ 35.2 ᴅɪꜱᴀʙʟᴇ  ${s.autoSendAza === false ? "✅" : ""}
 ┃ _ᴘʀᴇꜰɪxʟᴇꜱꜱ 'aza' ᴀᴜᴛᴏ ʀᴇᴘʟʏ_
 ╰━━━━━━━━━━━╯
 
@@ -9101,7 +9102,7 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "7.2": s => { s.autoReactMsgs = false; return "{ auto react off }"; },
   "7.3": s => { s.cmdReact = true; return "✅ Command Reactions: ON"; },
   "7.4": s => { s.cmdReact = false; return "❌ Command Reactions: OFF"; },
-  "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 35._`; },
+  "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 31._`; },
   "8.2": s => { s.autoBlock = false; return "❌ Auto Block: OFF"; },
   "9.1": s => { s.readMsgs = true; try { getSettings("bot").readMsgs = true; getSettings("bot").autoread = true; } catch {} return "✅ Read Msgs: ON"; },
   "9.2": s => { s.readMsgs = false; try { getSettings("bot").readMsgs = false; getSettings("bot").autoread = false; } catch {} return "❌ Read Msgs: OFF"; },
@@ -9157,29 +9158,27 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "29.2": s => { s.autoDownload = 'dm';     if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','dm');     return "{ autodl dm }"; },
   "29.3": s => { s.autoDownload = 'global'; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','global'); return "{ autodl all }"; },
   
-  "36.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
-  "36.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
+  "38.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
+  "38.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
   
-  "31.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
-  "31.2": s => { s.contactReply = false; return "{ contactreply off }"; },
+  "36.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
+  "36.2": s => { s.contactReply = false; return "{ contactreply off }"; },
   "32.1": s => { s.statusReply = true;  return "{ metabadge on }"; },
   "32.2": s => { s.statusReply = false; return "{ metabadge off }"; },
-  "33.1": s => { s.aiTag = true;  return "{ aitag on }"; },
-  "33.2": s => { s.aiTag = false; return "{ aitag off }"; },
-  "34.1": s => { s.antiBroadcast = true;  return "{ antibroadcast on }"; },
-  "34.2": s => { s.antiBroadcast = false; return "{ antibroadcast off }"; },
-  "35.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
-  "35.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
-  "35.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
+  "37.1": s => { s.aiTag = true;  return "{ aitag on }"; },
+  "37.2": s => { s.aiTag = false; return "{ aitag off }"; },
+  "30.1": s => { s.antiBroadcast = true;  return "{ antibroadcast on }"; },
+  "30.2": s => { s.antiBroadcast = false; return "{ antibroadcast off }"; },
+  "31.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
+  "31.2": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("212")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "212"); return "❌ Auto-Block: removed +212 (Morocco)"; } s.autoBlockCountries.push("212"); return "✅ Auto-Block: added +212 (Morocco)"; },
+  "31.3": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("234")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "234"); return "❌ Auto-Block: removed +234 (Nigeria)"; } s.autoBlockCountries.push("234"); return "✅ Auto-Block: added +234 (Nigeria)"; },
   // ── v38 ────────────────────────────────────────────────────────────────
-  "38.1": s => { s.statusVcard = false; return "🚫 Status vCard: PERMANENTLY OFF — removed, cannot be enabled."; },
-  "38.2": s => { s.statusVcard = false; return "🚫 Status vCard: PERMANENTLY OFF — removed."; },
-  "39.1": s => { s.protectAlways = true;  return "✅ Group Protections: ALWAYS ON (they keep working in private mode)."; },
-  "39.2": s => { s.protectAlways = false; return "❌ Group Protections: paused while the bot is in private mode."; },
-  "40.1": s => { s.autoSendStatus = true;  return "✅ Auto Send Status: ENABLED — \"send pls\"/\"share pls\" replies to your status will be served."; },
-  "40.2": s => { s.autoSendStatus = false; return "❌ Auto Send Status: DISABLED — status send-requests are ignored (owner/sudo excepted)."; },
-  "41.1": s => { s.autoSendAza = true;  return "✅ Auto Send Aza: ENABLED — prefixless aza replies for everyone."; },
-  "41.2": s => { s.autoSendAza = false; return "❌ Auto Send Aza: DISABLED — prefixless aza works for owner/sudo only."; },
+  "33.1": s => { s.protectAlways = true;  return "✅ Group Protections: ALWAYS ON (they keep working in private mode)."; },
+  "33.2": s => { s.protectAlways = false; return "❌ Group Protections: paused while the bot is in private mode."; },
+  "34.1": s => { s.autoSendStatus = true;  return "✅ Auto Send Status: ENABLED — \"send pls\"/\"share pls\" replies to your status will be served."; },
+  "34.2": s => { s.autoSendStatus = false; return "❌ Auto Send Status: DISABLED — status send-requests are ignored (owner/sudo excepted)."; },
+  "35.1": s => { s.autoSendAza = true;  return "✅ Auto Send Aza: ENABLED — prefixless aza replies for everyone."; },
+  "35.2": s => { s.autoSendAza = false; return "❌ Auto Send Aza: DISABLED — prefixless aza works for owner/sudo only."; },
 };
 
 // ── v38: PERSISTENCE ──────────────────────────────────────────────────────
@@ -9248,8 +9247,8 @@ async function handleSettingsNumericReply(sock, msg, body) {
       recording: ["16.1", "16.2"], typing: ["17.1", "17.2"], alwaysonline: ["18.1", "18.2"],
       chatbot: ["21.1", "21.2"], ownerreact: ["22.1", "22.2"], adultmode: ["23.1", "23.2"],
       antimention: ["26.1", "26.2"], antibug: ["27.1", "27.2"], forceprivate: ["28.1", "28.2"],
-      statusforwarder: ["30.1", "30.2"], contactreply: ["31.1", "31.2"], statusreply: ["32.1", "32.2"],
-      aitag: ["33.1", "33.2"], antibroadcast: ["34.1", "34.2"], anonymous: ["37.1", "37.2"],
+      statusforwarder: ["38.1", "38.2"], contactreply: ["36.1", "36.2"], statusreply: ["32.1", "32.2"],
+      aitag: ["37.1", "37.2"], antibroadcast: ["30.1", "30.2"],
     };
     const _btnPropMap = {
       blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReactMsgs", cmdreact: "cmdReact", autoblock: "autoBlock",
@@ -18817,194 +18816,21 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
 
 for (const _ttn of ["tiktok", "tt", "ttdl"]) { const _te = commands.get(_ttn); if (_te) { _te.__ttCard = true; _te.__ttCardHandler = _te.handler; } }
 
-cmd(["spotify","spot","spotdl"], { desc: "Download Spotify track as MP3 with cover art", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}spotify <spotify_track_url>\n\nExample:\n${CONFIG.PREFIX}spotify https://open.spotify.com/track/...`); return; }
-  await react(sock, msg, "⏳");
-  const url = args[0];
-  const jid = msg.key.remoteJid;
-  const _spotStMsg = await sock.sendMessage(jid, { text: `🎧 *MIAS MDX — Spotify*\n\n⏳ Fetching track info...\n⏳ Downloading audio...\n⏳ Sending...` }, { quoted: msg });
-for (const _a of ["spotify2", "spotifyv2", "spotdlv2"]) { const _c = commands.get("spotify"); if (_c) { commands.set(_a, { ..._c, canonical: "spotify", isAlias: true }); aliases.set(_a, "spotify"); } }
-  const _spotStKey = _spotStMsg.key;
-  let dlUrl = null, title = "Spotify Track", thumbUrl = null, artists = "", duration = "";
-
-  // Helper to extract from prexzy response
-  const _extractSpotify = (d) => {
-    if (!d) return;
-    const _d = d?.data || d;
-    if (!dlUrl) dlUrl = _d?.download_url || _d?.audio || _d?.url || _d?.mp3;
-    if (!thumbUrl) thumbUrl = _d?.thumbnail || _d?.cover || _d?.image || _d?.album_art || _d?.albumArt || _d?.cover_url;
-    if (title === "Spotify Track") title = _d?.title || _d?.name || title;
-    if (!artists) artists = Array.isArray(_d?.artists) ? _d.artists.map(a => a?.name || a).join(", ") : (_d?.artist || _d?.artists || "");
-    if (!duration) duration = _d?.duration || _d?.duration_ms ? `${Math.floor((_d.duration || _d.duration_ms / 1000) / 60)}:${String(Math.floor((_d.duration || _d.duration_ms / 1000) % 60)).padStart(2,"0")}` : "";
-  };
-
-  // 0) PRIMARY: DavidCyril
-  try {
-    const r = await dcGet("/download/spotify", { url }, 30000);
-    if (r.ok && r.data) _extractSpotify(r.data);
-  } catch {}
-
-  // 1) Prexzyvilla fallback /download/spotify
-  if (!dlUrl) try {
-    const r = await prexzyGet("/download/spotify", { url }, 30000);
-    if (r.ok && r.data) _extractSpotify(r.data);
-  } catch {}
-
-  // 2) Prexzyvilla v2
-  if (!dlUrl) {
-    try {
-      const r2 = await prexzyGet("/download/spotifyv2", { url }, 30000);
-      if (r2.ok && r2.data) _extractSpotify(r2.data);
-    } catch {}
-  }
-
-  // 3) GiftedTech
-  if (!dlUrl) {
-    try {
-      const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/download/spotify?apikey=${CONFIG.GIFTED_KEY}&url=${encodeURIComponent(url)}`, { timeout: 30000 });
-      if (data?.success && data?.result) {
-        const r = data.result;
-        dlUrl = r.download_url || r.url || r.audio || r.mp3;
-        if (!thumbUrl) thumbUrl = r.thumbnail || r.image || r.cover;
-        if (title === "Spotify Track") title = r.title || title;
-        if (!artists) artists = r.artists || r.artist || "";
-      }
-    } catch {}
-  }
-
-  // 4) Ryzendesu
-  if (!dlUrl) {
-    try {
-      const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/spotify?url=${encodeURIComponent(url)}`, { timeout: 25000 });
-      _extractSpotify(data);
-    } catch {}
-  }
-
-  // 5) DavidCyril Spotify downloaders (multiple fallbacks — no key needed)
-  const _dcSpotifyEndpoints = [
-    "/spotifydl", "/spotifydl2",
-    "/download/spodownloader", "/download/spotdown",
-    "/download/spotidown", "/download/spotidownloader", "/download/spotmate",
-  ];
-  for (const _ep of _dcSpotifyEndpoints) {
-    if (dlUrl) break;
-    try {
-      const _r = await dcGet(_ep, { url }, 25000);
-      if (_r.ok && _r.data) {
-        const _ex = extractDcSpotify(_r.data);
-        if (_ex.dlUrl) {
-          dlUrl = _ex.dlUrl;
-          if (!thumbUrl && _ex.thumbUrl) thumbUrl = _ex.thumbUrl;
-          if (title === "Spotify Track" && _ex.title) title = _ex.title;
-          if (!artists && _ex.artists) artists = _ex.artists;
-          if (!duration && _ex.duration) duration = _ex.duration;
-        }
-      }
-    } catch {}
-  }
-
-  if (dlUrl) await editMessage(sock, jid, _spotStKey, `🎧 *MIAS MDX — Spotify*\n\n✅ Fetching track info...\n⏳ Downloading audio...\n⏳ Sending...`).catch(()=>{});
-
-  // 6) Cobalt
-  if (!dlUrl) dlUrl = await _cobaltDl(url, { downloadMode: "audio", audioFormat: "mp3" });
-
-  // 6) YouTube multi-search + full 11-provider audio chain fallback
-  let _ytFallbackResult = null;
-  if (!dlUrl) {
-    let _ytUrl = null;
-    const _ytQ = encodeURIComponent(`${title}${artists ? " " + artists : ""} audio`);
-    const _ytSearchers = [
-      async () => { const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/search/youtube?apikey=${CONFIG.GIFTED_KEY}&q=${_ytQ}`, { timeout: 15000 }); return data?.result?.[0]?.url || data?.data?.[0]?.url; },
-      async () => { const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/search/ytsearch?apikey=${CONFIG.GIFTED_KEY}&q=${_ytQ}`, { timeout: 15000 }); return data?.result?.[0]?.url || data?.results?.[0]?.url; },
-      async () => { const { data } = await axios.get(`https://api.siputzx.my.id/api/y/search?query=${_ytQ}`, { timeout: 15000 }); return data?.data?.[0]?.url || data?.result?.[0]?.url; },
-      async () => { const { data } = await axios.get(`https://www.youtube.com/results?search_query=${_ytQ}`, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 15000 }); const m = data.match(/"videoId":"([a-zA-Z0-9_-]{11})"/); return m ? `https://www.youtube.com/watch?v=${m[1]}` : null; },
-    ];
-    for (const fn of _ytSearchers) {
-      try { _ytUrl = await fn(); if (_ytUrl) break; } catch {}
-    }
-    if (_ytUrl) {
-      dlUrl = await _cobaltDl(_ytUrl, { downloadMode: "audio", audioFormat: "mp3" });
-      if (!dlUrl) _ytFallbackResult = await _fetchYtAudioBuf(_ytUrl, "mp3");
-    }
-  }
-
-  if (!dlUrl && !_ytFallbackResult) {
-    await react(sock, msg, "❌");
-    await sendReply(sock, msg, `⚠️ Could not download this Spotify track.\nTry: *${CONFIG.PREFIX}play ${title}*`);
-    return;
-  }
-
-  // Download audio (skip if _fetchYtAudioBuf already retrieved the buffer)
-  let buf = _ytFallbackResult?.buf ?? null;
-  if (!buf && dlUrl) {
-    try {
-      const _dlRes = await axios.get(dlUrl, { responseType: 'arraybuffer', timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { 'User-Agent': 'Mozilla/5.0' }, maxRedirects: 5 });
-      const _dlBuf = Buffer.from(_dlRes.data || []);
-      const _hasId3  = _dlBuf.length >= 3 && _dlBuf.slice(0,3).toString('utf8') === 'ID3';
-      const _hasSync = _dlBuf.length >= 2 && _dlBuf[0] === 0xFF && (_dlBuf[1] & 0xE0) === 0xE0;
-      const _hasOgg  = _dlBuf.length >= 4 && _dlBuf.slice(0,4).toString('utf8') === 'OggS';
-      const _hasM4A  = _dlBuf.length >= 12 && _dlBuf.slice(4,8).toString('ascii') === 'ftyp';
-      const _ct      = (_dlRes.headers?.['content-type'] || '').toLowerCase();
-      if (_dlBuf.length >= 5000 && (_hasId3 || _hasSync || _hasOgg || _hasM4A || /audio|mpeg|mp3|ogg|m4a/i.test(_ct))) {
-        buf = _dlBuf;
-      }
-    } catch {}
-  }
-  if (!buf && dlUrl) {
-    try { buf = Buffer.from((await axios.get(dlUrl, { responseType: 'arraybuffer', timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity })).data); } catch {}
-  }
-
-  // Fetch thumbnail cover art
-  let thumbBuf = null;
-  if (thumbUrl) {
-    try {
-      const tr = await axios.get(thumbUrl, { responseType: "arraybuffer", timeout: 15000, headers: { "User-Agent": "Mozilla/5.0" } });
-      thumbBuf = Buffer.from(tr.data);
-    } catch {}
-  }
-
-  // Detect actual audio format from magic bytes BEFORE using it (prevents
-  // "Cannot access '_spotExt' before initialization")
-  let _mimeType = "audio/mpeg";
-  let _spotExt = "mp3";
-  if (buf) {
-    const _h = buf.slice(0, 12);
-    if (_h.slice(0, 4).toString("ascii") === "OggS") { _mimeType = "audio/ogg; codecs=opus"; _spotExt = "ogg"; }
-    else if (_h.slice(4, 8).toString("ascii") === "ftyp") { _mimeType = "audio/mp4"; _spotExt = "m4a"; }
-  }
-
-  const safeName = title.replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 60) || "spotify_track";
-  const _spotFileName = `${safeName}.${_spotExt}`;
-  const cap = `🎧 *${title}*${artists ? `\n🎤 ${artists}` : ""}${duration ? `\n⏱️ ${duration}` : ""}`;
-
-  // Always send cover art image first so it shows in WhatsApp
-  if (thumbBuf) {
-    try { await sock.sendMessage(jid, { image: thumbBuf, caption: cap }, { quoted: msg }); } catch {}
-  }
-
-  // Send audio with embedded thumbnail too
-  try {
-    const _audioMsg = {
-      audio: buf,
-      mimetype: _mimeType,
-      ptt: false,
-      fileName: _spotFileName,
-    };
-    if (thumbBuf) _audioMsg.jpegThumbnail = thumbBuf;
-    await sock.sendMessage(jid, _audioMsg, { quoted: msg });
-  } catch {
-    // Fallback: send as document
-    if (thumbBuf) {
-      try { await sock.sendMessage(jid, { image: thumbBuf, caption: cap }, { quoted: msg }); } catch {}
-    }
-    try {
-      await sock.sendMessage(jid, {
-        document: buf, mimetype: _mimeType, fileName: `${safeName}.mp3`, caption: cap
-      }, { quoted: msg });
-    } catch (_de) { await sendReply(sock, msg, `⚠️ Audio sent but WhatsApp rejected it. Try *${CONFIG.PREFIX}play ${title}*`); }
-  }
-
-  await react(sock, msg, "✅");
+// Spotify: rebuilt in features/spotifyCommands.js (music card + quoted 1/2/3 picker, like .play).
+const __spot = installSpotifyCommands({
+  cmd: (...a) => cmd(...a),
+  sendReply: (...a) => sendReply(...a),
+  react: (...a) => react(...a),
+  CONFIG,
+  dcGet,
+  prexzyGet: (...a) => prexzyGet(...a),
+  ytSearch: (...a) => ytSearch(...a),
+  __miasMapSet: (...a) => __miasMapSet(...a),
+  __miasMapDelete: (...a) => __miasMapDelete(...a),
+  getSender: (...a) => getSender(...a),
+  isPrivateBlocked: (m) => _miasPrivateBlocks(m, ""),
+  transcodeAudio: (...a) => __preciousTranscodeAudio(...a),
+  voiceBuffer: (...a) => __preciousVoiceBuffer(...a),
 });
 
 cmd(["instagram","ig","igdl"], { desc: "Download Instagram post/reel", category: "DOWNLOAD" }, async (sock, msg, args) => {
