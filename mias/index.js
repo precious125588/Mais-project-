@@ -44,7 +44,7 @@ import { fileURLToPath } from "url";
 import pino from "pino";
 import { createRequire } from "module";
 import crypto from "crypto";
-import { loadAllData, saveAllData, startAutoSave } from "./database.js";
+import { loadAllData, saveAllData, startAutoSave, DB_DIR } from "./database.js";
 // Expose getSetting/setSetting helpers globally for kevdraPatches
 (function _exposeSettingHelpers() {
   try {
@@ -1726,6 +1726,7 @@ function defaultSettings() {
     // reactMeOwner  : when ON, every owner message is reacted with 👑
     //                 (overrides random emoji for the owner).
     autoReactMsgs: true,   // default ON (owner request): react to ordinary messages too
+    cmdReact: true,        // command reactions (⏳/✅/❌ on commands) — independent of autoReactMsgs, default ON
     reactMeOwner: false,
     // Owner gateways (settings UI 40.x / 41.x). Default ON = previous behavior.
     autoSendStatus: true,  // "send pls"/"share pls" replies to the bot's status
@@ -1744,6 +1745,7 @@ function defaultSettings() {
 }
 let _settingsDirty = false;
 function _flushSettings() {
+  try { saveGuardDb(_ownerRecord()); } catch {}
   if (!_settingsDirty) return;
   _settingsDirty = false;
   try { if (typeof saveNow === "function") saveNow(); } catch {}
@@ -1751,7 +1753,51 @@ function _flushSettings() {
 try { setInterval(_flushSettings, 5000).unref?.(); } catch {}
 try { process.on("beforeExit", _flushSettings); } catch {}
 
-function getSettings(jid) {
+// ==GUARD-BEGIN==
+// ── GUARD DATABASE: one owner record per bot, shared by every chat ───────────
+// Bot-wide switches (auto-react, command reactions, private mode, ...) live in
+// ONE owner record and are saved to database/guard_settings.json (inside this
+// bot's AUTH_DIR, so one bot never shares them with another). Every chat reads
+// and writes the same values: enabling something in one chat applies everywhere.
+// Per-group settings (anti-link, welcome, ...) stay per chat.
+const GUARD_GLOBAL_KEYS = [
+  "autoReactMsgs", "cmdReact", "reactMeOwner", "ownerReact",
+  "workMode", "privateMode", "forcePrivate", "protectAlways",
+  "chatBotMode", "autoReply", "chatbotScope",
+  "autoSendStatus", "autoSendAza", "readMsgs", "viewStatus", "reactStatus",
+  "blockCalls", "recording", "typing", "alwaysOnline", "anonymous",
+  "autoVoice", "autoSticker", "contactReply", "statusReply", "aiTag",
+  "antiBug", "antiBroadcast", "adultMode", "autoBlock", "autoBlockCountries",
+  "language", "buttonsMode",
+];
+const GUARD_DB_FILE = path.join(DB_DIR, "guard_settings.json");
+let _guardLoaded = false;
+let _guardLastJson = "";
+function _loadGuardDb(owner) {
+  if (_guardLoaded || !owner) return;
+  _guardLoaded = true;
+  try {
+    if (!fs.existsSync(GUARD_DB_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(GUARD_DB_FILE, "utf8") || "{}");
+    for (const k of GUARD_GLOBAL_KEYS) if (k in data) owner[k] = data[k];
+  } catch (e) { console.error("[guard-db] load failed:", e?.message || e); }
+}
+function saveGuardDb(owner) {
+  if (!owner) return;
+  try {
+    const snap = {};
+    for (const k of GUARD_GLOBAL_KEYS) if (k in owner) snap[k] = owner[k];
+    const json = JSON.stringify(snap, null, 2);
+    if (json === _guardLastJson) return;
+    fs.mkdirSync(DB_DIR, { recursive: true });
+    const tmp = GUARD_DB_FILE + ".tmp";
+    fs.writeFileSync(tmp, json);
+    fs.renameSync(tmp, GUARD_DB_FILE);
+    _guardLastJson = json;
+  } catch (e) { console.error("[guard-db] save failed:", e?.message || e); }
+}
+// Raw per-jid record (creates defaults on first use).
+function _baseSettings(jid) {
   if (!settings.has(jid)) {
     settings.set(jid, defaultSettings());
     _settingsDirty = true;
@@ -1766,6 +1812,30 @@ function getSettings(jid) {
   }
   return settings.get(jid);
 }
+// The owner record, with the guard database loaded into it.
+function _ownerRecord() {
+  let ownerJid = null;
+  try { ownerJid = getOwnerJid(); } catch { return null; }
+  const rec = _baseSettings(ownerJid);
+  _loadGuardDb(rec);
+  return rec;
+}
+function getSettings(jid) {
+  const rec = _baseSettings(jid);
+  let owner = null;
+  try { owner = _ownerRecord(); } catch { owner = null; }
+  if (!owner || rec === owner) return rec;
+  // Chat record: every GUARD_GLOBAL key reads/writes the owner record.
+  for (const k of GUARD_GLOBAL_KEYS) {
+    Object.defineProperty(rec, k, {
+      configurable: true, enumerable: true,
+      get() { return owner[k]; },
+      set(v) { owner[k] = v; _settingsDirty = true; },
+    });
+  }
+  return rec;
+}
+// ==GUARD-END==
 try { globalThis.__miasGetSettings = getSettings; } catch {}
 const settingsSession = new Map();
 // Second bot pic (night sky) — base64 embedded
@@ -3804,7 +3874,7 @@ END:VCARD`;
                 (typeof isOwner === "function" && isOwner(getSender(msg)));
               if (_arS?.reactMeOwner && _isFromOwner && !_botSentMsgIds.has(msg.key.id)) {
                 await sock.sendMessage(msg.key.remoteJid, { react: { text: "👑", key: msg.key } }).catch(() => {});
-              } else if (_arS?.autoReactMsgs && !_isCmd && !_arS?.reactMeOwner) {
+              } else if (_arS?.autoReactMsgs && !_isCmd && !_arS?.reactMeOwner && !_miasPrivateBlocks(msg, "")) {
                 const _pool = (typeof RANDOM_REACT_EMOJIS !== "undefined" && Array.isArray(RANDOM_REACT_EMOJIS))
                   ? RANDOM_REACT_EMOJIS
                   : ["❤️","😂","🔥","💯","🥰","😎","🎉","✨","👍","🙌","😍","🤩","💖","🚀","⭐","🌟","🥳","💫","💪","☺️"];
@@ -3814,7 +3884,7 @@ END:VCARD`;
             }
           } catch (e) { /* never crash the dispatcher because of a react */ }
 
-          if (body && !isCommandBody(body)) { try { if (await handleGameAnswer(sock, msg, body)) return; } catch (e) { console.error("[game-answer]", e?.message); } }
+          if (body && !isCommandBody(body) && !_miasPrivateBlocks(msg, "")) { try { if (await handleGameAnswer(sock, msg, body)) return; } catch (e) { console.error("[game-answer]", e?.message); } }
           try { if (globalThis.__miasAfkCheck) await globalThis.__miasAfkCheck(sock, msg); } catch {}
 
           // ── v4.9.5 AUTO-CHATBOT ──────────────────────────────────────────
@@ -3825,7 +3895,7 @@ END:VCARD`;
             const _cbMsgType = Object.keys(msg.message || {})[0];
             const _cbIsEdit  = _cbMsgType === "editedMessage" || _cbMsgType === "protocolMessage";
             if (
-              body && !isCommandBody(body) && !_cbIsEdit && !msg.key.fromMe
+              body && !isCommandBody(body) && !_cbIsEdit && !msg.key.fromMe && !_miasPrivateBlocks(msg, "")
             ) {
               const _cbChatS  = getSettings(msg.key.remoteJid);
               const _cbOwnerS = getSettings(getOwnerJid());
@@ -5018,6 +5088,22 @@ function _isStatusQuoteMsg(msg) {
     return c?.remoteJid === "status@broadcast" && !!c?.quotedMessage;
   } catch { return false; }
 }
+// ==GUARD-GATE-BEGIN==
+// One private-mode gate for every non-owner path. Owner and sudo always pass;
+// `aza` and `send` stay public. Anything else from a non-owner is silent while
+// the chat's mode (or the guard database's private mode) blocks it.
+// Group protections are not bot replies and are not affected here.
+function _miasPrivateBlocks(msg, cmdName = "") {
+  try {
+    if (!msg?.key || msg.key.fromMe) return false;
+    const sender = getSender(msg);
+    if (isOwner(sender) || (typeof isSudo === "function" && isSudoIn(sender, msg.key.remoteJid))) return false;
+    const c = String(cmdName || "").toLowerCase();
+    if (c === "aza" || c === "send") return false;
+    return !isCommandAllowedInContext(msg, false, false);
+  } catch { return false; }
+}
+// ==GUARD-GATE-END==
 function shouldSilenceForPrivateMode(msg) {
   if (!msg?.key || msg.key.fromMe) return false;
   const sender = getSender(msg);
@@ -6626,6 +6712,7 @@ const sendText = (sock, jid, text, mentions = []) =>
 // ─────────────────────────────────────────────────────────────────────
 let _saveNowTimer = null;
 function saveNow() {
+  try { saveGuardDb(_ownerRecord()); } catch {}
   if (_saveNowTimer) return;
   _saveNowTimer = setTimeout(() => {
     _saveNowTimer = null;
@@ -6764,10 +6851,11 @@ async function sendLongText(sock, jid, text, quoted = null, mentions = []) {
 const react = (sock, msg, emoji) => {
   try {
     const ownerJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-    const _chatS = (typeof getSettings === "function" ? getSettings(msg?.key?.remoteJid) : null);
-    const _ownS  = (typeof getSettings === "function" ? getSettings(ownerJ) : null);
-    if ((_chatS && _chatS.autoReact === false) || (_ownS && _ownS.autoReact === false)) {
-      if (process.env.MIAS_REACT_DEBUG === "1") console.log("[react] suppressed (autoReact OFF) in", msg?.key?.remoteJid);
+    // Command reactions are governed ONLY by the owner's cmdReact switch (default ON).
+    // Message auto-react (autoReactMsgs) is a separate feature and never touches this.
+    const _ownS  = (typeof getSettings === "function" ? getSettings(getOwnerJid()) : null);
+    if (_ownS && _ownS.cmdReact === false) {
+      if (process.env.MIAS_REACT_DEBUG === "1") console.log("[react] suppressed (cmdReact OFF) in", msg?.key?.remoteJid);
       return Promise.resolve();
     }
   } catch {}
@@ -7151,7 +7239,7 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
 const commands = new Map();
 const aliases = new Map(); // alias -> canonical
 
-const OWNER_SETTINGS_COMMANDS = new Set(["settings","setting","set","setprefix","prefix","settheme","config","btnmenu","buttonmenu","buttonsui","listui","listmenuui","interactivelist","flowmenu","flowui","radiomenu","autobio","autoreact","autoview","autolike","antilink","antispam","antiraid","antidelete","antidel","antiedit","antiview","welcome","goodbye","setwelcome","setgoodbye","blockcalls","autoblock","antibroadcast","anticall","autoread","autotyping","autorecording","alwaysonline","chatbot","autochat","mode","workmode","private","public","self","selfmode","ownermode","solobot","publicmode","openbot","goopen","setsudo","delsudo","listsudo","sudo","addsudo","cuz","setcuz","cuzmenu"]);
+const OWNER_SETTINGS_COMMANDS = new Set(["settings","setting","set","setprefix","prefix","settheme","config","btnmenu","buttonmenu","buttonsui","listui","listmenuui","interactivelist","flowmenu","flowui","radiomenu","autobio","autoreact","cmdreact","autoview","autolike","antilink","antispam","antiraid","antidelete","antidel","antiedit","antiview","welcome","goodbye","setwelcome","setgoodbye","blockcalls","autoblock","antibroadcast","anticall","autoread","autotyping","autorecording","alwaysonline","chatbot","autochat","mode","workmode","private","public","self","selfmode","ownermode","solobot","publicmode","openbot","goopen","setsudo","delsudo","listsudo","sudo","addsudo","cuz","setcuz","cuzmenu"]);
 
 function jointCommandAllowed(name, entry, context) {
   if (!entry || typeof entry.handler !== 'function' || entry.disabled || entry.enabled === false || isCommandDisabled(name)) return false;
@@ -7183,6 +7271,10 @@ function cmd(names, opts, handler) {
   const list = rawList.filter(n => !n.startsWith("dc") && !n.includes("disabled"));
   if (!list.length) return;
   const canonical = list[0];
+  // Private-mode gate at call time, so every path that runs a command obeys it.
+  const gatedHandler = typeof handler === "function"
+    ? async (sock, msg, ...rest) => { if (_miasPrivateBlocks(msg, canonical)) return; return handler(sock, msg, ...rest); }
+    : handler;
   for (let i = 0; i < list.length; i++) {
     const n = list[i];
     const isAlias = i > 0;
@@ -7191,7 +7283,7 @@ function cmd(names, opts, handler) {
     } else {
       aliases.delete(n);
     }
-    commands.set(n, { ...opts, handler, canonical, isAlias });
+    commands.set(n, { ...opts, handler: gatedHandler, canonical, isAlias });
   }
 }
 
@@ -7960,7 +8052,7 @@ const MENU_CATEGORIES = [
   { name: "PANEL",     emoji: "🖥️", cmds: ["panel","panelinfo","buypanel","panelprice","panelfeatures","panelorder"] },
   { name: "NSFW",      emoji: "🔞", adult: true, cmds: ["anal","ass","bdsm","blacknsfw","boobs","bottomless","collared18","cum","cumsluts","dick","domination","dp18","easter18","extreme18","feet18","finger18","fuck","futa","gay18","hentaigif","group18","hanime","hentaisfm","kiss18","lick18","pegged","phgif","puffies","pussy","real18","sixtynine","suck18","tattoo18","tiny18","toys18","xmas18","xvideossearch","xnxxsearch","xvideosdl","xnxxdl","adult","pornmaster","pornmasterv6","pornmasterv7"] },
   { name: "OWNER",     emoji: "🔐", cmds: [
-    "autobio","autoreact","autoview","autolike","antivo","antiviewoncetoggle","stealthvo",
+    "autobio","autoreact","cmdreact","autoview","autolike","antivo","antiviewoncetoggle","stealthvo",
     "bcheck","bancheck","setcmd","removecmd","listsetcmd",
     "inbox","viewentry","replyentry","delentry","clearinbox",
     "mode","restart","broadcast","slowmode","safemode","ghostmode",
@@ -8839,8 +8931,10 @@ function buildSettingsMenu(jid) {
 ┃ 6.2 ᴅɪsᴀʙʟᴇ  ${!s.antiDelete ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝘂𝘁𝗼 𝗥𝗲𝗮𝗰𝘁* ❯━━╮
-┃ 7.1 ᴇɴᴀʙʟᴇ  ${s.autoReact ? "✅" : ""}
-┃ 7.2 ᴅɪsᴀʙʟᴇ  ${!s.autoReact ? "✅" : ""}
+┃ 7.1 ᴇɴᴀʙʟᴇ  ${s.autoReactMsgs ? "✅" : ""}
+┃ 7.2 ᴅɪsᴀʙʟᴇ  ${!s.autoReactMsgs ? "✅" : ""}
+┃ 7.3 ᴄᴍᴅ ʀᴇᴀᴄᴛ ᴏɴ  ${s.cmdReact !== false ? "✅" : ""}
+┃ 7.4 ᴄᴍᴅ ʀᴇᴀᴄᴛ ᴏғғ  ${s.cmdReact === false ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 ╭━━❮ *𝗔𝘂𝘁𝗼 𝗕𝗹𝗼𝗰𝗸* ❯━━╮
 ┃ 8.1 ᴇɴᴀʙʟᴇ  ${s.autoBlock ? "✅" : ""}
@@ -9003,8 +9097,10 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "5.2": s => { s.callAction = "block"; return "✅ Call Action: BLOCK"; },
   "6.1": s => { s.antiDelete = true; return "{ antidelete on }"; },
   "6.2": s => { s.antiDelete = false; return "{ antidelete off }"; },
-  "7.1": s => { s.autoReact = true; return "{ autoreact on }"; },
-  "7.2": s => { s.autoReact = false; return "{ autoreact off }"; },
+  "7.1": s => { s.autoReactMsgs = true; return "{ auto react on }"; },
+  "7.2": s => { s.autoReactMsgs = false; return "{ auto react off }"; },
+  "7.3": s => { s.cmdReact = true; return "✅ Command Reactions: ON"; },
+  "7.4": s => { s.cmdReact = false; return "❌ Command Reactions: OFF"; },
   "8.1": s => { s.autoBlock = true; s.autoBlockCountries = Array.isArray(s.autoBlockCountries) && s.autoBlockCountries.length ? s.autoBlockCountries : ["92","212"]; return `✅ Auto Block: ON\n_Auto-blocking DM strangers with country codes: ${s.autoBlockCountries.map(c => "+" + c).join(", ")} — manage them in section 35._`; },
   "8.2": s => { s.autoBlock = false; return "❌ Auto Block: OFF"; },
   "9.1": s => { s.readMsgs = true; try { getSettings("bot").readMsgs = true; getSettings("bot").autoread = true; } catch {} return "✅ Read Msgs: ON"; },
@@ -9146,7 +9242,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
     const _btnPairMap = {
       blockcalls: ["1.1", "1.2"], linkguard: ["2.1", "2.3"], badword: ["3.1", "3.3"],
       statusmention: ["4.1", "4.4"], callaction: ["5.1", "5.2"], antidelete: ["6.1", "6.2"],
-      autoreact: ["7.1", "7.2"], autoblock: ["8.1", "8.2"], readmsgs: ["9.1", "9.2"],
+      autoreact: ["7.1", "7.2"], cmdreact: ["7.3", "7.4"], autoblock: ["8.1", "8.2"], readmsgs: ["9.1", "9.2"],
       viewstatus: ["10.1", "10.2"], reactstatus: ["11.1", "11.2"], welcome: ["12.1", "12.2"],
       autovoice: ["13.1", "13.2"], autosticker: ["14.1", "14.2"], autoreply: ["15.1", "15.2"],
       recording: ["16.1", "16.2"], typing: ["17.1", "17.2"], alwaysonline: ["18.1", "18.2"],
@@ -9156,7 +9252,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       aitag: ["33.1", "33.2"], antibroadcast: ["34.1", "34.2"], anonymous: ["37.1", "37.2"],
     };
     const _btnPropMap = {
-      blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReact", autoblock: "autoBlock",
+      blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReactMsgs", cmdreact: "cmdReact", autoblock: "autoBlock",
       readmsgs: "readMsgs", viewstatus: "viewStatus", reactstatus: "reactStatus", welcome: "welcome",
       autovoice: "autoVoice", autosticker: "autoSticker", autoreply: "autoReply", recording: "recording",
       typing: "typing", alwaysonline: "alwaysOnline", chatbot: "chatBotMode", ownerreact: "ownerReact",
@@ -17548,21 +17644,23 @@ cmd("autorecording", { desc: "Toggle recording indicator (on/off)", category: "O
   cs.typing = s.typing; cs.recording = s.recording;
   await sendReply(sock, msg, `🎤 Auto Recording: ${s.recording ? "✅ ON — Bot will show recording in all chats" : "❌ OFF"}`);
 });
-cmd("autoreact", { desc: "Toggle auto react globally on all commands", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
-  // Toggle globally on owner settings so it applies everywhere
-  const _arOwnerS = getSettings(getOwnerJid());
+cmd("autoreact", { desc: "Toggle random auto-react on normal messages (not commands)", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  const ownerS = getSettings(getOwnerJid());
   const arg = (args[0] || "").toLowerCase();
-  if (arg === "on" || arg === "enable") {
-    if (_arOwnerS.autoReact === true) { await sendReply(sock, msg, `⚡ Auto React is *already ON* ✅`); return; }
-    _arOwnerS.autoReact = true;
-  } else if (arg === "off" || arg === "disable") {
-    if (_arOwnerS.autoReact === false) { await sendReply(sock, msg, `⚡ Auto React is *already OFF* ❌`); return; }
-    _arOwnerS.autoReact = false;
-  } else _arOwnerS.autoReact = !_arOwnerS.autoReact;
-  const s = getSettings(msg.key.remoteJid);
-  s.autoReact = _arOwnerS.autoReact;
+  if (arg === "on" || arg === "enable") ownerS.autoReactMsgs = true;
+  else if (arg === "off" || arg === "disable") ownerS.autoReactMsgs = false;
+  else ownerS.autoReactMsgs = !ownerS.autoReactMsgs;
   saveNow();
-  await sendReply(sock, msg, `⚡ *Auto React: ${_arOwnerS.autoReact ? "✅ ON" : "❌ OFF"}* (global — applies in all chats)`);
+  await sendReply(sock, msg, `⚡ *Auto React (messages): ${ownerS.autoReactMsgs ? "✅ ON" : "❌ OFF"}* (global, all chats). Command reactions are separate: .cmdreact`);
+});
+cmd("cmdreact", { desc: "Toggle emoji reactions on commands (separate from auto-react)", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+  const ownerS = getSettings(getOwnerJid());
+  const arg = (args[0] || "").toLowerCase();
+  if (arg === "on" || arg === "enable") ownerS.cmdReact = true;
+  else if (arg === "off" || arg === "disable") ownerS.cmdReact = false;
+  else ownerS.cmdReact = !(ownerS.cmdReact !== false);
+  saveNow();
+  await sendReply(sock, msg, `⚡ *Command Reactions: ${ownerS.cmdReact !== false ? "✅ ON" : "❌ OFF"}* (global, all chats)`);
 });
 
 // ── v4.9.4 NEW ─────────────────────────────────────────────────────

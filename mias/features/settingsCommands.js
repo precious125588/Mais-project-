@@ -33,7 +33,8 @@ cmd(["setting", "settings", "config"], { desc: "Open bot settings", category: "S
       title: "🤖 Automation & Chatbot",
       rows: [
         { id: "21.1", title: `Chatbot [${s.chatBotMode ? "ON" : "OFF"}]`, description: "Toggle intelligent AI chatbot responses" },
-        { id: "7.1", title: `Auto-React [${s.autoReact ? "ON" : "OFF"}]`, description: "Automatically react with emoji to messages" },
+        { id: "7.1", title: `Auto-React [${s.autoReactMsgs ? "ON" : "OFF"}]`, description: "Random emoji on normal messages (not commands)" },
+        { id: "7.3", title: `Command React [${s.cmdReact !== false ? "ON" : "OFF"}]`, description: "React to commands you send" },
         { id: "10.1", title: `View Status [${s.viewStatus ? "ON" : "OFF"}]`, description: "Auto-view contacts' status updates" },
         { id: "11.1", title: `React Status [${s.reactStatus ? "ON" : "OFF"}]`, description: "Auto-react to viewed statuses" },
         { id: "15.1", title: `Auto-Reply [${s.autoReply ? "ON" : "OFF"}]`, description: "Auto-reply to incoming trigger keywords" },
