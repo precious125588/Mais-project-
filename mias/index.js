@@ -10709,6 +10709,12 @@ async function _p2VideoBuf(meta) {
   // AUDIO-ONLY stream (or an HTML error page). WhatsApp then plays the sound
   // over a black frame. Every candidate is now probed for a real video stream
   // and rejected when it has none, so the next provider is tried instead.
+  if (ytUrl) tries.push(async () => {
+    // Nexray: last fallback, added after the existing sources.
+    const r = await nxGet('/downloader/ytmp4', { url: ytUrl }, 60000);
+    const d = r && (r.result || r.data);
+    return d ? (d.download_url || d.downloadUrl || d.url || d.video || null) : null;
+  });
   for (const t of tries) {
     try {
       const u = await t();
@@ -15260,7 +15266,9 @@ cmd("take", { desc: "Rename sticker — .take <name> | <author>", category: "TOO
     }), "utf8");
     const _tkHead = Buffer.from([0x49,0x49,0x2A,0x00,0x08,0x00,0x00,0x00,0x01,0x00,0x41,0x57,0x07,0x00]);
     const _tkLen  = Buffer.alloc(4); _tkLen.writeUInt32LE(_tkJson.length, 0);
-    const exifBuf = Buffer.concat([_tkHead, _tkLen, _tkJson]);
+    // WhatsApp reads pack info only when the TIFF entry points at the JSON (offset 0x16 = 22).
+    // Without that 4-byte offset the sticker shows as a frame with "can't view information".
+    const exifBuf = Buffer.concat([_tkHead, _tkLen, Buffer.from([0x16, 0x00, 0x00, 0x00]), _tkJson]);
 
     // RIFF WebP EXIF chunk injection (replaces any existing EXIF chunk, fixes sizes + padding)
     const _tkInject = (webp, exif) => {
@@ -19032,13 +19040,28 @@ cmd(["reddit","redditdl"], { desc: "Download Reddit post/video", category: "DOWN
 
 // ─── END MISSING DOWNLOADERS ─────────────────────────────────────────────
 
+// pin.it short links redirect to the full pinterest.com URL, which the downloaders need.
+async function expandPinLink(u) {
+  if (!/^https?:\/\/pin\.it\//i.test(u)) return u;
+  try {
+    const r = await axios.head(u, { maxRedirects: 5, timeout: 15000, validateStatus: () => true, headers: { "User-Agent": "Mozilla/5.0" } });
+    const final = r?.request?.res?.responseUrl || "";
+    return /pinterest\./i.test(final) ? final : u;
+  } catch { return u; }
+}
 cmd(["pinterest", "pinsearch", "pindl", "pin2"], { desc: "Pinterest search/download — .pin2 <query> [limit] or .pin2 <URL>", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage:\n${CONFIG.PREFIX}pin2 <search query> [1-10]\n${CONFIG.PREFIX}pin2 <pinterest URL>`); return; }
   await react(sock, msg, "🌀");
   const input = args.join(" ");
   const isUrl = /https?:\/\//.test(args[0]);
   if (isUrl) {
-    const _pinUrl = args[0];
+    const _pinUrl = await expandPinLink(args[0]);
+    // A shared collection is several pins at once, so there is no single pin to download.
+    if (/\/multi-pin-share\//i.test(_pinUrl)) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *This link is a shared collection, not a single pin.*\n\nIt holds several pins, so there is no one file to download. Open the pin you want, tap Share → Copy link, then send ${CONFIG.PREFIX}pin2 with that link.`);
+      return;
+    }
     const _pinDlApis = [
       async () => { const r = await nxGet("/downloader/pinterest", { url: _pinUrl }, 45000); const d = r?.result || {}; const v = Array.isArray(d.video) ? d.video[0]?.url : d.video; return v || d.image || d.url || d.download_url; },
       async () => { const r = await prexzyGet("/download/pinterestV2", { url: _pinUrl }, 45000); const d = r.data?.data || r.data; return d?.url || d?.video || d?.image || d?.downloadUrl; },
@@ -23852,6 +23875,18 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
 });
 
 // .mediafiredl — MediaFire downloader
+// Document MIME type from the file name, then from the file's own first bytes.
+function mediafireMime(fname, buf) {
+  const ext = ((String(fname).match(/\.([a-z0-9]{1,8})$/i) || [])[1] || "").toLowerCase();
+  const byExt = { zip: "application/zip", rar: "application/x-rar-compressed", "7z": "application/x-7z-compressed", apk: "application/vnd.android.package-archive", pdf: "application/pdf", mp4: "video/mp4", mkv: "video/x-matroska", mp3: "audio/mpeg", m4a: "audio/mp4", ogg: "audio/ogg", txt: "text/plain", csv: "text/csv", json: "application/json", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ppt: "application/vnd.ms-powerpoint", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+  if (byExt[ext]) return byExt[ext];
+  const head = Buffer.from(buf || []).subarray(0, 8).toString("latin1");
+  if (head.startsWith("PK")) return "application/zip";
+  if (head.startsWith("Rar!")) return "application/x-rar-compressed";
+  if (head.startsWith("%PDF")) return "application/pdf";
+  return "application/octet-stream";
+}
+const MEDIAFIRE_EXT_BY_MIME = { "application/zip": ".zip", "application/x-rar-compressed": ".rar", "application/pdf": ".pdf" };
 cmd(["mediafire", "mediafire2", "mediafiredl", "mfdl", "mfdl2"], { desc: "Download MediaFire file — .mediafiredl <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
   const jid = msg.key.remoteJid;
   if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}mediafiredl <mediafire_url>*`); return; }
@@ -23912,9 +23947,12 @@ cmd(["mediafire", "mediafire2", "mediafiredl", "mfdl", "mfdl2"], { desc: "Downlo
     const buf = Buffer.from(res.data);
     if (!buf.length) throw new Error("source returned an empty file");
     const sz = ` (${buf.length >= 1048576 ? (buf.length / 1048576).toFixed(2) + " MB" : (buf.length / 1024).toFixed(1) + " KB"})`;
-    await sock.sendMessage(jid, { document: buf, mimetype: "application/octet-stream", fileName: fname, caption: `📦 *${fname}*${sz}` }, { quoted: msg });
+    const mime = mediafireMime(fname, buf);
+    const outName = /\.[a-z0-9]{1,8}$/i.test(fname) ? fname : fname + (MEDIAFIRE_EXT_BY_MIME[mime] || "");
+    await sock.sendMessage(jid, { document: buf, mimetype: mime, fileName: outName, caption: `📦 *${outName}*${sz}` }, { quoted: msg });
     await react(sock, msg, "✅");
-    progress(`✅ *Done!* ${fname}${sz}\n⬢ Source: ${usedSource}`);
+    // Done: the progress message is removed, not left behind as a "Done!" note.
+    if (stKey) await sock.sendMessage(jid, { delete: stKey }).catch(() => {});
   } catch (e) {
     await react(sock, msg, "❌");
     progress(`❌ *Download failed* (${usedSource})\n${String(e?.message || e).slice(0, 200)}`);
