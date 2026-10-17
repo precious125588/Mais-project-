@@ -263,11 +263,108 @@ function _delDir(p) {
 const _sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ── Database & Volume Persistence Status ─────────────────────────────────────
+let _dbStatusCache = {
+  checkedAt: 0,
+  attached: false,
+  status: 'not_configured',
+  message: 'DATABASE_URL is not set',
+  database: null,
+  volumeMounted: false,
+};
+
+async function checkDbStatus(force = false) {
+  const now = Date.now();
+  if (!force && now - _dbStatusCache.checkedAt < 10000) {
+    return _dbStatusCache;
+  }
+
+  const hasDbUrl = Boolean(String(process.env.DATABASE_URL || '').trim());
+  let volumeMounted = false;
+  try {
+    volumeMounted = Boolean(_sessionPaths && typeof _sessionPaths.isVolumeMounted === 'function' ? _sessionPaths.isVolumeMounted() : false);
+  } catch {}
+
+  if (!hasDbUrl) {
+    _dbStatusCache = {
+      checkedAt: now,
+      attached: false,
+      status: 'not_configured',
+      message: 'DATABASE_URL is not set',
+      database: null,
+      volumeMounted,
+    };
+    return _dbStatusCache;
+  }
+
+  try {
+    let pgModule;
+    try {
+      pgModule = require('pg');
+    } catch {
+      pgModule = await import('pg').then(m => m.default || m);
+    }
+    const { Pool } = pgModule;
+    const pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      max: 1,
+      connectionTimeoutMillis: 4000,
+      ssl: { rejectUnauthorized: true },
+    });
+    const res = await pool.query('SELECT 1 as ok, current_database() as db');
+    await pool.end().catch(() => {});
+    const row = res.rows[0];
+    _dbStatusCache = {
+      checkedAt: now,
+      attached: true,
+      status: 'connected',
+      message: 'Neon Database connected',
+      database: row?.db || 'neondb',
+      volumeMounted,
+    };
+  } catch (err) {
+    const code = String(err?.code || '').toUpperCase() || 'CONNECTION_FAILED';
+    _dbStatusCache = {
+      checkedAt: now,
+      attached: false,
+      status: 'error',
+      message: code,
+      database: null,
+      volumeMounted,
+    };
+  }
+  return _dbStatusCache;
+}
+
 // PUBLIC ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/health', (_,res) => res.json({ok:true,ready:_ready,uptime:process.uptime(),version:process.version,port:PORT}));
-app.get('/api/ready',  (_,res) => res.json({ok:_ready&&!!_pair,pairReady:!!_pair,message:_ready&&!!_pair?'Server ready':'Warming up — try again in 15s'}));
+app.get('/api/database/status', async (_, res) => {
+  const db = await checkDbStatus();
+  res.json({ ok: true, ...db });
+});
+app.get('/api/health', async (_, res) => {
+  const db = await checkDbStatus();
+  res.json({
+    ok: true,
+    ready: _ready,
+    uptime: process.uptime(),
+    version: process.version,
+    port: PORT,
+    database: db.status,
+    dbAttached: db.attached,
+    volumeMounted: db.volumeMounted,
+  });
+});
+app.get('/api/ready', async (_, res) => {
+  const db = await checkDbStatus();
+  res.json({
+    ok: _ready && !!_pair,
+    pairReady: !!_pair,
+    database: db,
+    message: _ready && !!_pair ? 'Server ready' : 'Warming up — try again in 15s',
+  });
+});
 
 // ── Pair: request a QR or pairing code ───────────────────────────────────────
 app.post('/api/pair', rateLimit(60000,10), async (req,res) => {
@@ -861,14 +958,17 @@ app.get('/api/admin/analytics', (req,res) => {
     res.json({ok:true,analytics,histogram,failureRate:pairLog.length?((pairLog.filter(p=>p.status==='failed').length/pairLog.length)*100).toFixed(1):0});
 });
 
-app.get('/api/admin/system', (req,res) => {
+app.get('/api/admin/system', async (req,res) => {
     if (!isAdmin(req)) return res.status(403).json({ok:false,error:'Unauthorized'});
     const mem=process.memoryUsage(),cpu=os.loadavg(),running=_launcher?_launcher.listAll():[];
+    const dbStatus = await checkDbStatus();
     res.json({ok:true,uptime:process.uptime(),nodeVersion:process.version,
         memory:{heapUsedMb:(mem.heapUsed/1048576).toFixed(1),heapTotalMb:(mem.heapTotal/1048576).toFixed(1),rssMb:(mem.rss/1048576).toFixed(1),freeMemMb:(os.freemem()/1048576).toFixed(1),totalMemMb:(os.totalmem()/1048576).toFixed(1)},
         cpu:{load1:cpu[0].toFixed(2),load5:cpu[1].toFixed(2),load15:cpu[2].toFixed(2),cores:os.cpus().length},
         storage:{nexstoreKb:Math.round(_getDirSize(NEXSTORE)/1024)},
         processes:{activeInstances:running.filter(r=>r.alive).length,pausedInstances:running.filter(r=>r.paused).length,pids:running.filter(r=>r.alive).map(r=>r.pid)},
+        database: dbStatus,
+        volume: { mounted: dbStatus.volumeMounted, root: _sessionPaths ? _sessionPaths.nexstoreRoot() : '/app/nexstore' },
         telegram:{botActive:!!global._telegramBotLoaded},serverReady:_ready});
 });
 

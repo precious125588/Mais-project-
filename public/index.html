@@ -24,6 +24,7 @@
   .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
   .pill.ok{color:var(--green);border-color:rgba(37,211,102,.35)}
   .pill.bad{color:var(--red);border-color:rgba(255,92,108,.35)}
+  .pill.warn{color:var(--amber);border-color:rgba(255,194,77,.35)}
   .pill.link:hover{color:var(--text);border-color:rgba(255,255,255,.22)}
   .pill.link::before{display:none}
   .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--mint);padding:7px 13px;border-radius:999px;border:1px solid rgba(62,242,196,.25);background:rgba(62,242,196,.06);margin-bottom:18px}
@@ -155,6 +156,7 @@
     </div>
     <div class="nav">
       <span id="serverPill" class="pill">Checking server…</span>
+      <span id="dbPill" class="pill">Checking DB…</span>
       <a class="pill link" href="/admin">Admin</a>
     </div>
   </header>
@@ -181,6 +183,12 @@
       <div class="tools">
         <button type="button" class="btn ghost" id="checkBtn">Check status</button>
         <button type="button" class="btn ghost" id="resetBtn">Reset number</button>
+      </div>
+      <div id="persistBox" style="margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.025);border:1px solid var(--line);font-size:12px;line-height:1.5;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <span>💾 <b>Database:</b> <span id="dbDetailTxt" style="color:var(--muted)">Checking Neon...</span></span>
+          <span>📁 <b>Sessions:</b> <span id="volDetailTxt" style="color:var(--muted)">Checking Volume...</span></span>
+        </div>
       </div>
       <div class="note"><b>Check status</b> reads a number's live state without starting a new link. <b>Reset</b> clears its saved session so you can link it again.</div>
     </section>
@@ -663,6 +671,52 @@
     refreshHealth();
   });
 
+    async function checkDatabase(){
+    const pill = document.getElementById('dbPill');
+    const dbTxt = document.getElementById('dbDetailTxt');
+    const volTxt = document.getElementById('volDetailTxt');
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6000);
+      const r = await fetch('/api/database/status', { cache: 'no-store', signal: ctrl.signal });
+      clearTimeout(timer);
+      const d = await r.json();
+      if (pill) {
+        if (d.status === 'connected') {
+          pill.textContent = 'Neon DB: Connected';
+          pill.className = 'pill ok';
+          pill.title = 'Neon database (' + (d.database || 'neondb') + ') is attached and persistent.';
+        } else if (d.status === 'error') {
+          pill.textContent = 'Neon DB: Error';
+          pill.className = 'pill bad';
+          pill.title = 'Neon connection failed (' + (d.message || 'error') + '). Check DATABASE_URL in Railway.';
+        } else {
+          pill.textContent = 'Neon DB: Not Attached';
+          pill.className = 'pill warn';
+          pill.title = 'DATABASE_URL is not configured. Running on local JSON storage.';
+        }
+      }
+      if (dbTxt) {
+        if (d.status === 'connected') {
+          dbTxt.innerHTML = '<span style="color:var(--green);font-weight:700;">Neon PostgreSQL (' + (d.database || 'neondb') + ')</span>';
+        } else if (d.status === 'error') {
+          dbTxt.innerHTML = '<span style="color:var(--red);font-weight:700;">Connection Error (' + (d.message || 'failed') + ')</span>';
+        } else {
+          dbTxt.innerHTML = '<span style="color:var(--amber);font-weight:700;">Local JSON (Neon not attached)</span>';
+        }
+      }
+      if (volTxt) {
+        if (d.volumeMounted) {
+          volTxt.innerHTML = '<span style="color:var(--green);font-weight:700;">Railway Volume (/app/nexstore)</span>';
+        } else {
+          volTxt.innerHTML = '<span style="color:var(--amber);">Ephemeral (No Volume)</span>';
+        }
+      }
+    } catch {
+      if (pill) { pill.textContent = 'Neon DB: Offline'; pill.className = 'pill bad'; }
+    }
+  }
+
   async function checkServer(){
     const pill = $('serverPill');
     if (!pill) return;
@@ -688,9 +742,10 @@
   setMode('code');
   markSteps('none', false);
   checkServer();
+  checkDatabase();
   refreshHealth();
   healthTimer = setInterval(() => { if (number && !pending) refreshHealth(); }, HEALTH_MS);
-  setInterval(checkServer, 20000);
+  setInterval(() => { checkServer(); checkDatabase(); }, 20000);
 })();
 </script>
 </body>

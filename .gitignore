@@ -3,7 +3,8 @@ nexstore/pairing/
 nexstore/sessions/
 *.log
 .env
-.env.local
+.env.*
+!.env.example
 media-patch/dist/
 tmp/
 uploads/

@@ -1,0 +1,75 @@
+REPLACEMENT FILES MANIFEST
+==========================
+Target Repository: https://github.com/precious125588/Mais-project-
+Baseline Commit: 6277077f9005064dba323258e8995278364b9ad0
+Audit & Fix Commit: 78db7dd
+
+Changes Included:
+1. mias/neonPersistence.js
+   - Production-ready Neon PostgreSQL client with bounded connection pool (max: 2, 5s timeout)
+   - Verified TLS enforcement (sslmode=require)
+   - Sanitized database error masking (safeDbErrorCode prevents credential/host leakage)
+   - Scope isolation via SHA-256 hash derived from session AUTH_DIR
+   - Concurrency control via atomic CAS (compare-and-swap revision check)
+   - Versioned, idempotent migrations ledger and additive schema validation
+
+2. mias/database.js
+   - Non-destructive migration of existing JSON stores into Neon on first run
+   - Synchronous in-memory caching with asynchronous background persistence
+   - Explicit refusal of silent JSON fallback when DATABASE_URL is configured
+   - Safe in-place JSON state persistence retained as backup / fallback when DATABASE_URL is unset
+
+3. mias/index.js
+   - Graceful async shutdown handler on SIGINT/SIGTERM awaiting flushPersistence() and closePersistence()
+   - Integrated status server cleanup
+
+4. mias/migrations/0001_create_bot_state.sql
+   - Additive DDL creating mias_bot_state table and updated_at index
+
+5. mias/scripts/check-neon.mjs
+   - Non-destructive, read-only connectivity verification (SELECT 1, current_database())
+
+6. mias/scripts/migrate-neon.mjs
+   - Schema migration runner applying versioned SQL migrations
+
+7. mias/scripts/export-neon-state.mjs
+   - Disaster-recovery tool to export Neon state back to JSON stores
+
+8. package.json & package-lock.json
+   - Added pg (^8.13.1)
+   - npm scripts: neon:check, neon:migrate, neon:export
+   - Fixed package-lock.json registry URLs to registry.npmjs.org
+
+9. tests/neon-persistence.test.mjs
+   - 8 unit and integration tests verifying connection pool, TLS, error sanitization, readiness probes,
+     bounded retries, scope hashing, CAS revision protection, and migrations
+
+10. tests/caption-mediafire-shutdown.test.mjs
+    - Updated regression assertions to verify async graceful shutdown flushes
+
+11. .env.example
+    - Clean template with DATABASE_URL placeholder and variable descriptions; no secrets
+
+12. .gitignore
+    - Enhanced protection to ignore .env, .env.*, while allowing .env.example
+
+13. NEON-PERSISTENCE.md
+    - Comprehensive architecture, configuration, deployment, migration, and rollback documentation
+
+Deleted / Untracked:
+- .env (removed from git tracking to prevent credential leaks; existing local files unaffected)
+
+14. server.js
+    - Added `/api/database/status` endpoint (cached 10s probe) returning status ('connected' | 'not_configured' | 'error'), database name, and volume mount status
+    - Enhanced `/api/health`, `/api/ready`, and `/api/admin/system` with live Neon and Railway volume status
+
+15. public/index.html
+    - Real-time Neon Database indicator pill in nav header
+    - Status box displaying persistent database and session volume mount indicators
+
+16. public/admin.html
+    - Live Neon database status indicator in admin sidebar
+    - Telemetry cards for Neon Database and Railway Volume in System dashboard
+
+17. tests/database-status-route.test.mjs
+    - Automated test verifying `/api/database/status` contract

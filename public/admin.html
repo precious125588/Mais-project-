@@ -283,6 +283,7 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
     </nav>
     <div class="sb-footer">
       <div class="sb-status"><div class="sb-dot" id="sbDot"></div><span id="sbStatusTxt">Connecting...</span></div>
+      <div class="sb-status" style="margin-top:4px"><div class="sb-dot" id="sbDbDot" style="background:var(--yellow)"></div><span id="sbDbTxt">Neon: Checking...</span></div>
       <div class="sb-credit">Made by <b>JUST X</b></div>
     </div>
   </div>
@@ -443,6 +444,8 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
         <div class="stat-card green"><div class="stat-icon">🧠</div><div class="stat-val" id="sys-rss">—</div><div class="stat-lbl">RSS Memory</div></div>
         <div class="stat-card"><div class="stat-icon">⚡</div><div class="stat-val" id="sys-cpu">—</div><div class="stat-lbl">CPU Load (1m)</div></div>
         <div class="stat-card purple"><div class="stat-icon">🗂</div><div class="stat-val" id="sys-store">—</div><div class="stat-lbl">Storage</div></div>
+        <div class="stat-card green" id="card-db"><div class="stat-icon">🗄️</div><div class="stat-val" id="sys-db" style="font-size:0.95rem;padding-top:4px">—</div><div class="stat-lbl">Neon Database</div></div>
+        <div class="stat-card purple" id="card-vol"><div class="stat-icon">📦</div><div class="stat-val" id="sys-vol" style="font-size:0.95rem;padding-top:4px">—</div><div class="stat-lbl">Railway Volume</div></div>
       </div>
       <div class="sys-grid">
         <div class="section">
@@ -801,6 +804,38 @@ async function clearLogs(){
 // ══════════════════════════════════════════════════════
 // SYSTEM
 // ══════════════════════════════════════════════════════
+
+async function checkAdminDb(){
+  const dot = document.getElementById('sbDbDot');
+  const txt = document.getElementById('sbDbTxt');
+  try {
+    const r = await fetch('/api/database/status', { cache: 'no-store' });
+    const d = await r.json();
+    if (dot && txt) {
+      if (d.status === 'connected') {
+        dot.style.background = 'var(--green)';
+        txt.textContent = 'Neon: Connected (' + (d.database || 'neondb') + ')';
+      } else if (d.status === 'error') {
+        dot.style.background = 'var(--red)';
+        txt.textContent = 'Neon: Error (' + (d.message || 'failed') + ')';
+      } else {
+        dot.style.background = 'var(--yellow)';
+        txt.textContent = 'Neon: Not Attached';
+      }
+    }
+    const sysDb = document.getElementById('sys-db');
+    const sysVol = document.getElementById('sys-vol');
+    if (sysDb) {
+      sysDb.textContent = d.status === 'connected' ? 'Connected (' + (d.database || 'neondb') + ')' : (d.status === 'error' ? 'Error' : 'Not Attached');
+    }
+    if (sysVol) {
+      sysVol.textContent = d.volumeMounted ? 'Mounted (/app/nexstore)' : 'Not Mounted';
+    }
+  } catch {}
+}
+setInterval(checkAdminDb, 15000);
+setTimeout(checkAdminDb, 500);
+
 async function loadSystem(){
   try{
     const d=await api('/api/admin/system'); if(!d.ok)return;
