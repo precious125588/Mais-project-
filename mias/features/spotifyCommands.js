@@ -212,8 +212,40 @@ export function installSpotifyCommands(ctx) {
     return null;
   }
 
-  // YouTube links are often video-only, so the Spotify track audio is put on the picture.
-  async function muxSpotifyAudio(videoBuf, audioBuf) {
+  // The YouTube match for this card, looked up once and cached on the card entry.
+  async function youTubeFor(entry) {
+    if (entry.ytUrl === undefined) entry.ytUrl = (await findYouTubeUrl(entry.meta)) || null;
+    return entry.ytUrl;
+  }
+
+  // First http(s) media link in a provider response, skipping YouTube pages and images.
+  function pickMediaLink(data) {
+    if (!data || typeof data !== "object") return "";
+    return pickOne(walkPairs(data), ["download_url", "downloadurl", "downloadlink", "download", "url", "link"],
+      (v) => /^https?:\/\//i.test(v) && !NOT_AUDIO_RE.test(v));
+  }
+
+  // YouTube audio (MP3) for the matched track. Used only when no Spotify provider gave audio.
+  async function findYouTubeAudio(ytUrl) {
+    const tries = [
+      async () => { const r = await prexzyGet("/download/ytmp3", { url: ytUrl }, 45000); return r && r.ok ? r.data : null; },
+      async () => { const r = await dcGet("/download/ytmp3", { url: ytUrl }, 40000); return r && r.ok ? r.data : null; },
+      async () => { const r = await nxGet("/downloader/ytmp3", { url: ytUrl }, 60000); return r && r.ok ? r.data : null; },
+    ];
+    for (const t of tries) {
+      try {
+        const link = pickMediaLink(await t());
+        if (!link) continue;
+        const a = await downloadAudio(link);
+        if (a) return a;
+      } catch {}
+    }
+    return null;
+  }
+
+  // YouTube links are often video-only. The track audio goes on the picture: Spotify's first,
+  // YouTube's only when Spotify gave none (see getAudioFor).
+  async function muxAudio(videoBuf, audioBuf) {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "mias-spot-mux-"));
     const vIn = path.join(dir, "v.mp4"), aIn = path.join(dir, "a.bin"), out = path.join(dir, "out.mp4");
     try {
@@ -290,6 +322,10 @@ export function installSpotifyCommands(ctx) {
     for await (const c of iterateSources(entry.url, new Set([entry.source]))) {
       try { const a = await downloadAudio(c.audioUrl); if (a) return a; } catch {}
     }
+    // Fallback only: no Spotify provider gave audio, so use the YouTube match's audio.
+    const yt = await youTubeFor(entry);
+    const ya = yt ? await findYouTubeAudio(yt) : null;
+    if (ya) return ya;
     throw new Error("no provider could deliver this track right now");
   }
 
@@ -298,14 +334,15 @@ export function installSpotifyCommands(ctx) {
     const title = entry.meta.title;
     const safe = `${entry.meta.artist} - ${title}`.replace(/[^\w\s.-]/g, "_").trim().slice(0, 70) || "track";
     if (n === 3) {
-      // 1) The Spotify provider's own video. 2) If none, the YouTube match with the Spotify audio.
+      // 1) The Spotify provider's own video. 2) If none, the YouTube video, with the Spotify audio
+      // (YouTube audio only if no Spotify provider gave audio).
       let vbuf = entry.videoUrl ? await fetchVideoBuf(entry.videoUrl) : null;
       if (!vbuf) {
-        const yt = await findYouTubeUrl(entry.meta);
+        const yt = await youTubeFor(entry);
         const picture = yt ? await fetchYouTubeMp4Buf(yt) : null;
         if (picture) {
           const audio = await getAudioFor(entry).catch(() => null);
-          const muxed = audio ? await muxSpotifyAudio(picture, audio.buf).catch(() => null) : null;
+          const muxed = audio ? await muxAudio(picture, audio.buf).catch(() => null) : null;
           vbuf = muxed ? await prepareTikTokVideo(muxed) : null;
         }
       }
