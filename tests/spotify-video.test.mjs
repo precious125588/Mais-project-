@@ -32,10 +32,11 @@ test("audio: Spotify providers come before the YouTube audio fallback", () => {
   assert.ok(body.indexOf("throw new Error") > body.indexOf("findYouTubeAudio(yt)"), "error only when both fail");
 });
 
-test("video is processed with the TikTok 1.3 HD routine", () => {
-  assert.ok(/import \{ prepareTikTokVideo \} from "\.\/ttVideo\.js"/.test(SPOT));
-  assert.ok(/return prepareTikTokVideo\(buf\)/.test(SPOT));
-  assert.ok(/prepareTikTokVideo\(muxed\)/.test(SPOT));
+test("video is made WhatsApp-playable by makeWhatsAppVideo (Spotify only)", () => {
+  assert.ok(/export async function makeWhatsAppVideo/.test(SPOT));
+  assert.ok(/return makeWhatsAppVideo\(buf\)/.test(SPOT));
+  assert.ok(/makeWhatsAppVideo\(muxed\)/.test(SPOT));
+  assert.ok(!/prepareTikTokVideo/.test(SPOT_CODE), "Spotify no longer depends on the shared TikTok normalizer");
 });
 
 test("option 3 never gets a ✅ reaction; options 1 and 2 keep it", () => {
@@ -84,6 +85,9 @@ if (HAVE_DEPS) {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${server.address().port}`;
   mod = await import(pathToFileURL(path.join(tmp, "features/spotifyCommands.js")).href);
+  // Odd-size MPEG-4 (not H.264): must come out as H.264 yuv420p with even dimensions.
+  ff(["-f", "lavfi", "-i", "testsrc=duration=2:size=321x241:rate=25", "-c:v", "mpeg4", "-an", "-f", "mp4", path.join(tmp, "mp4v.mp4")]);
+  FX.mp4v = fs.readFileSync(path.join(tmp, "mp4v.mp4"));
   // Only the local fixture server is reachable in tests; the public providers fail fast.
   const axiosLib = (await import(pathToFileURL(path.join(ROOT, "mias/node_modules/axios/index.js")).href)).default;
   const realGet = axiosLib.get.bind(axiosLib);
@@ -114,12 +118,32 @@ test("audioFormat accepts real MP3 bytes and rejects an HTML error page", { skip
   assert.equal(mod.audioFormat(Buffer.from("<html>" + "x".repeat(6000))), null);
 });
 
-test("video is processed like TikTok 1.3 HD: output is a faststart MP4", { skip: SKIP }, async () => {
-  const { prepareTikTokVideo } = await import(pathToFileURL(path.join(tmp, "features/ttVideo.js")).href);
-  const out = await prepareTikTokVideo(FX.v);
-  assert.ok(Buffer.isBuffer(out) && out.length > 10000);
+test("playable: an H.264 MP4 is stream-copied with faststart (fast path)", { skip: SKIP }, async () => {
+  const out = await mod.makeWhatsAppVideo(FX.v);
+  assert.ok(Buffer.isBuffer(out) && out.length > 10000, "output produced");
   assert.equal(out.toString("latin1", 4, 8), "ftyp");
   assert.ok(out.indexOf("moov") > 0 && out.indexOf("moov") < out.indexOf("mdat"), "moov before mdat (faststart)");
+  const codecs = probeCodecs(out);
+  assert.ok(codecs.includes("h264"), "H.264 video: " + codecs.join(","));
+  assert.ok(codecs.includes("aac"), "AAC audio: " + codecs.join(","));
+});
+
+test("playable: a non-H.264 MP4 with odd size is re-encoded to H.264 yuv420p with even size", { skip: SKIP }, async () => {
+  const out = await mod.makeWhatsAppVideo(FX.mp4v);
+  assert.ok(Buffer.isBuffer(out) && out.length > 10000, "output produced");
+  const f = path.join(tmp, `chk-${Math.random().toString(36).slice(2)}.mp4`);
+  fs.writeFileSync(f, out);
+  const info = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,pix_fmt,width,height", "-of", "json", f]).toString();
+  const st = JSON.parse(info).streams[0];
+  assert.equal(st.codec_name, "h264");
+  assert.equal(st.pix_fmt, "yuv420p");
+  assert.equal(st.width, 320);
+  assert.equal(st.height, 240);
+});
+
+test("playable: garbage or non-MP4 input is rejected instead of sent", { skip: SKIP }, async () => {
+  assert.equal(await mod.makeWhatsAppVideo(Buffer.alloc(50000, 1)), null);
+  assert.equal(await mod.makeWhatsAppVideo(Buffer.from("<html>" + "x".repeat(20000))), null);
 });
 
 // ---- end-to-end through the real command + reply listener ----
@@ -163,6 +187,11 @@ function harness({ spotifyVideo, youtube, spotifyAudioBroken = false }) {
 }
 const reaction = (sock, id, emoji) => sock.sent.some((s) => s.content?.react?.key?.id === id && s.content.react.text === emoji);
 const replyMsg = (text, id) => ({ messages: [{ key: { remoteJid: GROUP, id, participant: USER, fromMe: false }, message: { conversation: text } }] });
+const probeCodecs = (buf) => {
+  const f = path.join(tmp, `codecs-${Math.random().toString(36).slice(2)}.mp4`);
+  fs.writeFileSync(f, buf);
+  return execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0", f]).toString().split("\n").filter(Boolean);
+};
 const probeStreams = (buf) => {
   const f = path.join(tmp, `probe-${Math.random().toString(36).slice(2)}.mp4`);
   fs.writeFileSync(f, buf);
