@@ -19,9 +19,17 @@ test("spotify video: Spotify provider first, YouTube only as the fallback", () =
   const sp = SPOT_CODE.indexOf("const vbuf") === -1 ? SPOT_CODE.indexOf("let vbuf") : SPOT_CODE.indexOf("let vbuf");
   assert.ok(sp > 0, "video branch present");
   const branch = SPOT_CODE.slice(sp, SPOT_CODE.indexOf("const a = await getAudioFor", sp));
-  assert.ok(branch.indexOf("fetchVideoBuf(entry.videoUrl)") < branch.indexOf("findYouTubeUrl(entry.meta)"), "Spotify video tried before YouTube");
+  assert.ok(branch.indexOf("fetchVideoBuf(entry.videoUrl)") < branch.indexOf("youTubeFor(entry)"), "Spotify video tried before YouTube");
   assert.ok(branch.includes("if (!vbuf) {"), "YouTube runs only when Spotify gave no video");
   assert.ok(!/ytSearch|findVideoUrl/.test(SPOT_CODE), "no ctx.ytSearch dependency");
+});
+
+test("audio: Spotify providers come before the YouTube audio fallback", () => {
+  const body = SPOT_CODE.slice(SPOT_CODE.indexOf("async function getAudioFor"), SPOT_CODE.indexOf("async function deliver"));
+  assert.ok(body.indexOf("iterateSources(entry.url") > 0, "Spotify providers used");
+  assert.ok(body.indexOf("iterateSources(entry.url") < body.indexOf("youTubeFor(entry)"), "YouTube only after Spotify");
+  assert.ok(body.indexOf("youTubeFor(entry)") < body.indexOf("findYouTubeAudio(yt)"), "YouTube audio is last");
+  assert.ok(body.indexOf("throw new Error") > body.indexOf("findYouTubeAudio(yt)"), "error only when both fail");
 });
 
 test("video is processed with the TikTok 1.3 HD routine", () => {
@@ -62,9 +70,12 @@ if (HAVE_DEPS) {
   FX.v = fs.readFileSync(path.join(tmp, "v.mp4"));
   FX.vo = fs.readFileSync(path.join(tmp, "vo.mp4"));
   FX.a = fs.readFileSync(path.join(tmp, "a.mp3"));
+  // A different tone, so the test can tell Spotify's audio from YouTube's audio by bytes.
+  ff(["-f", "lavfi", "-i", "sine=frequency=660:duration=3", "-c:a", "libmp3lame", "-b:a", "128k", path.join(tmp, "ya.mp3")]);
+  FX.ya = fs.readFileSync(path.join(tmp, "ya.mp3"));
   FX.c = Buffer.alloc(3000, 7);
   server = http.createServer((req, res) => {
-    const map = { "/v.mp4": ["video/mp4", FX.v], "/vo.mp4": ["video/mp4", FX.vo], "/a.mp3": ["audio/mpeg", FX.a], "/c.jpg": ["image/jpeg", FX.c] };
+    const map = { "/v.mp4": ["video/mp4", FX.v], "/vo.mp4": ["video/mp4", FX.vo], "/a.mp3": ["audio/mpeg", FX.a], "/ya.mp3": ["audio/mpeg", FX.ya], "/c.jpg": ["image/jpeg", FX.c] };
     const e = map[req.url];
     if (!e) { res.writeHead(404); return res.end(); }
     res.writeHead(200, { "content-type": e[0], "content-length": e[1].length });
@@ -73,6 +84,10 @@ if (HAVE_DEPS) {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${server.address().port}`;
   mod = await import(pathToFileURL(path.join(tmp, "features/spotifyCommands.js")).href);
+  // Only the local fixture server is reachable in tests; the public providers fail fast.
+  const axiosLib = (await import(pathToFileURL(path.join(ROOT, "mias/node_modules/axios/index.js")).href)).default;
+  const realGet = axiosLib.get.bind(axiosLib);
+  axiosLib.get = (url, cfg) => (String(url).startsWith(base) ? realGet(url, cfg) : Promise.reject(new Error("offline in tests")));
 }
 after(() => { if (server) { server.closeAllConnections?.(); server.close(); } });
 
@@ -108,7 +123,8 @@ test("video is processed like TikTok 1.3 HD: output is a faststart MP4", { skip:
 });
 
 // ---- end-to-end through the real command + reply listener ----
-function harness({ spotifyVideo, youtube }) {
+function harness({ spotifyVideo, youtube, spotifyAudioBroken = false }) {
+  globalThis.__ytAudioCalls = 0;
   globalThis.__nx = async (p) => {
     if (p === "/search/spotify") return { ok: true, data: { result: [{ url: TRACK }] }, result: [{ url: TRACK }] };
     if (p === "/search/youtube") {
@@ -116,7 +132,7 @@ function harness({ spotifyVideo, youtube }) {
       return { ok: true, result: list };
     }
     if (p === "/downloader/spotify") {
-      const result = { title: "Test Song", artist: "Test Artist", duration: 200, cover: `${base}/c.jpg`, url: `${base}/a.mp3` };
+      const result = { title: "Test Song", artist: "Test Artist", duration: 200, cover: `${base}/c.jpg`, url: spotifyAudioBroken ? `${base}/missing.mp3` : `${base}/a.mp3` };
       if (spotifyVideo) result.video = `${base}/v.mp4`;
       return { ok: true, data: { status: true, result } };
     }
@@ -128,7 +144,11 @@ function harness({ spotifyVideo, youtube }) {
     sendReply: async (sock, m, text) => sock.sendMessage(m.key.remoteJid, { text }, { quoted: m }),
     react: async (sock, msg, emoji) => sock.sendMessage(msg.key.remoteJid, { react: { text: emoji, key: msg.key } }),
     CONFIG: { BOT_NAME: "MIAS", PREFIX: "." },
-    dcGet: async (p) => (p === "/download/ytmp4" && youtube ? { ok: true, data: { status: 200, success: true, result: { download_url: `${base}/vo.mp4`, quality: "360p" } } } : { ok: false }),
+    dcGet: async (p) => {
+      if (p === "/download/ytmp3") { globalThis.__ytAudioCalls++; return youtube ? { ok: true, data: { status: 200, success: true, result: { download_url: `${base}/ya.mp3` } } } : { ok: false }; }
+      if (p === "/download/ytmp4" && youtube) return { ok: true, data: { status: 200, success: true, result: { download_url: `${base}/vo.mp4`, quality: "360p" } } };
+      return { ok: false };
+    },
     prexzyGet: async () => ({ ok: false }),
     __miasMapSet() {}, __miasMapDelete() {},
     getSender: (m) => m.key.participant || m.key.remoteJid,
@@ -177,6 +197,7 @@ test("reply 3 with no Spotify video falls back to YouTube, muxed with Spotify au
   assert.ok(vid, "YouTube-fallback video sent");
   assert.equal(vid.content.video.toString("latin1", 4, 8), "ftyp");
   assert.ok(probeStreams(vid.content.video).includes("audio"), "Spotify audio present in the video");
+  assert.equal(globalThis.__ytAudioCalls, 0, "YouTube audio not used while Spotify audio works");
   assert.ok(!reaction(h.sock, "R3c", "✅"), "no ✅ on option 3");
 });
 
@@ -187,4 +208,56 @@ test("reply 3 with no Spotify video and no YouTube match says video not availabl
   assert.ok(h.sock.sent.some((s) => s.content?.text && s.content.text.includes("Video not available")), "not-available text");
   assert.ok(!h.sock.sent.some((s) => s.content?.video), "no video sent");
   assert.ok(!reaction(h.sock, "R3b", "✅"), "no ✅ on option 3");
+});
+
+test("audio: option 1 sends Spotify's own MP3 and never calls YouTube audio", { skip: SKIP }, async () => {
+  const h = harness({ spotifyVideo: false, youtube: true });
+  await h.run();
+  await h.sock.handler(replyMsg("1", "A1"));
+  const aud = h.sock.sent.find((s) => s.content?.audio);
+  assert.ok(aud, "audio sent");
+  assert.equal(Buffer.compare(aud.content.audio, FX.a), 0, "Spotify's audio bytes");
+  assert.equal(globalThis.__ytAudioCalls, 0, "YouTube audio not called");
+  assert.ok(reaction(h.sock, "A1", "✅"), "✅ on option 1");
+});
+
+test("audio: option 2 voice note uses Spotify's audio, not YouTube's", { skip: SKIP }, async () => {
+  const h = harness({ spotifyVideo: false, youtube: true });
+  await h.run();
+  await h.sock.handler(replyMsg("2", "A2s"));
+  const ptt = h.sock.sent.find((s) => s.content?.audio && s.content.ptt);
+  assert.ok(ptt, "voice note sent");
+  assert.equal(Buffer.compare(ptt.content.audio, FX.a), 0, "Spotify's audio bytes");
+  assert.equal(globalThis.__ytAudioCalls, 0, "YouTube audio not called");
+});
+
+test("audio: YouTube audio is used only when no Spotify provider gives audio", { skip: SKIP }, async () => {
+  const h = harness({ spotifyVideo: false, youtube: true, spotifyAudioBroken: true });
+  await h.run();
+  await h.sock.handler(replyMsg("1", "A4"));
+  const aud = h.sock.sent.find((s) => s.content?.audio);
+  assert.ok(aud, "fallback audio sent");
+  assert.equal(Buffer.compare(aud.content.audio, FX.ya), 0, "YouTube audio as the fallback");
+  assert.ok(globalThis.__ytAudioCalls >= 1, "YouTube audio tried after Spotify failed");
+  assert.ok(reaction(h.sock, "A4", "✅"), "✅ on option 1");
+});
+
+test("audio: video fallback uses YouTube audio only when Spotify audio is gone", { skip: SKIP }, async () => {
+  const h = harness({ spotifyVideo: false, youtube: true, spotifyAudioBroken: true });
+  await h.run();
+  await h.sock.handler(replyMsg("3", "V4"));
+  const vid = h.sock.sent.find((s) => s.content?.video);
+  assert.ok(vid, "video sent");
+  assert.ok(probeStreams(vid.content.video).includes("audio"), "audio present");
+  assert.ok(globalThis.__ytAudioCalls >= 1, "YouTube audio used as the fallback");
+  assert.ok(!reaction(h.sock, "V4", "✅"), "no ✅ on option 3");
+});
+
+test("audio: when Spotify and YouTube both give no audio, option 1 shows ❌ with the reason", { skip: SKIP }, async () => {
+  const h = harness({ spotifyVideo: false, youtube: false, spotifyAudioBroken: true });
+  await h.run();
+  await h.sock.handler(replyMsg("1", "A5"));
+  assert.ok(!h.sock.sent.some((s) => s.content?.audio), "no audio sent");
+  assert.ok(reaction(h.sock, "A5", "❌"), "❌ on failure");
+  assert.ok(h.sock.sent.some((s) => s.content?.text && s.content.text.includes("Spotify download failed")), "error reason sent");
 });
