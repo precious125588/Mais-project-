@@ -5,7 +5,6 @@
 //   1 = music file (MP3)   2 = voice note   3 = video file (or "video not available")
 import axios from "axios";
 import { nxGet } from "../api.js";
-import { prepareTikTokVideo } from "./ttVideo.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
@@ -99,6 +98,64 @@ export function audioFormat(buf) {
   return null;
 }
 const EXT = { mp3: ".mp3", ogg: ".ogg", m4a: ".m4a", wav: ".wav", flac: ".flac", webm: ".webm" };
+
+// ---- WhatsApp-playable Spotify video ----
+// WhatsApp shows "something is wrong with the video file" for an MP4 that is not H.264 with
+// yuv420p pixels, or whose moov atom sits at the end. The TikTok path is not changed; this is
+// separate. A file that already fits is stream-copied with +faststart (fast). Anything else is
+// encoded once to H.264/AAC. The output is checked before it is returned.
+function probeMedia(text) {
+  const out = { video: null, audio: null };
+  for (const line of String(text).split("\n")) {
+    if (!out.video && /Stream #\d+:\d+.*: Video:/.test(line)) {
+      const dim = /(\d{2,5})x(\d{2,5})/.exec(line);
+      out.video = {
+        codec: ((/Video: ([a-z0-9_]+)/i.exec(line) || [])[1] || "").toLowerCase(),
+        pix: ((/\b(yuv[a-z0-9]+)\b/i.exec(line) || [])[1] || "").toLowerCase(),
+        w: dim ? Number(dim[1]) : 0, h: dim ? Number(dim[2]) : 0,
+      };
+    }
+    if (!out.audio && /Stream #\d+:\d+.*: Audio:/.test(line)) {
+      out.audio = { codec: ((/Audio: ([a-z0-9_]+)/i.exec(line) || [])[1] || "").toLowerCase() };
+    }
+  }
+  return out;
+}
+
+// ffmpeg -i prints stream details to stderr and exits non-zero (no output file); that is expected.
+async function ffmpegInfo(file) {
+  try { await execFileAsync(resolveFfmpeg(), ["-hide_banner", "-i", file], { timeout: 20000, maxBuffer: 4 * 1024 * 1024 }); return ""; }
+  catch (e) { return String(e?.stderr || ""); }
+}
+
+export async function makeWhatsAppVideo(input) {
+  if (!Buffer.isBuffer(input) || input.length < 10000 || input.toString("latin1", 4, 8) !== "ftyp") return null;
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "mias-spot-vid-"));
+  const inP = path.join(dir, "in.mp4"), outP = path.join(dir, "out.mp4");
+  try {
+    await fsp.writeFile(inP, input);
+    const src = probeMedia(await ffmpegInfo(inP));
+    if (!src.video) return null;
+    const fits = src.video.codec === "h264" && src.video.pix === "yuv420p" && src.video.w % 2 === 0 && src.video.h % 2 === 0;
+    const hasAudio = !!src.audio;
+    const args = fits
+      ? ["-c:v", "copy", ...(hasAudio ? (src.audio.codec === "aac" ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "128k", "-ac", "2"]) : [])]
+      : ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+         "-profile:v", "high", "-pix_fmt", "yuv420p", ...(hasAudio ? ["-c:a", "aac", "-b:a", "128k", "-ac", "2"] : [])];
+    await execFileAsync(resolveFfmpeg(), ["-hide_banner", "-loglevel", "error", "-y", "-i", inP,
+      "-map", "0:v:0", "-map", "0:a:0?", ...args, "-movflags", "+faststart", "-f", "mp4", outP],
+      { timeout: 150000, maxBuffer: 8 * 1024 * 1024 });
+    const out = await fsp.readFile(outP);
+    const chk = probeMedia(await ffmpegInfo(outP));
+    const faststart = out.indexOf("moov") > 0 && out.indexOf("moov") < out.indexOf("mdat");
+    if (out.length < 10000 || out.toString("latin1", 4, 8) !== "ftyp" || !chk.video || chk.video.codec !== "h264" || chk.video.pix !== "yuv420p" || !faststart) return null;
+    return out;
+  } catch {
+    return null;
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
 
 export function installSpotifyCommands(ctx) {
   const { cmd, sendReply, react, CONFIG, dcGet, prexzyGet, __miasMapSet, __miasMapDelete, getSender, isPrivateBlocked, transcodeAudio, voiceBuffer } = ctx;
@@ -276,7 +333,7 @@ export function installSpotifyCommands(ctx) {
     if (!url || !/^https?:\/\//i.test(url) || NOT_AUDIO_RE.test(url)) return null;
     const buf = await fetchBuf(url, 300000).catch(() => null);
     if (!buf || buf.length < 10000 || buf.toString("latin1", 4, 8) !== "ftyp") return null;
-    return prepareTikTokVideo(buf);
+    return makeWhatsAppVideo(buf);
   }
 
   // Premium caption: Unicode-styled fixed labels only. Song title and artist are
@@ -339,11 +396,12 @@ export function installSpotifyCommands(ctx) {
       let vbuf = entry.videoUrl ? await fetchVideoBuf(entry.videoUrl) : null;
       if (!vbuf) {
         const yt = await youTubeFor(entry);
-        const picture = yt ? await fetchYouTubeMp4Buf(yt) : null;
-        if (picture) {
-          const audio = await getAudioFor(entry).catch(() => null);
-          const muxed = audio ? await muxAudio(picture, audio.buf).catch(() => null) : null;
-          vbuf = muxed ? await prepareTikTokVideo(muxed) : null;
+        const [picture, audio] = yt
+          ? await Promise.all([fetchYouTubeMp4Buf(yt), getAudioFor(entry).catch(() => null)])
+          : [null, null];
+        if (picture && audio) {
+          const muxed = await muxAudio(picture, audio.buf).catch(() => null);
+          vbuf = muxed ? await makeWhatsAppVideo(muxed) : null;
         }
       }
       if (!vbuf) { await sendReply(sock, m, `🎬 *Video not available* right now for *${title}*.`); return; }
