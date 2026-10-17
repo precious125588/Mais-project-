@@ -10,7 +10,7 @@ test("Menu & Alias filtering - Registry assigns isAlias and canonical properly",
 
   // Verify cmd implementation has isAlias logic
   assert.ok(miasIndex.includes("const isAlias = i > 0;"), "cmd() must tag aliases with isAlias = i > 0");
-  assert.ok(miasIndex.includes("commands.set(n, { ...opts, handler, canonical, isAlias });"), "cmd() must store canonical and isAlias flag");
+  assert.ok(miasIndex.includes("commands.set(n, { ...opts, handler: gatedHandler, canonical, isAlias });"), "cmd() must store canonical and isAlias flag");
   assert.ok(miasIndex.includes("function getPrimaryCommandCount(context = {})"), "getPrimaryCommandCount() must be defined");
   assert.ok(miasIndex.includes("function isCommandAlias(name)"), "isCommandAlias() must be defined");
   assert.ok(miasIndex.includes("function getCategoryPrimaryCommands(cat, context = {})"), "getCategoryPrimaryCommands() must be defined");

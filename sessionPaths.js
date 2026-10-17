@@ -25,19 +25,46 @@ const path = require('path');
 
 const REPO_ROOT = __dirname;
 
-/** True when the Railway volume is actually mounted at /app/nexstore. */
-function isVolumeMounted() {
+function configuredVolumeRoot() {
+  const raw = String(process.env.RAILWAY_VOLUME_MOUNT_PATH || '').trim();
+  if (!raw) return null;
+  const root = path.resolve(raw);
   try {
-    const st = fs.statSync('/app/nexstore');
-    return st.isDirectory();
-  } catch (e) {
+    return fs.statSync(root).isDirectory() ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeMountField(value) {
+  return String(value || '').replace(/\\([0-7]{3})/g, (_match, octal) =>
+    String.fromCharCode(parseInt(octal, 8))
+  );
+}
+
+/** True only when the configured path or /app/nexstore is a real volume mount. */
+function isMountedAt(mountPath) {
+  const target = path.resolve(mountPath);
+  try {
+    return fs.readFileSync('/proc/self/mountinfo', 'utf8').split('\n').some((line) => {
+      const fields = line.split(' ');
+      return fields[4] && path.resolve(decodeMountField(fields[4])) === target;
+    });
+  } catch {
     return false;
   }
 }
 
-/** Absolute path of the volume's parent folder (nexstore), when available. */
+/** True when Railway supplied a mount path or the legacy mount is active. */
+function isVolumeMounted() {
+  return Boolean(configuredVolumeRoot() || isMountedAt('/app/nexstore'));
+}
+
+/** Absolute path of the mounted volume, or the legacy local data directory. */
 function nexstoreRoot() {
-  if (isVolumeMounted()) return '/app/nexstore';
+  const configured = configuredVolumeRoot();
+  if (configured) return configured;
+  if (isMountedAt('/app/nexstore')) return '/app/nexstore';
   return path.join(REPO_ROOT, 'nexstore');
 }
 
@@ -50,6 +77,8 @@ function resolveSessionRoot(explicit) {
     process.env.SESSIONS_DIR ||
     '';
   if (raw && String(raw).trim()) return path.resolve(String(raw).trim());
+  const configured = configuredVolumeRoot();
+  if (configured) return path.join(configured, 'pairing');
   if (isVolumeMounted()) return '/app/nexstore/pairing';
   return path.join(nexstoreRoot(), 'pairing');
 }

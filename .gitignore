@@ -2,6 +2,7 @@ node_modules/
 nexstore/pairing/
 nexstore/sessions/
 *.log
+.env
 .env.local
 media-patch/dist/
 tmp/

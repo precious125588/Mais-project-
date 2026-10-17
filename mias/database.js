@@ -10,25 +10,88 @@ import fs from "fs";
 import { createHash } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "node:module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// PER-BOT ISOLATION: each paired bot gets its own AUTH_DIR. When one is set,
-// keep this instance's database beside ITS session so sudo lists, settings,
-// private-mode state, bans etc. are NEVER shared with another Mia's MDX
-// instance running from the same repo. No AUTH_DIR → original shared path.
-const DB_DIR = (() => {
+const require = createRequire(import.meta.url);
+const LEGACY_DB_DIR = path.join(__dirname, "database");
+
+function detectVolumeRoot() {
+  const configured = String(process.env.RAILWAY_VOLUME_MOUNT_PATH || "").trim();
+  if (configured) {
+    const candidate = path.resolve(configured);
+    try {
+      if (fs.statSync(candidate).isDirectory()) return candidate;
+    } catch {}
+  }
+
+  // Keep the Railway mount detection in sync with the session-path resolver.
   try {
-    if (process.env.AUTH_DIR) {
-      const d = path.join(path.resolve(process.env.AUTH_DIR), "database");
-      fs.mkdirSync(d, { recursive: true });
-      return d;
-    }
+    const sessionPaths = require("../sessionPaths.js");
+    if (sessionPaths?.isVolumeMounted?.()) return sessionPaths.nexstoreRoot();
   } catch {}
-  return path.join(__dirname, "database");
-})();
+  return null;
+}
+
+/**
+ * Resolve the database beside an explicitly isolated bot session when the
+ * launcher supplied AUTH_DIR. Direct starts have no AUTH_DIR until index.js
+ * finishes evaluating, so detect the mounted Railway volume here as well.
+ */
+export function resolveDatabaseDir() {
+  const authDir = String(process.env.AUTH_DIR || "").trim();
+  if (authDir) return path.join(path.resolve(authDir), "database");
+
+  const volumeRoot = detectVolumeRoot();
+  if (volumeRoot) return path.join(volumeRoot, "database");
+  return LEGACY_DB_DIR;
+}
+
+const DB_DIR = resolveDatabaseDir();
 
 // Ensure database directory exists
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+
+/**
+ * One-time, non-destructive migration from the old code-directory database.
+ * Existing volume data always wins; only missing JSON files are copied.
+ */
+export function migrateLegacyDatabase(sourceDir = LEGACY_DB_DIR, targetDir = DB_DIR) {
+  const source = path.resolve(sourceDir);
+  const target = path.resolve(targetDir);
+  if (source === target) return 0;
+
+  let copied = 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(source, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      console.error("[DB] Could not inspect legacy database:", error.message);
+    }
+    return 0;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".json")) continue;
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    try {
+      fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+      copied++;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        console.error(`[DB] Could not migrate ${entry.name}:`, error.message);
+      }
+    }
+  }
+  return copied;
+}
+
+const migratedLegacyFiles = migrateLegacyDatabase();
+if (migratedLegacyFiles) {
+  console.log(`[DB] Migrated ${migratedLegacyFiles} legacy JSON file(s) to persistent storage.`);
+}
 
 const DB_FILES = {
   economy:      path.join(DB_DIR, "economy.json"),
