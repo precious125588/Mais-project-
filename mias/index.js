@@ -44,7 +44,15 @@ import { fileURLToPath } from "url";
 import pino from "pino";
 import { createRequire } from "module";
 import crypto from "crypto";
-import { loadAllData, saveAllData, startAutoSave, DB_DIR } from "./database.js";
+import {
+  loadAllData,
+  saveAllData,
+  startAutoSave,
+  DB_DIR,
+  initializePersistence,
+  flushPersistence,
+  closePersistence,
+} from "./database.js";
 // Expose getSetting/setSetting helpers globally for kevdraPatches
 (function _exposeSettingHelpers() {
   try {
@@ -1629,6 +1637,7 @@ let _firstConnectTime = 0; // Track when bot first connected
 // ═══════════════════════════════════════════════════════════════════════════════
 const settings = new Map();
 
+await initializePersistence();
 const _dbData = loadAllData();
 // ── KEVDRA: Initialize stability systems (non-blocking) ──────────────────────
 initKevdraPatches(
@@ -1980,8 +1989,26 @@ function _flushAllStoresSync() {
     });
   } catch (e) { console.error("[shutdown-save]", e?.message || e); }
 }
-process.on("SIGINT",  () => { _shutdownStatusServer(); _flushAllStoresSync(); process.exit(0); });
-process.on("SIGTERM", () => { _shutdownStatusServer(); _flushAllStoresSync(); process.exit(0); });
+let _shutdownPromise = null;
+function _shutdown(signal) {
+  if (_shutdownPromise) return _shutdownPromise;
+  _shutdownPromise = (async () => {
+    console.log(`[shutdown] ${signal} received; flushing persistent state...`);
+    _shutdownStatusServer();
+    _flushAllStoresSync();
+    const saved = await flushPersistence();
+    if (!saved) console.error("[shutdown-save] Persistence flush failed; latest changes may not be durable.");
+    try {
+      await closePersistence();
+    } catch {
+      console.error("[shutdown-save] Database pool close failed.");
+    }
+    process.exit(saved ? 0 : 1);
+  })();
+  return _shutdownPromise;
+}
+process.on("SIGINT",  () => { void _shutdown("SIGINT"); });
+process.on("SIGTERM", () => { void _shutdown("SIGTERM"); });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WHATSAPP CONNECTION (main socket)

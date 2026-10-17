@@ -31,6 +31,15 @@ test("pinterest tries Nexray first and uses 🌀 / ✅ / ❌ reactions", () => {
 
 test("shutdown flushes every store before exit", () => {
   assert.ok(IDX.includes("function _flushAllStoresSync()"), "flush helper exists");
-  assert.ok(/process\.on\("SIGTERM", \(\) => \{ _shutdownStatusServer\(\); _flushAllStoresSync\(\); process\.exit\(0\); \}\);/.test(IDX), "SIGTERM flushes");
-  assert.ok(/process\.on\("SIGINT",\s+\(\) => \{ _shutdownStatusServer\(\); _flushAllStoresSync\(\); process\.exit\(0\); \}\);/.test(IDX), "SIGINT flushes");
+  assert.ok(IDX.includes("saveAllData({"), "flush helper snapshots every application store");
+  assert.ok(IDX.includes("await flushPersistence();"), "shutdown waits for queued database writes");
+  assert.ok(IDX.includes("await closePersistence();"), "shutdown closes the database pool");
+  assert.ok(
+    /process\.on\("SIGTERM", \(\) => \{ void _shutdown\("SIGTERM"\); \}\);/.test(IDX),
+    "SIGTERM awaits the graceful persistence flush",
+  );
+  assert.ok(
+    /process\.on\("SIGINT",\s+\(\) => \{ void _shutdown\("SIGINT"\); \}\);/.test(IDX),
+    "SIGINT awaits the graceful persistence flush",
+  );
 });

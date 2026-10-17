@@ -1,7 +1,7 @@
 /**
  * ╔══════════════════════════════════════════════════════════════╗
  * ║           MIAS MDX — Database / Persistence Layer           ║
- * ║           Saves economy, settings, bans to JSON files       ║
+ * ║           Saves application state to JSON / Neon             ║
  * ║           Owner: 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x                              ║
  * ╚══════════════════════════════════════════════════════════════╝
  */
@@ -11,6 +11,17 @@ import { createHash } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "node:module";
+import {
+  applyMigrations,
+  assertReadOnlyConnection,
+  canonicalJson,
+  compareAndSwapBotState,
+  createNeonPool,
+  derivePersistenceScope,
+  readBotState,
+  safeDbErrorCode,
+  seedBotState,
+} from "./neonPersistence.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -93,7 +104,7 @@ if (migratedLegacyFiles) {
   console.log(`[DB] Migrated ${migratedLegacyFiles} legacy JSON file(s) to persistent storage.`);
 }
 
-const DB_FILES = {
+export const DB_FILES = {
   economy:      path.join(DB_DIR, "economy.json"),
   settings:     path.join(DB_DIR, "settings.json"),
   bans:         path.join(DB_DIR, "bans.json"),
@@ -134,7 +145,7 @@ function setToArr(set) { return [...set]; }
 function arrToSet(arr) { return new Set(arr); }
 
 // ── Write only when the content changed ─────────────────────
-// Every save used to rewrite all 12 stores, even when nothing changed. We keep
+// Every save used to rewrite all stores, even when nothing changed. We keep
 // a digest of what this process last wrote per file and skip identical writes.
 // The bytes on disk are the same as before; there is just less I/O and CPU.
 const _lastWriteDigest = new Map();
@@ -156,13 +167,26 @@ function saveMap(filePath, map) {
 }
 
 // ── Load a Map from a JSON file ─────────────────────────────
-function loadMap(filePath) {
+function loadMap(filePath, { strict = false } = {}) {
   try {
     if (!fs.existsSync(filePath)) return new Map();
     const raw = fs.readFileSync(filePath, "utf8");
-    if (!raw.trim()) return new Map();
-    return objToMap(JSON.parse(raw));
+    if (!raw.trim()) {
+      if (strict) throw new Error("LEGACY_JSON_INVALID");
+      return new Map();
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      if (strict) throw new Error("LEGACY_JSON_INVALID");
+      return new Map();
+    }
+    return objToMap(parsed);
   } catch (e) {
+    if (strict) {
+      const error = new Error("LEGACY_JSON_INVALID");
+      error.code = "LEGACY_JSON_INVALID";
+      throw error;
+    }
     console.error(`[DB] Failed to load ${path.basename(filePath)}:`, e.message);
     return new Map();
   }
@@ -178,13 +202,26 @@ function saveSet(filePath, set) {
 }
 
 // ── Load a Set from a JSON file ─────────────────────────────
-function loadSet(filePath) {
+function loadSet(filePath, { strict = false } = {}) {
   try {
     if (!fs.existsSync(filePath)) return new Set();
     const raw = fs.readFileSync(filePath, "utf8");
-    if (!raw.trim()) return new Set();
-    return arrToSet(JSON.parse(raw));
+    if (!raw.trim()) {
+      if (strict) throw new Error("LEGACY_JSON_INVALID");
+      return new Set();
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      if (strict) throw new Error("LEGACY_JSON_INVALID");
+      return new Set();
+    }
+    return arrToSet(parsed);
   } catch (e) {
+    if (strict) {
+      const error = new Error("LEGACY_JSON_INVALID");
+      error.code = "LEGACY_JSON_INVALID";
+      throw error;
+    }
     console.error(`[DB] Failed to load ${path.basename(filePath)}:`, e.message);
     return new Set();
   }
@@ -192,27 +229,149 @@ function loadSet(filePath) {
 
 // ── Public API ──────────────────────────────────────────────
 
+const STORE_KEYS = Object.keys(DB_FILES);
+const SET_STORES = new Set(["sudo", "sudoVip"]);
+let _persistenceMode = "json";
+let _neonPool = null;
+let _neonScope = null;
+let _neonRevision = null;
+let _neonSnapshot = null;
+let _lastPersistedDigest = null;
+let _writeBlocked = false;
+let _saveQueue = Promise.resolve(true);
+
+function loadAllDataFromDisk({ strict = false } = {}) {
+  return {
+    economy:       loadMap(DB_FILES.economy, { strict }),
+    settings:      loadMap(DB_FILES.settings, { strict }),
+    bans:          loadMap(DB_FILES.bans, { strict }),
+    warns:         loadMap(DB_FILES.warns, { strict }),
+    sudo:          loadSet(DB_FILES.sudo, { strict }),
+    sudoVip:       loadSet(DB_FILES.sudoVip, { strict }),
+    badwords:      loadMap(DB_FILES.badwords, { strict }),
+    inventory:     loadMap(DB_FILES.inventory, { strict }),
+    relationships: loadMap(DB_FILES.relationships, { strict }),
+    factions:      loadMap(DB_FILES.factions, { strict }),
+    userfaction:   loadMap(DB_FILES.userfaction, { strict }),
+    crypto:        loadMap(DB_FILES.crypto, { strict }),
+    grouprules:    loadMap(DB_FILES.grouprules, { strict }),
+  };
+}
+
+function serializeStores(stores) {
+  return Object.fromEntries(
+    STORE_KEYS.map((key) => [
+      key,
+      SET_STORES.has(key) ? setToArr(stores[key]) : mapToObj(stores[key]),
+    ]),
+  );
+}
+
+function deserializeStores(snapshot) {
+  const stores = {};
+  for (const key of STORE_KEYS) {
+    const value = snapshot?.[key];
+    if (SET_STORES.has(key)) {
+      if (!Array.isArray(value)) throw Object.assign(new Error(), { code: "DATABASE_STATE_INVALID" });
+      stores[key] = arrToSet(value);
+    } else {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw Object.assign(new Error(), { code: "DATABASE_STATE_INVALID" });
+      }
+      stores[key] = objToMap(value);
+    }
+  }
+  return stores;
+}
+
 /**
- * Load all data stores from disk.
+ * Enable Neon only when DATABASE_URL is explicitly configured. Schema changes
+ * are additive and versioned; legacy JSON files are retained as recovery data.
+ */
+export async function initializePersistence({
+  connectionString = process.env.DATABASE_URL,
+  expectedDatabase = process.env.NEON_EXPECTED_DATABASE || "neondb",
+  poolFactory = createNeonPool,
+} = {}) {
+  if (!String(connectionString || "").trim()) {
+    _persistenceMode = "json";
+    console.log("[DB] DATABASE_URL is not configured; using existing JSON persistence.");
+    return { mode: "json" };
+  }
+
+  let pool;
+  try {
+    pool = poolFactory({ connectionString });
+    const probe = await assertReadOnlyConnection(pool, { expectedDatabase });
+    console.log(`Neon connection: SUCCESS (${probe.databaseName})`);
+    await applyMigrations(pool);
+    const scope = derivePersistenceScope();
+    let state = await readBotState(pool, scope);
+
+    if (!state) {
+      const legacyStores = loadAllDataFromDisk({ strict: true });
+      state = await seedBotState(pool, scope, serializeStores(legacyStores));
+    } else {
+      const hasEveryStore = STORE_KEYS.every((key) =>
+        Object.prototype.hasOwnProperty.call(state.payload, key),
+      );
+      if (!hasEveryStore) {
+        const legacySnapshot = serializeStores(loadAllDataFromDisk({ strict: true }));
+        const merged = { ...state.payload };
+        for (const key of STORE_KEYS) {
+          if (!Object.prototype.hasOwnProperty.call(merged, key)) merged[key] = legacySnapshot[key];
+        }
+        const nextRevision = await compareAndSwapBotState(
+          pool,
+          scope,
+          state.revision,
+          merged,
+        );
+        if (nextRevision === null) {
+          throw Object.assign(new Error(), { code: "DATABASE_STATE_CONFLICT" });
+        }
+        state = { payload: merged, revision: nextRevision };
+      }
+    }
+
+    // Validate the whole snapshot before the application starts using it.
+    deserializeStores(state.payload);
+    _neonPool = pool;
+    _neonScope = scope;
+    _neonRevision = state.revision;
+    _neonSnapshot = state.payload;
+    _lastPersistedDigest = canonicalJson(state.payload);
+    _writeBlocked = false;
+    _persistenceMode = "neon";
+    console.log("[DB] Neon persistence enabled for this isolated bot session.");
+    return { mode: "neon", databaseName: probe.databaseName };
+  } catch (error) {
+    try {
+      await pool?.end();
+    } catch {}
+    _neonPool = null;
+    _neonScope = null;
+    _persistenceMode = "failed";
+    const code = safeDbErrorCode(error);
+    console.error(`[DB] Neon persistence initialization failed (${code}); refusing JSON fallback.`);
+    throw Object.assign(new Error(`Neon persistence initialization failed (${code})`), { code });
+  }
+}
+
+/**
+ * Load all data stores from Neon when configured, otherwise from disk.
  * Returns an object with all loaded Maps and Sets.
  */
 export function loadAllData() {
-  console.log("📂 Loading database from disk...");
-  const data = {
-    economy:       loadMap(DB_FILES.economy),
-    settings:      loadMap(DB_FILES.settings),
-    bans:          loadMap(DB_FILES.bans),
-    warns:         loadMap(DB_FILES.warns),
-    sudo:          loadSet(DB_FILES.sudo),
-    sudoVip:       loadSet(DB_FILES.sudoVip),
-    badwords:      loadMap(DB_FILES.badwords),
-    inventory:     loadMap(DB_FILES.inventory),
-    relationships: loadMap(DB_FILES.relationships),
-    factions:      loadMap(DB_FILES.factions),
-    userfaction:   loadMap(DB_FILES.userfaction),
-    crypto:        loadMap(DB_FILES.crypto),
-    grouprules:    loadMap(DB_FILES.grouprules),
-  };
+  if (_persistenceMode === "failed") {
+    throw new Error("Neon persistence failed; refusing JSON fallback.");
+  }
+  console.log(_persistenceMode === "neon"
+    ? "📂 Loading database from Neon..."
+    : "📂 Loading database from disk...");
+  const data = _persistenceMode === "neon"
+    ? deserializeStores(_neonSnapshot)
+    : loadAllDataFromDisk();
   const ecoCount = data.economy.size;
   const settCount = data.settings.size;
   console.log(`✅ Database loaded: ${ecoCount} economy records, ${settCount} settings records`);
@@ -220,10 +379,59 @@ export function loadAllData() {
 }
 
 /**
- * Save all data stores to disk.
+ * Save all stores to Neon when configured, otherwise to the existing JSON files.
  * Call this periodically and on shutdown.
  */
 export function saveAllData(stores) {
+  if (_persistenceMode === "failed") {
+    console.error("[DB] Persistence unavailable; refusing to write to JSON fallback.");
+    return Promise.resolve(false);
+  }
+
+  if (_persistenceMode === "neon") {
+    if (_writeBlocked) return Promise.resolve(false);
+    let snapshot;
+    try {
+      snapshot = serializeStores(stores);
+    } catch (error) {
+      console.error(`[DB] Neon snapshot serialization failed (${safeDbErrorCode(error)}).`);
+      return Promise.resolve(false);
+    }
+    const digest = canonicalJson(snapshot);
+    if (digest === _lastPersistedDigest) return Promise.resolve(true);
+
+    const save = _saveQueue.then(async () => {
+      if (digest === _lastPersistedDigest) return true;
+      const revision = await compareAndSwapBotState(
+        _neonPool,
+        _neonScope,
+        _neonRevision,
+        snapshot,
+      );
+      if (revision === null) {
+        const remote = await readBotState(_neonPool, _neonScope);
+        if (remote && canonicalJson(remote.payload) === digest) {
+          _neonRevision = remote.revision;
+          _neonSnapshot = remote.payload;
+          _lastPersistedDigest = digest;
+          return true;
+        }
+        _writeBlocked = true;
+        console.error("[DB] Neon state changed concurrently; writes paused to prevent overwriting newer data.");
+        return false;
+      }
+      _neonRevision = revision;
+      _neonSnapshot = snapshot;
+      _lastPersistedDigest = digest;
+      return true;
+    }).catch((error) => {
+      console.error(`[DB] Neon save failed (${safeDbErrorCode(error)}); no JSON fallback was used.`);
+      return false;
+    });
+    _saveQueue = save;
+    return save;
+  }
+
   saveMap(DB_FILES.economy,       stores.economy);
   saveMap(DB_FILES.settings,      stores.settings);
   saveMap(DB_FILES.bans,          stores.bans);
@@ -237,6 +445,18 @@ export function saveAllData(stores) {
   saveMap(DB_FILES.userfaction,   stores.userfaction);
   saveMap(DB_FILES.crypto,        stores.crypto);
   saveMap(DB_FILES.grouprules,    stores.grouprules);
+  return Promise.resolve(true);
+}
+
+export async function flushPersistence() {
+  return _saveQueue;
+}
+
+export async function closePersistence() {
+  await flushPersistence();
+  const pool = _neonPool;
+  _neonPool = null;
+  if (pool) await pool.end();
 }
 
 /**
@@ -249,10 +469,15 @@ export function startAutoSave(stores, intervalMs = 120000) {
     saveAllData(stores);
   }, intervalMs);
 
-  // Also save on process exit
-  const graceful = () => {
+  // Also flush queued database writes on process shutdown.
+  let shuttingDown = false;
+  const graceful = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log("💾 Saving data before exit...");
-    saveAllData(stores);
+    await saveAllData(stores);
+    await flushPersistence();
+    await closePersistence();
     process.exit(0);
   };
   process.on("SIGINT", graceful);
@@ -261,4 +486,4 @@ export function startAutoSave(stores, intervalMs = 120000) {
   return id;
 }
 
-export { DB_DIR, DB_FILES };
+export { DB_DIR };
