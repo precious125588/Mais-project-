@@ -1968,8 +1968,20 @@ function _startStatusServer(port, attemptsLeft = 10) {
 const _statusServer = _startStatusServer(PORT);
 // Ensure the port is freed on shutdown so the next start doesn't hit EADDRINUSE.
 function _shutdownStatusServer() { try { _statusServer && _statusServer.close(); } catch {} }
-process.on("SIGINT",  () => { _shutdownStatusServer(); process.exit(0); });
-process.on("SIGTERM", () => { _shutdownStatusServer(); process.exit(0); });
+// Shutdown: write every store to disk before exiting, so owner modes (public /
+// private), sudo lists and settings made in the last few seconds survive a restart.
+function _flushAllStoresSync() {
+  try { saveGuardDb(_ownerRecord()); } catch (e) { console.error("[shutdown-save] guard:", e?.message || e); }
+  try {
+    saveAllData({
+      economy, settings, warns, bans: bannedUsers, sudo: sudoUsers, sudoVip: sudoVipUsers,
+      badwords: badWords, inventory, relationships, factions,
+      userfaction: userFaction, crypto: cryptoPortfolios, grouprules: groupRules,
+    });
+  } catch (e) { console.error("[shutdown-save]", e?.message || e); }
+}
+process.on("SIGINT",  () => { _shutdownStatusServer(); _flushAllStoresSync(); process.exit(0); });
+process.on("SIGTERM", () => { _shutdownStatusServer(); _flushAllStoresSync(); process.exit(0); });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WHATSAPP CONNECTION (main socket)
@@ -19022,12 +19034,13 @@ cmd(["reddit","redditdl"], { desc: "Download Reddit post/video", category: "DOWN
 
 cmd(["pinterest", "pinsearch", "pindl", "pin2"], { desc: "Pinterest search/download — .pin2 <query> [limit] or .pin2 <URL>", category: "DOWNLOAD" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage:\n${CONFIG.PREFIX}pin2 <search query> [1-10]\n${CONFIG.PREFIX}pin2 <pinterest URL>`); return; }
-  await react(sock, msg, "📌");
+  await react(sock, msg, "🌀");
   const input = args.join(" ");
   const isUrl = /https?:\/\//.test(args[0]);
   if (isUrl) {
     const _pinUrl = args[0];
     const _pinDlApis = [
+      async () => { const r = await nxGet("/downloader/pinterest", { url: _pinUrl }, 45000); const d = r?.result || {}; const v = Array.isArray(d.video) ? d.video[0]?.url : d.video; return v || d.image || d.url || d.download_url; },
       async () => { const r = await prexzyGet("/download/pinterestV2", { url: _pinUrl }, 45000); const d = r.data?.data || r.data; return d?.url || d?.video || d?.image || d?.downloadUrl; },
       async () => { const r = await prexzyGet("/download/pinterest", { url: _pinUrl }, 40000); const d = r.data?.data || r.data; return d?.url || d?.video || d?.image; },
       async () => { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/pinterest?url=${encodeURIComponent(_pinUrl)}`, { timeout: 30000 });
@@ -19039,7 +19052,7 @@ for (const _a of ["pinterest2", "pinterestv2", "pindlv2", "pinterestdl2"]) { con
     for (const tryDl of _pinDlApis) {
       try { _pinDlUrl = await tryDl(); if (_pinDlUrl && _pinDlUrl.startsWith("http")) break; } catch {}
     }
-    if (!_pinDlUrl) { await sendReply(sock, msg, `❌ Could not download from this Pinterest URL.\nTry *${CONFIG.PREFIX}pinterestv2 ${_pinUrl}*`); return; }
+    if (!_pinDlUrl) { await react(sock, msg, "❌"); await sendReply(sock, msg, `❌ *Pinterest download failed.* No source could fetch this pin (tried ${_pinDlApis.length} APIs). The pin may be private or removed.\nTry *${CONFIG.PREFIX}pinterestv2 ${_pinUrl}*`); return; }
     try {
       const _pR = await axios.get(_pinDlUrl, { responseType: "arraybuffer", timeout: 60000, headers: { "User-Agent": "Mozilla/5.0", "Referer": "https://www.pinterest.com/" } });
       const _pBuf = Buffer.from(_pR.data);
@@ -19049,7 +19062,8 @@ for (const _a of ["pinterest2", "pinterestv2", "pindlv2", "pinterestdl2"]) { con
       } else {
         await sock.sendMessage(msg.key.remoteJid, { image: _pBuf, caption: `📌 *Pinterest*` }, { quoted: msg });
       }
-    } catch (e) { await sendReply(sock, msg, `❌ Pinterest download failed: ${e.message}`); }
+      await react(sock, msg, "✅");
+    } catch (e) { await react(sock, msg, "❌"); await sendReply(sock, msg, `❌ *Pinterest download failed:* ${e.message}`); }
     return;
   }
   // Search Pinterest
@@ -19100,7 +19114,8 @@ for (const _a of ["pinterest2", "pinterestv2", "pindlv2", "pinterestdl2"]) { con
   for (const tryApi of searchApis) {
     try { results = await tryApi(); if (results?.length) break; } catch { continue; }
   }
-  if (!results?.length) { await sendReply(sock, msg, `❌ No Pinterest results for: *${query}*`); return; }
+  if (!results?.length) { await react(sock, msg, "❌"); await sendReply(sock, msg, `❌ *No Pinterest results* for: *${query}*`); return; }
+  await react(sock, msg, "✅");
   const items = results.slice(0, limit);
   let sent = 0;
   const _pinHeaders = {
@@ -23838,32 +23853,72 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
 
 // .mediafiredl — MediaFire downloader
 cmd(["mediafire", "mediafire2", "mediafiredl", "mfdl", "mfdl2"], { desc: "Download MediaFire file — .mediafiredl <url>", category: "DOWNLOAD" }, async (sock, msg, args) => {
-    if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}mediafiredl <mediafire_url>*`); return; }
-    await react(sock, msg, "📦");
-    const url = args[0];
-    const jid = msg.key.remoteJid;
-    const stMsg = await sock.sendMessage(jid, { text: `📦 *MIAS MDX — MediaFire*\n\n⬡ Fetching file info...\n⬡ Downloading...\n⬡ Sending...` }, { quoted: msg });
-    const stKey = stMsg.key;
+  const jid = msg.key.remoteJid;
+  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}mediafiredl <mediafire_url>*`); return; }
+  const url = args[0];
+  if (!/mediafire\.com|mfi\.re/i.test(url)) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Not a MediaFire link.*\n\nUsage: *${CONFIG.PREFIX}mediafiredl <mediafire_url>*`);
+    return;
+  }
+  await react(sock, msg, "🌀");
+  const stMsg = await sock.sendMessage(jid, { text: `📦 *MIAS MDX — MediaFire*\n\n🌀 Finding a working source...` }, { quoted: msg }).catch(() => null);
+  const stKey = stMsg?.key;
+  const progress = (t) => { if (stKey) editMessage(sock, jid, stKey, `📦 *MIAS MDX — MediaFire*\n\n${t}`).catch(() => {}); };
+  // Pick a direct link + filename out of any provider's JSON shape.
+  const mfPick = (d) => {
+    if (!d || typeof d !== "object") return null;
+    const link = [d.download_url, d.downloadUrl, d.url, d.link, d.dl, d.download, d.data?.download_url, d.data?.url]
+      .find((v) => typeof v === "string" && /^https?:\/\//i.test(v));
+    if (!link) return null;
+    return { url: link, filename: String(d.filename || d.fileName || d.file_name || d.name || d.data?.filename || "").trim() };
+  };
+  const mfResolveDirect = async () => {
+    const { resolveMediaFire } = createRequire(import.meta.url)("./lib/mediafireResolver.cjs");
+    return { url: await resolveMediaFire(url, { timeoutMs: 30000 }) };
+  };
+  // Source order: Nexray -> Prexzy -> Nexoracle -> built-in page resolver (no API key needed).
+  const MF_SOURCES = [
+    ["Nexray",     async () => mfPick((await nxGet("/downloader/mediafire", { url }, 45000)).result)],
+    ["Prexzy",     async () => { const r = await prexzyGet("/download/mediafire", { url }, 30000); return mfPick(r.ok ? (r.data?.data ?? r.data) : null); }],
+    ["Nexoracle",  async () => { const { data } = await axios.get(`https://api.nexoracle.com/downloader/mediafire?apikey=free_key@maher_apis&url=${encodeURIComponent(url)}`, { timeout: 30000 }); return mfPick(data?.result ?? data); }],
+    ["Direct page", mfResolveDirect],
+  ];
+  const failures = [];
+  let found = null;
+  let usedSource = "";
+  for (const [name, fn] of MF_SOURCES) {
     try {
-      const r = await prexzyGet("/download/mediafire", { url }, 30000);
-      const d = r.data;
-      const dlUrl = d?.data?.download_url || d?.data?.url || d?.url;
-      const fname = d?.data?.filename || d?.filename || "mediafire_file";
-      if (!r.ok || !dlUrl) { await editMessage(sock, jid, stKey, `📦 *MIAS MDX — MediaFire*\n\n✖ Could not get download link. The file may be private or removed.`); return; }
-      await editMessage(sock, jid, stKey, `📦 *MIAS MDX — MediaFire*\n\n⬢ Fetching file info... ✅\n⬡ Downloading *${fname}*...\n⬡ Sending...`);
-      const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000 })).data);
-      const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
-      await editMessage(sock, jid, stKey, `📦 *MIAS MDX — MediaFire*\n\n⬢ Fetching info... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
-      await sock.sendMessage(jid, { document: buf, mimetype: "application/octet-stream", fileName: fname, caption: `📦 *${fname}*${sz}` }, { quoted: msg });
-      await editMessage(sock, jid, stKey, `📦 *MIAS MDX — MediaFire*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!* ${fname}${sz}`);
-      await react(sock, msg, "✅");
-    } catch(e) { await editMessage(sock, jid, stKey, `📦 *MIAS MDX — MediaFire*\n\n❌ Error: ${e.message}`); }
-  
-  // ── FALLBACK ENDPOINTS (merged from duplicate cmd registrations) ──
-  // fallback URL: https://api.siputzx.my.id/api/d/mediafire?url=${encodeURIComponent(mfU
-  // fallback URL: https://api.nexoracle.com/downloader/mediafire?apikey=free_key@maher_a
-  // fallback URL: https://api.ryzendesu.vip/api/downloader/mediafire?url=${encodeURIComp
-  // fallback URL: https://widipe.com/download/mediafiredl?url=${encodeURIComponent(mfUrl
+      const f = await fn();
+      if (f?.url) { found = f; usedSource = name; break; }
+      failures.push(`• ${name}: no download link`);
+    } catch (e) {
+      failures.push(`• ${name}: ${String(e?.message || e).slice(0, 80)}`);
+    }
+  }
+  if (!found) {
+    await react(sock, msg, "❌");
+    const txt = `❌ *MediaFire download failed*\n\nNo source could get a download link. The file may be private, removed, or over the size limit.\n\n*Sources tried:*\n${failures.join("\n")}`;
+    if (stKey) await editMessage(sock, jid, stKey, `📦 *MIAS MDX — MediaFire*\n\n${txt}`).catch(() => {});
+    else await sendReply(sock, msg, txt);
+    return;
+  }
+  const fname = found.filename || decodeURIComponent(new URL(url).pathname.split("/")[3] || "") || "mediafire_file";
+  progress(`⬢ Source: ${usedSource} ✅\n🌀 Downloading *${fname}*...`);
+  try {
+    const res = await axios.get(found.url, { responseType: "arraybuffer", timeout: 120000, maxContentLength: 300 * 1024 * 1024, maxBodyLength: 300 * 1024 * 1024, headers: { "User-Agent": "Mozilla/5.0" } });
+    const ctype = String(res.headers?.["content-type"] || "");
+    if (/text\/html/i.test(ctype)) throw new Error("source returned a web page instead of the file");
+    const buf = Buffer.from(res.data);
+    if (!buf.length) throw new Error("source returned an empty file");
+    const sz = ` (${buf.length >= 1048576 ? (buf.length / 1048576).toFixed(2) + " MB" : (buf.length / 1024).toFixed(1) + " KB"})`;
+    await sock.sendMessage(jid, { document: buf, mimetype: "application/octet-stream", fileName: fname, caption: `📦 *${fname}*${sz}` }, { quoted: msg });
+    await react(sock, msg, "✅");
+    progress(`✅ *Done!* ${fname}${sz}\n⬢ Source: ${usedSource}`);
+  } catch (e) {
+    await react(sock, msg, "❌");
+    progress(`❌ *Download failed* (${usedSource})\n${String(e?.message || e).slice(0, 200)}`);
+  }
 });
 
 // .unzip / .extract — Extract files from a ZIP archive one by one
@@ -37879,7 +37934,7 @@ for (const n of ["play2"]) { if (commands.has("play")) { commands.set(n, { ...co
     //   but a later step throws, the ✅ never fires.
     //   Fix: always react ✅ after confirmed post, regardless of later errors.
     // ════════════════════════════════════════════════════════════════════════
-    const _GST_CMD_NAMES = new Set(["gst", "gstatus", "groupstatus"]);
+    const _GST_CMD_NAMES = new Set(["gst", "gstatus", "groupstatus", "gcstatus", "gcstory"]);
 
     // Helper copies from existing LATE-PATCH scope (already defined above v23)
     const _v23Context = (msg) => {
@@ -43522,7 +43577,7 @@ function __miasApplyMaintenance(registry, aliasMap, categories) {
   // 4. Hidden parent->alias pairs the owner requested. The alias stays CALLABLE
   //    (invokes the parent's handler, inherits permissions) but is flagged
   //    isAlias so it is hidden from every menu listing and command count.
-  for (const [aliasName, parent] of Object.entries({ gclockmedia: "lockmedia", gst: "groupstatus" })) {
+  for (const [aliasName, parent] of Object.entries({ gclockmedia: "lockmedia", gst: "groupstatus", gcstory: "groupstatus", gcstatus: "groupstatus" })) {
     if (DISABLED_COMMANDS.has(aliasName)) continue;
     const parentEntry = registry.get(parent);
     if (!parentEntry || typeof parentEntry.handler !== "function") { report.skipped.push(aliasName); continue; }

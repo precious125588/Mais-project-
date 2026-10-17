@@ -192,22 +192,30 @@ export function installSpotifyCommands(ctx) {
     return null;
   }
 
-  function buildCard(meta, hasVideo) {
+  // Premium caption: Unicode-styled fixed labels only. Song title and artist are
+  // inserted as plain text (bold markers only), so they are never re-styled.
+  function buildCard(meta) {
+    const title = String(meta.title || "Unknown title").slice(0, 80);
+    const artist = String(meta.artist || "Unknown artist").slice(0, 80);
     return [
-      `🎧 *${brand()}*`,
+      "━━━━━ 𝙎𝙋𝙊𝙏𝙄𝙁𝙔 𝘿𝙊𝙒𝙉𝙇𝙊𝘼𝘿 ━━━━━",
       "",
-      `🎵 *Title:*     ${String(meta.title).slice(0, 80)}`,
-      `👤 *Artist:*    ${String(meta.artist).slice(0, 80)}`,
-      `⏱️ *Duration:*  ${fmtDur(meta.durationSec)}`,
+      `*${title}*`,
+      "",
+      `𝗔𝗿𝘁𝗶𝘀𝘁: ${artist}`,
+      `𝗗𝘂𝗿𝗮𝘁𝗶𝗼𝗻: ${fmtDur(meta.durationSec)}`,
       "",
       "━━━━━━━━━━━━━━━━━━━━",
-      "📥 *Quote this card with a number:*",
       "",
-      "  1️⃣  *Music file* — MP3 audio",
-      "  2️⃣  *Voice note* — voice message",
-      hasVideo ? "  3️⃣  *Video file* — mp4 ✅" : "  3️⃣  *Video file* — ❌ video not available",
+      "𝑺𝑬𝑳𝑬𝑪𝑻 𝑭𝑶𝑹𝑴𝑨𝑻",
       "",
-      "_Example: quote this card with_ `1` _for the music file._",
+      "1. 𝗠𝘂𝘀𝗶𝗰 𝗙𝗶𝗹𝗲 — MP3 𝗔𝘂𝗱𝗶𝗼",
+      "2. 𝗩𝗼𝗶𝗰𝗲 𝗡𝗼𝘁𝗲 — 𝗩𝗼𝗶𝗰𝗲 𝗠𝗲𝘀𝘀𝗮𝗴𝗲",
+      "3. 𝗩𝗶𝗱𝗲𝗼 𝗙𝗶𝗹𝗲 — MP4",
+      "",
+      "Reply to this message with 1, 2, or 3 to choose your format.",
+      "",
+      "𝙋𝙊𝙒𝙀𝙍𝙀𝘿 𝘽𝙔 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x",
     ].join("\n");
   }
 
@@ -315,7 +323,7 @@ export function installSpotifyCommands(ctx) {
       if (!track) throw new Error("all Spotify providers are busy right now. Try again in a minute.");
       const videoUrl = await findVideoUrl(track.meta);
       const cover = track.meta.cover ? await fetchBuf(track.meta.cover, 15000).catch(() => null) : null;
-      const card = buildCard(track.meta, !!videoUrl);
+      const card = buildCard(track.meta);
       const sent = cover && cover.length > 2000
         ? await sock.sendMessage(jid, { image: cover, caption: card }, { quoted: msg }).catch(() => null)
         : await sock.sendMessage(jid, { text: card }, { quoted: msg }).catch(() => null);

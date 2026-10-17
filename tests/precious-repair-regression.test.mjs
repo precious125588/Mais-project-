@@ -114,7 +114,7 @@ test("a disabled alias is still blocked through its canonical (no bypass)", () =
 });
 
 test("hidden aliases gclockmedia and gst stay CALLABLE and resolve to their parents", () => {
-  const aliBlock = IDX.split("Object.entries({ gclockmedia: \"lockmedia\", gst: \"groupstatus\" })")[1];
+  const aliBlock = IDX.split("Object.entries({ gclockmedia: \"lockmedia\", gst: \"groupstatus\", gcstory: \"groupstatus\", gcstatus: \"groupstatus\" })")[1];
   assert.ok(aliBlock.includes("registry.set(aliasName, { ...parentEntry, isAlias: true, canonical: parent });"), "hidden aliases must reuse the parent handler");
   assert.ok(aliBlock.includes("aliasMap.set(aliasName, parent);"), "hidden aliases must resolve to the parent canonical");
   // parents remain active and are NOT in the disabled set
