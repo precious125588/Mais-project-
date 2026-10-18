@@ -7,7 +7,7 @@ dockerfilePath = "Dockerfile"
 # server.js binds $PORT, serves /api/health (used by the healthcheck below),
 # spawns the bot launcher and auto-loads paired sessions. It never prompts
 # for a terminal password, so it runs unattended on Railway.
-startCommand = "node server.js"
+startCommand = "node scripts/start-with-session-migration.cjs"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"

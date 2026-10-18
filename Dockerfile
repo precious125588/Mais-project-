@@ -102,4 +102,4 @@ RUN for d in . mias; do \
 EXPOSE 3000
 
 # v34: every fix is baked into the tree; the merged master boot runs from server.js
-CMD ["node", "server.js"]
+CMD ["node", "scripts/start-with-session-migration.cjs"]

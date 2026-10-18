@@ -4,8 +4,8 @@
   "description": "MAIS MDX Web Pairing System with Admin Panel",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "node scripts/start-with-session-migration.cjs",
+    "dev": "node scripts/start-with-session-migration.cjs",
     "setup": "cd mias && rm -rf node_modules package-lock.json && npm install --no-audit --no-fund",
     "check:infrastructure": "node scripts/validate-infrastructure.cjs",
     "test": "node --test tests/*.test.mjs",
@@ -13,7 +13,8 @@
     "test:status": "node --test tests/status-edit-flow.test.mjs",
     "neon:check": "node mias/scripts/check-neon.mjs",
     "neon:migrate": "node mias/scripts/migrate-neon.mjs",
-    "neon:export": "node mias/scripts/export-neon-state.mjs"
+    "neon:export": "node mias/scripts/export-neon-state.mjs",
+    "sessions:migrate-db": "node scripts/migrate-session-database.cjs"
   },
   "author": "MAIS",
   "license": "MIT",

@@ -7,18 +7,26 @@ configured. Each bot instance is isolated by a SHA-256 scope derived from
 `AUTH_DIR` (or the explicit `MIAS_DB_SCOPE` override); the unhashed session path
 is not stored in Neon.
 
-WhatsApp/Baileys credentials, Signal keys, pairing state, ownership markers,
-the session registry, bot selections, and temporary media remain on the
-existing Railway volume. This integration does not change the authentication
-adapter or remove any legacy JSON files.
+WhatsApp/Baileys credentials are stored in the additive session tables, using
+the same `DATABASE_URL` as bot settings when it is configured. `SESSION_DATABASE_URL`
+is only a legacy fallback and a one-time migration source. Signal keys, pairing
+state, ownership markers, and temporary media remain on the existing Railway
+volume. This integration does not change the authentication adapter or remove
+any legacy JSON files.
 
 ## Configuration
 
 Set `DATABASE_URL` in the existing Railway bot service's Variables to the
 **pooled** PostgreSQL URL for the existing Neon project, `production` branch,
-and `neondb` database. The connection string belongs only in Railway's secret
-variable store. Do not place it in `.env`, source code, logs, or the replacement
-ZIP.
+and `neondb` database. Both settings and session tables use this database.
+Connection strings belong only in Railway's secret variable store. Do not put
+them in `.env`, source code, logs, or an uploaded ZIP.
+
+If sessions currently live at a different URL, keep that old URL in
+`SESSION_DATABASE_URL` temporarily and follow
+[`SESSION-DATABASE-UNIFICATION.md`](SESSION-DATABASE-UNIFICATION.md) to preview
+and merge those records into `DATABASE_URL`. Remove the old variable only after
+the deployed app reports the expected session count.
 
 The public repository previously tracked a root `.env` file. This branch removes
 it from Git while leaving the local file untouched. Before merging, set
@@ -92,7 +100,7 @@ The schema migration is additive; recovery does not require dropping tables.
 - Temporary media and downloads.
 
 This keeps the existing multi-session authentication and logout cleanup paths
-unchanged. No active session credentials are copied into PostgreSQL.
+unchanged. The DB merge does not log out linked devices or delete source rows.
 
 ## Local verification
 

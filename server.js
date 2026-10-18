@@ -268,7 +268,7 @@ let _dbStatusCache = {
   checkedAt: 0,
   attached: false,
   status: 'not_configured',
-  message: 'SESSION_DATABASE_URL (or legacy DATABASE_URL) is not set',
+  message: 'DATABASE_URL (or legacy SESSION_DATABASE_URL) is not set',
   database: null,
   volumeMounted: false,
 };
@@ -290,7 +290,7 @@ async function checkDbStatus(force = false) {
       checkedAt: now,
       attached: false,
       status: 'not_configured',
-      message: 'SESSION_DATABASE_URL (or legacy DATABASE_URL) is not set',
+      message: 'DATABASE_URL (or legacy SESSION_DATABASE_URL) is not set',
       database: null,
       volumeMounted,
     };
@@ -311,7 +311,10 @@ async function checkDbStatus(force = false) {
       database: row?.db || 'neondb',
       sessionsInDb,
       role: 'sessions',
-      separateSessionDatabase: Boolean(String(process.env.SESSION_DATABASE_URL || '').trim()),
+      sessionDatabaseMode: process.env.SESSION_DATABASE_MIGRATION_FAILED === '1'
+        ? 'legacy-fallback'
+        : (String(process.env.DATABASE_URL || '').trim() ? 'shared' : 'legacy-session-only'),
+      legacySessionDatabaseConfigured: Boolean(String(process.env.SESSION_DATABASE_URL || '').trim()),
       volumeMounted,
     };
   } catch (err) {

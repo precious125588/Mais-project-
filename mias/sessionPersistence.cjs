@@ -21,7 +21,14 @@ function getPool() {
 }
 
 function getDatabaseUrl() {
-  return String(process.env.SESSION_DATABASE_URL || process.env.DATABASE_URL || '').trim();
+  // Session auth, registry, and bot selections share the same Neon database as
+  // the settings stores. SESSION_DATABASE_URL remains a legacy fallback for
+  // deployments that have not yet configured DATABASE_URL, and a safe fallback
+  // if the pre-start migration could not copy legacy records.
+  if (process.env.SESSION_DATABASE_MIGRATION_FAILED === '1') {
+    return String(process.env.SESSION_DATABASE_URL || process.env.DATABASE_URL || '').trim();
+  }
+  return String(process.env.DATABASE_URL || process.env.SESSION_DATABASE_URL || '').trim();
 }
 
 function createPool() {

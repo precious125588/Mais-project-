@@ -268,15 +268,17 @@ test("restoreSessionDirFromDb sanitizes traversal in file_name", async () => {
 
 
 
-test('session database is separate from settings URL with legacy fallback', () => {
+test('session database shares DATABASE_URL and falls back to the legacy session URL', () => {
   const oldSettings = process.env.DATABASE_URL, oldSession = process.env.SESSION_DATABASE_URL;
   try {
     process.env.DATABASE_URL = 'postgresql://settings.test/neondb';
     process.env.SESSION_DATABASE_URL = 'postgresql://sessions.test/neondb';
-    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.SESSION_DATABASE_URL);
-    assert.equal(process.env.DATABASE_URL, 'postgresql://settings.test/neondb');
+    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.DATABASE_URL);
     delete process.env.SESSION_DATABASE_URL;
     assert.equal(sessionPersistence.getDatabaseUrl(), process.env.DATABASE_URL);
+    delete process.env.DATABASE_URL;
+    process.env.SESSION_DATABASE_URL = 'postgresql://sessions.test/neondb';
+    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.SESSION_DATABASE_URL);
   } finally {
     if (oldSettings === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = oldSettings;
     if (oldSession === undefined) delete process.env.SESSION_DATABASE_URL; else process.env.SESSION_DATABASE_URL = oldSession;
