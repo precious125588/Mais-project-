@@ -2681,17 +2681,33 @@ async function connectToWA(force = false) {
             console.log(`[MIAS] Auto-detected owner: +${sessionNumber}`);
           }
           const now = Date.now();
-          const noticeCooldown = 5 * 60 * 1000;
-          const lastNotice = Number(globalThis.__miasLastConnectionNoticeAt || 0);
-          if (ownerJid && now - lastNotice >= noticeCooldown) {
+          const noticeCooldown = 6 * 60 * 60 * 1000;
+          let lastNotice = Number(globalThis.__miasLastConnectionNoticeAt || 0);
+          const noticeFile = path.join(AUTH_DIR, ".last_alive_notice.json");
+          let noticeMeta = {};
+          try {
+            if (fs.existsSync(noticeFile)) {
+              noticeMeta = JSON.parse(fs.readFileSync(noticeFile, "utf8")) || {};
+              if (noticeMeta.lastNoticeAt) {
+                lastNotice = Math.max(lastNotice, Number(noticeMeta.lastNoticeAt));
+              }
+            }
+          } catch {}
+
+          const isManualRestart = Boolean(noticeMeta.manualRestart);
+          if (ownerJid && (isManualRestart || (now - lastNotice >= noticeCooldown))) {
             globalThis.__miasLastConnectionNoticeAt = now;
+            try {
+              fs.writeFileSync(noticeFile, JSON.stringify({ lastNoticeAt: now, manualRestart: false }), "utf8");
+            } catch {}
             const ownerDisplayName =
               (typeof getOwnerName === "function" ? getOwnerName() : null) ||
               CONFIG.OWNER_NAME || "Owner";
             const ownerPhoneNum = _cleanNum(ownerJid);
             console.log(`✅ MIAS MDX is active | Owner: ${ownerDisplayName} (+${ownerPhoneNum || "unknown"}) | ${getPrimaryCommandCount()} commands loaded`);
+            const botDisplayName = CONFIG.BOT_NAME || "PRECIOUS x";
             await sock.sendMessage(ownerJid, {
-              text: `MIAS is ALIVE\n\nBy \ud835\udc77\ud835\udc79\ud835\udc6c\ud835\udc6a\ud835\udc70\ud835\udc76\ud835\udc7c\ud835\udc7a x`,
+              text: `${botDisplayName} is ALIVE\n\nBy \ud835\udc77\ud835\udc79\ud835\udc6c\ud835\udc6a\ud835\udc70\ud835\udc76\ud835\udc7c\ud835\udc7a x`,
             });
           }
           try {
@@ -16896,6 +16912,10 @@ cmd("restart", { desc: "Restart bot — saves data first", category: "OWNER", ow
 
 🟡 Bot will be back online in a few seconds.`);
   try { if (typeof saveNow === "function") saveNow(); } catch {}
+  try {
+    const _nf = path.join(AUTH_DIR, ".last_alive_notice.json");
+    fs.writeFileSync(_nf, JSON.stringify({ manualRestart: true, requestedAt: Date.now() }), "utf8");
+  } catch {}
   // EXIT CODE 75 signals mais_launcher to restart only THIS user bot
   setTimeout(() => process.exit(75), 2500);
 });
@@ -18936,28 +18956,133 @@ cmd(["instagram","ig","igdl"], { desc: "Download Instagram post/reel", category:
     await react(sock, msg, "📸");
     const url = args[0];
     const jid = msg.key.remoteJid;
-    const stMsg = await sock.sendMessage(jid, { text: `📸 *MIAS MDX — Instagram*\n\n⬡ Fetching post...\n⬡ Downloading media...\n⬡ Sending...` }, { quoted: msg });
+    const stMsg = await sock.sendMessage(jid, { text: `📸 *MIAS MDX — Instagram HD*\n\n⬡ Fetching post...\n⬡ Downloading media...\n⬡ Sending...` }, { quoted: msg });
     const stKey = stMsg.key;
+
+    const _fs = require("fs");
+    const _os = require("os");
+    const _path = require("path");
+
+    function _pickBestMedia(res) {
+      if (!res) return null;
+      if (typeof res === "string" && res.startsWith("http")) return { url: res, isVideo: res.includes(".mp4") || res.includes("video") };
+      if (Array.isArray(res)) {
+        const hdItem = res.find(i => (i?.quality && /1080|720|hd/i.test(i.quality)) || i?.hd || i?.video_hd);
+        if (hdItem) {
+          const u = hdItem.hd || hdItem.video_hd || hdItem.url || hdItem.download_url;
+          if (u) return { url: u, isVideo: true, isHd: true };
+        }
+        for (const item of res) {
+          const u = item?.url || item?.video || item?.download_url || item?.thumb;
+          if (u) return { url: u, isVideo: (item.type === "video" || u.includes(".mp4") || u.includes("video")), isHd: Boolean(item.hd) };
+        }
+      }
+      const data = res?.result || res?.data || res;
+      if (Array.isArray(data)) return _pickBestMedia(data);
+      const hdUrl = data?.hd || data?.video_hd || data?.url_hd || data?.download_url_hd || data?.videoUrlHd;
+      if (hdUrl) return { url: hdUrl, isVideo: true, isHd: true };
+      const vidUrl = data?.video || data?.video_url || data?.download_url || (data?.url && (data.url.includes(".mp4") || data.type === "video") ? data.url : null);
+      if (vidUrl) return { url: vidUrl, isVideo: true, isHd: false };
+      const anyUrl = data?.url || data?.image || data?.photo || data?.thumb;
+      if (anyUrl) return { url: anyUrl, isVideo: anyUrl.includes(".mp4") || anyUrl.includes("video"), isHd: false };
+      return null;
+    }
+
+    let tmpDir = null;
     try {
-      let dlUrl = null;
-      if (!dlUrl && nx?.downloader?.instagram) { try { const res = await nx.downloader.instagram({ url }); dlUrl = res?.result?.video || res?.result?.url || (Array.isArray(res?.result) ? res.result[0]?.url : null); } catch {} }
-      if (!dlUrl) { const r = await prexzyGet("/download/instagram", { url }); const d = r.data; if (r.ok && d) dlUrl = d?.data?.[0]?.url || d?.data?.url || d?.url; }
-      if (!dlUrl) { const r = await prexzyGet("/download/ig2", { url }); const d = r.data; if (r.ok && d) dlUrl = d?.data?.[0]?.url || d?.data?.video || d?.url; }
-      if (!dlUrl) { try { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/igdl?url=${encodeURIComponent(url)}`, { timeout: 20000 }); dlUrl = data?.data?.[0]?.url || data?.url; } catch {} }
-      if (!dlUrl) { try { const { data } = await axios.get(`https://api.siputzx.my.id/api/d/instagram?url=${encodeURIComponent(url)}`, { timeout: 20000 }); dlUrl = data?.data?.[0]?.url || data?.url; } catch {} }
-      if (!dlUrl) dlUrl = await _cobaltDl(url, { downloadMode: "auto" });
-      if (!dlUrl) { await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n✖ Could not download. Make sure the URL is a *public* post or reel.`); return; }
-      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n⬢ Fetching post... ✅\n⬡ Downloading media...\n⬡ Sending...`);
-      const buf = Buffer.from((await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000, headers: { "User-Agent": "Mozilla/5.0" } })).data);
-      const sz = ` (${buf.length>=1048576?(buf.length/1048576).toFixed(2)+' MB':(buf.length/1024).toFixed(1)+' KB'})`;
-      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n⬢ Fetching post... ✅\n⬢ Downloading media... ✅\n⬡ Sending...`);
-      const isVideo = dlUrl.includes(".mp4") || dlUrl.includes("video");
-      const cap = `📸 *Instagram*${sz}`;
-      if (isVideo) { await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `ig_${Date.now()}.mp4`, quoted: msg }); }
-      else { await sock.sendMessage(jid, { image: buf, caption: cap }, { quoted: msg }); }
-      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*${sz}`);
+      let candidate = null;
+
+      // 1. NexRay Instagram
+      if (!candidate && nx?.downloader?.instagram) {
+        try { const res = await nx.downloader.instagram({ url }); candidate = _pickBestMedia(res); } catch {}
+      }
+      // 2. NexRay Reels
+      if (!candidate && nx?.downloader?.reels) {
+        try { const res = await nx.downloader.reels({ url }); candidate = _pickBestMedia(res); } catch {}
+      }
+      // 3. Prexzy Instagram
+      if (!candidate) {
+        try { const r = await prexzyGet("/download/instagram", { url }, 25000); if (r.ok && r.data) candidate = _pickBestMedia(r.data); } catch {}
+      }
+      if (!candidate) {
+        try { const r = await prexzyGet("/download/ig2", { url }, 25000); if (r.ok && r.data) candidate = _pickBestMedia(r.data); } catch {}
+      }
+      // 4. Ryzendesu Instagram HD
+      if (!candidate) {
+        try { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/igdl?url=${encodeURIComponent(url)}`, { timeout: 25000 }); candidate = _pickBestMedia(data); } catch {}
+      }
+      // 5. Siputzx Instagram
+      if (!candidate) {
+        try { const { data } = await axios.get(`https://api.siputzx.my.id/api/d/instagram?url=${encodeURIComponent(url)}`, { timeout: 25000 }); candidate = _pickBestMedia(data); } catch {}
+      }
+      // 6. Cobalt auto/HD
+      if (!candidate) {
+        try {
+          const cobaltUrl = await _cobaltDl(url, { downloadMode: "auto" });
+          if (cobaltUrl) candidate = { url: cobaltUrl, isVideo: true, isHd: true };
+        } catch {}
+      }
+      // 7. NexRay AIO
+      if (!candidate && nx?.downloader?.aio) {
+        try { const res = await nx.downloader.aio({ url }); candidate = _pickBestMedia(res); } catch {}
+      }
+
+      if (!candidate?.url) {
+        await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n✖ Could not download. Make sure the URL is a *public* post, reel, or story.`);
+        await react(sock, msg, "❌");
+        return;
+      }
+
+      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram HD*\n\n⬢ Fetching post... ✅\n⬡ Downloading ${candidate.isHd ? "HD " : ""}media to disk...\n⬡ Sending...`);
+
+      // Stream download to disk
+      tmpDir = await _fs.promises.mkdtemp(_path.join(_os.tmpdir(), "igdl-"));
+      const isVideo = candidate.isVideo || candidate.url.includes(".mp4") || candidate.url.includes("video");
+      const ext = isVideo ? "mp4" : "jpg";
+      const filePath = _path.join(tmpDir, `instagram_${Date.now()}.${ext}`);
+      let mediaBytes = 0;
+
+      const resp = await axios.get(candidate.url, {
+        responseType: "stream",
+        timeout: 120000,
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+      });
+
+      await new Promise((resolve, reject) => {
+        const ws = _fs.createWriteStream(filePath);
+        resp.data.on("data", (chunk) => { mediaBytes += chunk.length; });
+        resp.data.on("error", reject);
+        ws.on("error", reject);
+        ws.on("finish", resolve);
+        resp.data.pipe(ws);
+      });
+
+      const sz = ` (${mediaBytes >= 1048576 ? (mediaBytes / 1048576).toFixed(2) + " MB" : (mediaBytes / 1024).toFixed(1) + " KB"})`;
+      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram HD*\n\n⬢ Fetching post... ✅\n⬢ Downloading media... ✅\n⬡ Sending...`);
+
+      const hdBadge = candidate.isHd ? " [HD]" : "";
+      const cap = withJustXFooter(`📸 *Instagram${hdBadge}*${sz}`);
+
+      if (isVideo) {
+        try {
+          await sock.sendMessage(jid, { video: { url: filePath }, mimetype: "video/mp4", caption: cap }, { quoted: msg });
+        } catch (vidErr) {
+          await sock.sendMessage(jid, { document: { url: filePath }, mimetype: "video/mp4", fileName: `instagram_hd_${Date.now()}.mp4`, caption: cap }, { quoted: msg });
+        }
+      } else {
+        await sock.sendMessage(jid, { image: { url: filePath }, caption: cap }, { quoted: msg });
+      }
+
+      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram HD*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*${sz}`);
       await react(sock, msg, "✅");
-    } catch(e) { await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n❌ Error: ${e.message}`); }
+    } catch(e) {
+      await editMessage(sock, jid, stKey, `📸 *MIAS MDX — Instagram*\n\n❌ Error: ${e.message}`);
+      await react(sock, msg, "❌");
+    } finally {
+      if (tmpDir) {
+        await _fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
   });
 
 cmd(["snapchat","snap","snapdl"], { desc: "Download Snapchat spotlight/story", category: "DOWNLOAD" }, async (sock, msg, args) => {
@@ -19258,99 +19383,184 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}apk <app name>`); return; }
   await react(sock, msg, "📱");
   const jid = msg.key.remoteJid;
-  const query = args.join(" ");
+  const query = args.join(" ").trim();
   const statusMsg = await sock.sendMessage(jid, { text: `📱 *MIAS MDX APK*\n\n⬡ Searching for *${query}*...\n◻ Downloading APK...\n◻ Sending file...` }, { quoted: msg });
   const apkKey = statusMsg.key;
+
+  const _fs = require("fs");
+  const _os = require("os");
+  const _path = require("path");
+
   const apkApis = [
-    // Toxicapis first — fast and tends to work
+    // 1. NexRay playstore / search
+    async () => {
+      if (!nx?.downloader?.playstore) return null;
+      try {
+        const r = await nx.downloader.playstore({ url: query });
+        const res = r?.result || r?.data || r;
+        const dl = res?.download || res?.url || res?.dllink;
+        if (dl) return { dl, name: res?.name || res?.title || query, desc: res?.description || res?.desc };
+      } catch {}
+      return null;
+    },
+    // 2. NexRay APKPure search
+    async () => {
+      if (!nx?.search?.apkpure) return null;
+      try {
+        const r = await nx.search.apkpure({ query });
+        const res = Array.isArray(r?.result) ? r.result[0] : (r?.result || r?.data);
+        const dl = res?.download || res?.url || res?.dllink;
+        if (dl) return { dl, name: res?.name || res?.title || query, desc: res?.description };
+      } catch {}
+      return null;
+    },
+    // 3. Prexzy APK
+    async () => {
+      try {
+        const r = await prexzyGet("/download/apk", { packageName: query });
+        if (r.ok && r.data) {
+          const d = r.data?.data || r.data;
+          const dl = d?.url || d?.download || d?.dllink;
+          if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
+        }
+      } catch {}
+      try {
+        const r2 = await prexzyGet("/download/apk", { name: query });
+        if (r2.ok && r2.data) {
+          const d2 = r2.data?.data || r2.data;
+          const dl = d2?.url || d2?.download || d2?.dllink;
+          if (dl) return { dl, name: d2?.name || d2?.title || query, desc: d2?.desc || d2?.description };
+        }
+      } catch {}
+      return null;
+    },
+    // 4. Toxicapis
     async () => {
       const t = (await toxicCall("/download/apk", { q: query, query, name: query }))
              || (await toxicCall("/d/apk",        { q: query, query, name: query }));
       if (!t) return null;
       return { dl: t.url, name: t.title || query, desc: t.desc };
     },
+    // 5. Gifted API
     async () => {
+      if (!CONFIG.GIFTED_API) return null;
       const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/download/apk?apikey=${CONFIG.GIFTED_KEY}&query=${encodeURIComponent(query)}`, { timeout: 30000 });
       const r = data?.result || data;
       return { dl: r?.download_url || r?.dllink || r?.url, name: r?.name || query, desc: r?.description };
     },
+    // 6. Siputzx
     async () => {
       const { data } = await axios.get(`https://api.siputzx.my.id/api/d/apk?query=${encodeURIComponent(query)}`, { timeout: 30000 });
       const r = data?.data || data?.result;
       return { dl: r?.download || r?.dllink || r?.url, name: r?.name || query, desc: r?.description };
     },
+    // 7. Nexoracle
     async () => {
       const { data } = await axios.get(`https://api.nexoracle.com/downloader/apk?apikey=free_key@maher_apis&query=${encodeURIComponent(query)}`, { timeout: 30000 });
       const r = data?.result;
       return { dl: r?.dllink || r?.download_url || r?.url, name: r?.name || query, desc: r?.description };
     },
+    // 8. Dreaded
     async () => {
       const { data } = await axios.get(`https://api.dreaded.site/api/apkdl?app=${encodeURIComponent(query)}`, { timeout: 30000 });
       return { dl: data?.download || data?.result?.download, name: data?.name || query, desc: data?.description };
     },
+    // 9. BK9 API
+    async () => {
+      const { data } = await axios.get(`https://bk9.fun/download/apk?q=${encodeURIComponent(query)}`, { timeout: 30000 });
+      const r = data?.BK9 || data?.result || data;
+      const dl = r?.dllink || r?.url || r?.download;
+      return { dl, name: r?.name || query, desc: r?.desc };
+    },
   ];
+
   for (const tryApi of apkApis) {
+    let tmpDir = null;
     try {
       const result = await tryApi();
-      if (result?.dl) {
-        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching for *${query}*... ✅\n⬡ Downloading APK...\n◻ Sending file...`);
-        // Check file size with HEAD first to avoid downloading huge APKs
-        let apkSizeOk = true;
-        try {
-          const head = await axios.head(result.dl, { timeout: 10000 });
-          const cLen = parseInt(head.headers?.["content-length"] || "0");
-          if (cLen > 95 * 1024 * 1024) {
-            // Too large for WhatsApp — send download link instead
-            apkSizeOk = false;
-            await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬡ APK too large to send directly (${Math.round(cLen/1024/1024)}MB > 95MB limit)\n\n📥 *Download here:*\n${result.dl}\n\n📛 App: ${result.name || query}${result.desc ? "\n📝 " + result.desc.slice(0, 200) : ""}`);
-            await sendCTAButtons(sock, jid, msg,
-              `📱 *${result.name || query}*\n_Too large for WhatsApp — tap below to download directly_`,
-              [
-                { type: "url",  text: "⬇️ Download APK",   url: result.dl },
-                { type: "copy", text: "📋 Copy APK Link",   value: result.dl, id: "apk_link_copy" },
-              ],
-              `${CONFIG.BOT_NAME} • APK Download`
-            ).catch(() => {});
-            return;
-          }
-        } catch {}
-        if (!apkSizeOk) return;
-        // FIX (bot restarting on .apk): stream the APK to a temp FILE instead
-        // of `responseType: "arraybuffer"`. Buffering a 50-150MB APK in RAM
-        // caused exit-137 OOM kills on small Railway containers, which looked
-        // like "the bot restarts whenever I use .apk".
-        const _fsA = require("fs"), _osA = require("os"), _pathA = require("path");
-        const _tmpDirA = await _fsA.promises.mkdtemp(_pathA.join(_osA.tmpdir(), "apkdl-"));
-        const _apkFile = _pathA.join(_tmpDirA, "app.apk");
-        let _apkBytes = 0;
-        try {
-          const _respA = await axios.get(result.dl, { responseType: "stream", timeout: 300000, maxRedirects: 5, headers: { "User-Agent": "Mozilla/5.0" } });
-          await new Promise((res2, rej2) => {
-            const ws = _fsA.createWriteStream(_apkFile);
-            _respA.data.on("data", (c) => { _apkBytes += c.length; if (_apkBytes > 95 * 1024 * 1024) _respA.data.destroy(Object.assign(new Error("too-large"), { __tooLarge: true })); });
-            _respA.data.on("error", rej2);
-            ws.on("error", rej2);
-            ws.on("finish", res2);
-            _respA.data.pipe(ws);
+      if (!result?.dl) continue;
+
+      await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching for *${query}*... ✅\n⬡ Downloading APK to disk...\n◻ Sending file...`);
+
+      // Check size with HEAD first
+      let cLen = 0;
+      try {
+        const head = await axios.head(result.dl, { timeout: 10000 });
+        cLen = parseInt(head.headers?.["content-length"] || "0", 10);
+      } catch {}
+
+      if (cLen > 95 * 1024 * 1024) {
+        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬡ APK too large for direct WhatsApp delivery (${Math.round(cLen / 1024 / 1024)}MB > 95MB limit)\n\n📥 *Download link:*\n${result.dl}\n\n📛 App: ${result.name || query}${result.desc ? "\n📝 " + result.desc.slice(0, 200) : ""}`);
+        await sendCTAButtons(sock, jid, msg,
+          `📱 *${result.name || query}*\n_Too large for WhatsApp — tap below to download directly_`,
+          [
+            { type: "url",  text: "⬇️ Download APK",   url: result.dl },
+            { type: "copy", text: "📋 Copy APK Link",   value: result.dl, id: "apk_link_copy" },
+          ],
+          `${CONFIG.BOT_NAME} • APK Download`
+        ).catch(() => {});
+        return;
+      }
+
+      // Stream download directly to disk
+      tmpDir = await _fs.promises.mkdtemp(_path.join(_os.tmpdir(), "apkdl-"));
+      const safeName = (result.name || query).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) || "app";
+      const apkFilePath = _path.join(tmpDir, `${safeName}.apk`);
+      let apkBytes = 0;
+
+      try {
+        const streamResp = await axios.get(result.dl, {
+          responseType: "stream",
+          timeout: 300000,
+          maxRedirects: 5,
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        });
+
+        await new Promise((resolve, reject) => {
+          const ws = _fs.createWriteStream(apkFilePath);
+          streamResp.data.on("data", (chunk) => {
+            apkBytes += chunk.length;
+            if (apkBytes > 95 * 1024 * 1024) {
+              streamResp.data.destroy(Object.assign(new Error("too-large"), { __tooLarge: true }));
+            }
           });
-        } catch (e2) {
-          await _fsA.promises.rm(_tmpDirA, { recursive: true, force: true }).catch(() => {});
-          if (e2?.__tooLarge || String(e2?.message) === "too-large") {
-            await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬡ APK too large to send via WhatsApp (>95MB)\n\n📥 *Download link:*\n${result.dl}\n\n📛 App: ${result.name || query}`);
-            return;
-          }
-          throw e2;
-        }
-        if (_apkBytes > 1000) {
-          await sock.sendMessage(jid, { document: { url: _apkFile }, mimetype: "application/vnd.android.package-archive", fileName: `${(result.name || query).replace(/[^a-zA-Z0-9 ]/g, "_")}.apk` }, { quoted: msg });
-          await _fsA.promises.rm(_tmpDirA, { recursive: true, force: true }).catch(() => {});
-          await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *${result.name}* sent!${result.desc ? "\n📝 " + result.desc.slice(0, 200) : ""}`);
+          streamResp.data.on("error", reject);
+          ws.on("error", reject);
+          ws.on("finish", resolve);
+          streamResp.data.pipe(ws);
+        });
+      } catch (streamErr) {
+        if (streamErr?.__tooLarge || String(streamErr?.message) === "too-large") {
+          await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬡ APK too large to send via WhatsApp (>95MB)\n\n📥 *Download link:*\n${result.dl}\n\n📛 App: ${result.name || query}`);
           return;
         }
+        throw streamErr;
       }
-    } catch { continue; }
+
+      if (apkBytes > 1000) {
+        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬢ Downloading... ✅\n⬡ Sending file...`);
+        await sock.sendMessage(jid, {
+          document: { url: apkFilePath },
+          mimetype: "application/vnd.android.package-archive",
+          fileName: `${safeName}.apk`,
+          caption: withJustXFooter(`📱 *${result.name || query}*\n📦 Size: ${(apkBytes / (1024 * 1024)).toFixed(2)} MB${result.desc ? "\n📝 " + result.desc.slice(0, 160) : ""}`)
+        }, { quoted: msg });
+
+        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *${result.name || query}* sent!`);
+        await react(sock, msg, "✅");
+        return;
+      }
+    } catch (e) {
+      continue;
+    } finally {
+      if (tmpDir) {
+        await _fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
   }
-  await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ❌\n\n⚠️ APK not found for: *${query}*\nTry a more specific app name.`);
+
+  await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ❌\n\n⚠️ APK not found for: *${query}*\nTry a more specific app name or package ID.`);
+  await react(sock, msg, "❌");
 });
 
 cmd("radio", { desc: "Play radio station", category: "AUDIO" }, async (sock, msg, args) => {
