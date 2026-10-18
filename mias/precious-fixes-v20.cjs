@@ -462,6 +462,10 @@ function install(ctx) {
     ['32.2', 'Status Reply', 'DISABLE', s => !s.statusReply],
     ['33.1', 'AI Tag', 'ENABLE', s => !!s.aiTag],
     ['33.2', 'AI Tag', 'DISABLE', s => !s.aiTag],
+    ['39.1', 'Anti ViewOnce', 'ENABLE', s => !!s.antiViewOnce],
+    ['39.2', 'Anti ViewOnce', 'DISABLE', s => !s.antiViewOnce],
+    ['40.1', 'Anti ViewOnce Mode', 'CHAT', s => (s.antiViewOnceMode || 'private') === 'chat'],
+    ['40.2', 'Anti ViewOnce Mode', 'PRIVATE', s => (s.antiViewOnceMode || 'private') === 'private'],
   ];
   report.rows = T.length;
 

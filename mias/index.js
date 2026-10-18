@@ -1702,6 +1702,7 @@ function defaultSettings() {
     // autoReact (legacy per-chat key) defaults OFF; message auto-react lives in autoReactMsgs.
     welcome: false, goodbye: false, adminOnly: false, autoReact: false,
     stickerWm: false, antiSpam: false, antiDelete: false,
+    antiViewOnce: false, antiViewOnceMode: "private",
     antiEdit: false, antiBad: false, antiSticker: false,
     antiStatus: false, antiRaid: false,
     blockCalls: true, linkGuard: "delete", badWordGuard: "delete",
@@ -7020,6 +7021,117 @@ async function downloadStoredMediaBuffer(mediaNode, type) {
   for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
   return buf;
 }
+
+// ── Anti-ViewOnce (Stealth / Chat Reveal) Handler ──────────────────────
+async function handleViewOnce(sock, msg) {
+  try {
+    if (!msg || !msg.message || msg.__voHandled) return;
+    if (msg.key && msg.key.fromMe) return;
+
+    const remoteJid = msg.key?.remoteJid || "";
+    const ownerJid = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
+    const sOwner = typeof getSettings === "function" ? getSettings(ownerJid) : {};
+    const sChat = (remoteJid && typeof getSettings === "function") ? getSettings(remoteJid) : {};
+
+    const isEnabled = !!(sOwner?.antiViewOnce || sChat?.antiViewOnce);
+    if (!isEnabled) return;
+
+    msg.__voHandled = true;
+
+    // Unwrap to find the viewOnce payload
+    let vo = msg.message;
+    for (let i = 0; i < 5; i++) {
+      const inner = vo?.viewOnceMessage?.message
+        || vo?.viewOnceMessageV2?.message
+        || vo?.viewOnceMessageV2Extension?.message
+        || vo?.ephemeralMessage?.message
+        || vo?.documentWithCaptionMessage?.message;
+      if (!inner || inner === vo) break;
+      vo = inner;
+    }
+
+    if (!vo) return;
+
+    const img = vo.imageMessage;
+    const vid = vo.videoMessage;
+    const aud = vo.audioMessage;
+
+    if (!img && !vid && !aud) return;
+
+    // Mode: "chat" (send revealed media in current chat) or "private" (send to owner DM)
+    const mode = String(sOwner?.antiViewOnceMode || sChat?.antiViewOnceMode || "private").toLowerCase().trim();
+    const isChatMode = mode === "chat";
+    const targetJid = isChatMode ? remoteJid : ownerJid;
+    if (!targetJid) return;
+
+    const sender = typeof resolveLid === "function"
+      ? resolveLid(msg.key?.participant || msg.participant || msg.key?.remoteJid || "")
+      : (msg.key?.participant || msg.participant || msg.key?.remoteJid || "");
+    const senderNum = sender.replace(/[^0-9]/g, "");
+    const pushName = msg.pushName || msg.verifiedBizName || senderNum || "User";
+    const chatTitle = remoteJid.endsWith("@g.us") ? "Group" : "Private Chat";
+    const originalCaption = img?.caption || vid?.caption || "";
+
+    let caption = "";
+    if (isChatMode) {
+      caption = `👁️ *Anti-ViewOnce (Revealed)*
+👤 *From:* @${senderNum} (${pushName})${originalCaption ? `
+📝 *Caption:* ${originalCaption}` : ""}`;
+    } else {
+      caption = `👁️ *Anti-ViewOnce Captured*
+👤 *Sender:* @${senderNum} (${pushName})
+📍 *Chat:* ${chatTitle} (${remoteJid})${originalCaption ? `
+📝 *Caption:* ${originalCaption}` : ""}`;
+    }
+
+    let buf = null;
+    let mediaType = "";
+    if (img) {
+      mediaType = "image";
+      buf = await downloadStoredMediaBuffer(img, "image");
+    } else if (vid) {
+      mediaType = "video";
+      buf = await downloadStoredMediaBuffer(vid, "video");
+    } else if (aud) {
+      mediaType = "audio";
+      buf = await downloadStoredMediaBuffer(aud, "audio");
+    }
+
+    if (!buf || !buf.length) return;
+
+    const mentions = sender ? [sender] : [];
+
+    if (mediaType === "image") {
+      await sock.sendMessage(targetJid, {
+        image: buf,
+        caption: typeof withJustXFooter === "function" ? withJustXFooter(caption) : caption,
+        mentions
+      }, { quoted: isChatMode ? msg : undefined });
+    } else if (mediaType === "video") {
+      await sock.sendMessage(targetJid, {
+        video: buf,
+        caption: typeof withJustXFooter === "function" ? withJustXFooter(caption) : caption,
+        mentions
+      }, { quoted: isChatMode ? msg : undefined });
+    } else if (mediaType === "audio") {
+      await sock.sendMessage(targetJid, {
+        audio: buf,
+        mimetype: aud?.mimetype || "audio/mp4",
+        ptt: !!aud?.ptt,
+        mentions
+      }, { quoted: isChatMode ? msg : undefined });
+      if (caption) {
+        await sock.sendMessage(targetJid, { text: caption, mentions }, { quoted: isChatMode ? msg : undefined });
+      }
+    }
+
+    if (sOwner?.avoReactEmoji) {
+      try { await react(sock, msg, sOwner.avoReactEmoji); } catch {}
+    }
+  } catch (err) {
+    console.error("[Anti-ViewOnce Error]", err?.message || err);
+  }
+}
 function rememberMessage(msg) {
   const key = [msg?.key?.remoteJid || "", msg?.key?.participant || "", msg?.key?.id || ""].join("|");
   if (!key.replace(/\|/g, "").trim()) return false;
@@ -9138,6 +9250,16 @@ function buildSettingsMenu(jid) {
 ┃ _ᴘʀᴇꜰɪxʟᴇꜱꜱ 'aza' ᴀᴜᴛᴏ ʀᴇᴘʟʏ_
 ╰━━━━━━━━━━━╯
 
+╭━━❮ *Anti ViewOnce* ❯━━╮
+┃ 39.1 ᴇɴᴀʙʟᴇ  ${s.antiViewOnce ? "✅" : ""}
+┃ 39.2 ᴅɪsᴀʙʟᴇ  ${!s.antiViewOnce ? "✅" : ""}
+╰━━━━━━━━━━━╯
+
+╭━━❮ *Anti ViewOnce Mode* ❯━━╮
+┃ 40.1 ᴄʜᴀᴛ  ${(s.antiViewOnceMode || "private") === "chat" ? "✅" : ""}
+┃ 40.2 ᴘʀɪᴠᴀᴛᴇ  ${(s.antiViewOnceMode || "private") === "private" ? "✅" : ""}
+╰━━━━━━━━━━━╯
+
 _Reply: *<section>.<option>* — e.g. *1.1* or *7.2*_
 _Reply *0* to close settings_`;
 }
@@ -9241,6 +9363,12 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "34.2": s => { s.autoSendStatus = false; return "❌ Auto Send Status: DISABLED — status send-requests are ignored (owner/sudo excepted)."; },
   "35.1": s => { s.autoSendAza = true;  return "✅ Auto Send Aza: ENABLED — prefixless aza replies for everyone."; },
   "35.2": s => { s.autoSendAza = false; return "❌ Auto Send Aza: DISABLED — prefixless aza works for owner/sudo only."; },
+  "39.1": s => { s.antiViewOnce = true;  return "✅ Anti-ViewOnce: ENABLED"; },
+  "39.2": s => { s.antiViewOnce = false; return "❌ Anti-ViewOnce: DISABLED"; },
+  "39.3": s => { s.antiViewOnceMode = "chat"; return "✅ Anti-ViewOnce Mode: CHAT (sends revealed media directly in chat)"; },
+  "39.4": s => { s.antiViewOnceMode = "private"; return "✅ Anti-ViewOnce Mode: PRIVATE (sends revealed media to owner DM)"; },
+  "40.1": s => { s.antiViewOnceMode = "chat"; return "✅ Anti-ViewOnce Mode: CHAT (sends revealed media directly in chat)"; },
+  "40.2": s => { s.antiViewOnceMode = "private"; return "✅ Anti-ViewOnce Mode: PRIVATE (sends revealed media to owner DM)"; },
 };
 
 // ── v38: PERSISTENCE ──────────────────────────────────────────────────────
@@ -9310,7 +9438,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       chatbot: ["21.1", "21.2"], ownerreact: ["22.1", "22.2"], adultmode: ["23.1", "23.2"],
       antimention: ["26.1", "26.2"], antibug: ["27.1", "27.2"], forceprivate: ["28.1", "28.2"],
       statusforwarder: ["38.1", "38.2"], contactreply: ["36.1", "36.2"], statusreply: ["32.1", "32.2"],
-      aitag: ["37.1", "37.2"], antibroadcast: ["30.1", "30.2"],
+      aitag: ["37.1", "37.2"], antibroadcast: ["30.1", "30.2"], antiviewonce: ["39.1", "39.2"], antivo: ["39.1", "39.2"], antiviewoncemode: ["40.1", "40.2"], vomode: ["40.1", "40.2"],
     };
     const _btnPropMap = {
       blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReactMsgs", cmdreact: "cmdReact", autoblock: "autoBlock",
@@ -9318,7 +9446,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       autovoice: "autoVoice", autosticker: "autoSticker", autoreply: "autoReply", recording: "recording",
       typing: "typing", alwaysonline: "alwaysOnline", chatbot: "chatBotMode", ownerreact: "ownerReact",
       adultmode: "adultMode", antimention: "antiMention", antibug: "antiBug", forceprivate: "forcePrivate",
-      statusforwarder: "statusForwarder", contactreply: "contactReply", statusreply: "statusReply", aitag: "aiTag", antibroadcast: "antiBroadcast",
+      statusforwarder: "statusForwarder", contactreply: "contactReply", statusreply: "statusReply", aitag: "aiTag", antibroadcast: "antiBroadcast", antiviewonce: "antiViewOnce", antivo: "antiViewOnce",
     };
     const _bsetPair = _btnPairMap[_bsetKey];
     if (_bsetPair) {
@@ -9715,30 +9843,59 @@ Usage:
 • ${CONFIG.PREFIX}richmode off`);
 });
 
-cmd(["antivo", "antiviewonce", "antiviewoncetoggle", "stealthvo"], { desc: "Toggle auto-capture of view-once messages → sent silently to your DM", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
+cmd(["antivo", "antiviewonce", "antiviewoncetoggle", "stealthvo"], { desc: "Toggle Anti-ViewOnce and configure capture mode (Chat / Private)", category: "OWNER", ownerOnly: true }, async (sock, msg, args) => {
   const ownerJid = getOwnerJid();
   const ownerS = getSettings(ownerJid);
-  const v = (args[0] || "").toLowerCase();
-  if (["on","1","enable","true"].includes(v)) {
-    if (ownerS.antiViewOnce === true) { await sendReply(sock, msg, ` Anti-ViewOnce is *already ON* ✅`); return; }
+  const arg0 = (args[0] || "").toLowerCase().trim();
+  const arg1 = (args[1] || "").toLowerCase().trim();
+
+  // Mode change: .antivo chat or .antivo private
+  if (["chat", "group", "public"].includes(arg0) || (arg0 === "mode" && ["chat", "group", "public"].includes(arg1))) {
+    ownerS.antiViewOnceMode = "chat";
     ownerS.antiViewOnce = true;
-  } else if (["off","0","disable","false"].includes(v)) {
-    if (!ownerS.antiViewOnce) { await sendReply(sock, msg, ` Anti-ViewOnce is *already OFF* ❌`); return; }
+    saveNow();
+    await _sendPlainReply(sock, msg, `👁️ *Anti-ViewOnce Mode: CHAT* ✅\n\nView-once media will now be automatically detected and sent back into the *same chat* as normal media.\n\nStatus: *ON ✅* | Mode: *CHAT 💬*`);
+    return;
+  }
+  if (["private", "dm", "owner"].includes(arg0) || (arg0 === "mode" && ["private", "dm", "owner"].includes(arg1))) {
+    ownerS.antiViewOnceMode = "private";
+    ownerS.antiViewOnce = true;
+    saveNow();
+    await _sendPlainReply(sock, msg, `👁️ *Anti-ViewOnce Mode: PRIVATE* ✅\n\nView-once media will now be automatically detected and forwarded privately to *your DM*.\n\nStatus: *ON ✅* | Mode: *PRIVATE 🔒*`);
+    return;
+  }
+
+  if (["on", "1", "enable", "true"].includes(arg0)) {
+    ownerS.antiViewOnce = true;
+  } else if (["off", "0", "disable", "false"].includes(arg0)) {
     ownerS.antiViewOnce = false;
-  } else ownerS.antiViewOnce = !ownerS.antiViewOnce;
-  // Optional: set reaction emoji with arg[1] (or arg[0] if it's an emoji)
-  const maybeEmoji = args.find(a => !["on","off","1","0","enable","disable","true","false"].includes(a.toLowerCase()) && a.length <= 8);
-  if (maybeEmoji) ownerS.avoReactEmoji = maybeEmoji;
+  } else if (!arg0) {
+    ownerS.antiViewOnce = !ownerS.antiViewOnce;
+  } else {
+    const maybeEmoji = args.find(a => !["on","off","1","0","enable","disable","true","false","chat","private","dm","mode"].includes(a.toLowerCase()) && a.length <= 8);
+    if (maybeEmoji) ownerS.avoReactEmoji = maybeEmoji;
+    else ownerS.antiViewOnce = !ownerS.antiViewOnce;
+  }
+
   saveNow();
-  await _sendPlainReply(sock, msg, ` *Anti-ViewOnce (Stealth Capture): ${ownerS.antiViewOnce ? "✅ ON" : "❌ OFF"}*
+
+  const currentMode = (ownerS.antiViewOnceMode || "private").toLowerCase();
+  const isChat = currentMode === "chat";
+
+  await _sendPlainReply(sock, msg, `👁️ *Anti-ViewOnce: ${ownerS.antiViewOnce ? "✅ ENABLED" : "❌ DISABLED"}*
+
+📦 *Current Mode:* ${isChat ? "💬 CHAT (Send as normal media in chat)" : "🔒 PRIVATE (Send to owner DM)"}
 
 ${ownerS.antiViewOnce
-  ? `✅ *ENABLED*\nWhen anyone sends a view-once message:\n• 📸 Bot silently captures the media\n• 📩 Forwards it to YOUR private DM\n•  Reacts with a ghost emoji (invisible to sender)\n\nThe sender will NOT know their message was captured.`
-  : `❌ *DISABLED*\nView-once messages will not be captured.`}
+  ? `When someone sends a view-once photo, video, or voice note:\n${isChat ? "• 📸 Bot reveals media directly in the chat as normal media" : "• 📩 Bot silently captures and sends media to your private DM"}`
+  : "View-once messages will not be captured."}
 
-Usage:
-• ${CONFIG.PREFIX}antivo on
-• ${CONFIG.PREFIX}antivo off`);
+*Commands:*
+• \`${CONFIG.PREFIX}antivo on\` — Enable Anti-ViewOnce
+• \`${CONFIG.PREFIX}antivo off\` — Disable Anti-ViewOnce
+• \`${CONFIG.PREFIX}antivo chat\` — Set mode to Chat
+• \`${CONFIG.PREFIX}antivo private\` — Set mode to Private DM
+• Or toggle in \`${CONFIG.PREFIX}setting\` (Sections 39 & 40)`);
 });
 
 cmd(["textmenu", "txmenu", "plaintextmenu"], { desc: "Switch to plain text menu (disable button mode)", category: "OWNER", ownerOnly: true }, async (sock, msg) => {
@@ -19380,11 +19537,14 @@ for (const _a of ["pinterest2", "pinterestv2", "pindlv2", "pinterestdl2"]) { con
 });
 
 cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}apk <app name>`); return; }
-  await react(sock, msg, "📱");
+  if (!args.length) {
+    await sendReply(sock, msg, `📱 *APK Downloader*\n\nUsage: \`${CONFIG.PREFIX}apk <app name>\`\nExample: \`${CONFIG.PREFIX}apk WhatsApp\` or \`${CONFIG.PREFIX}apk com.whatsapp\``);
+    return;
+  }
+  await react(sock, msg, "🌀");
   const jid = msg.key.remoteJid;
   const query = args.join(" ").trim();
-  const statusMsg = await sock.sendMessage(jid, { text: `📱 *MIAS MDX APK*\n\n⬡ Searching for *${query}*...\n◻ Downloading APK...\n◻ Sending file...` }, { quoted: msg });
+  const statusMsg = await sock.sendMessage(jid, { text: `📱 *MIAS MDX APK*\n\n🌀 Searching for *${query}*...\n◻ Downloading APK to disk...\n◻ Sending file...` }, { quoted: msg });
   const apkKey = statusMsg.key;
 
   const _fs = require("fs");
@@ -19392,85 +19552,150 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
   const _path = require("path");
 
   const apkApis = [
-    // 1. NexRay playstore / search
-    async () => {
-      if (!nx?.downloader?.playstore) return null;
-      try {
-        const r = await nx.downloader.playstore({ url: query });
-        const res = r?.result || r?.data || r;
-        const dl = res?.download || res?.url || res?.dllink;
-        if (dl) return { dl, name: res?.name || res?.title || query, desc: res?.description || res?.desc };
-      } catch {}
-      return null;
-    },
-    // 2. NexRay APKPure search
-    async () => {
-      if (!nx?.search?.apkpure) return null;
-      try {
-        const r = await nx.search.apkpure({ query });
-        const res = Array.isArray(r?.result) ? r.result[0] : (r?.result || r?.data);
-        const dl = res?.download || res?.url || res?.dllink;
-        if (dl) return { dl, name: res?.name || res?.title || query, desc: res?.description };
-      } catch {}
-      return null;
-    },
-    // 3. Prexzy APK
+    // 1. Prexzy APK (direct endpoints & fallbacks)
     async () => {
       try {
-        const r = await prexzyGet("/download/apk", { packageName: query });
+        const r = await prexzyGet("/download/apk", { query });
         if (r.ok && r.data) {
-          const d = r.data?.data || r.data;
-          const dl = d?.url || d?.download || d?.dllink;
+          const d = r.data?.data || r.data?.result || r.data;
+          const dl = d?.url || d?.download || d?.dllink || d?.link;
           if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
         }
       } catch {}
       try {
-        const r2 = await prexzyGet("/download/apk", { name: query });
-        if (r2.ok && r2.data) {
-          const d2 = r2.data?.data || r2.data;
-          const dl = d2?.url || d2?.download || d2?.dllink;
-          if (dl) return { dl, name: d2?.name || d2?.title || query, desc: d2?.desc || d2?.description };
+        const r = await prexzyGet("/download/apk", { name: query });
+        if (r.ok && r.data) {
+          const d = r.data?.data || r.data?.result || r.data;
+          const dl = d?.url || d?.download || d?.dllink || d?.link;
+          if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
+        }
+      } catch {}
+      try {
+        const r = await prexzyGet("/download/apk", { packageName: query });
+        if (r.ok && r.data) {
+          const d = r.data?.data || r.data?.result || r.data;
+          const dl = d?.url || d?.download || d?.dllink || d?.link;
+          if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
+        }
+      } catch {}
+      try {
+        const r = await prexzyGet("/search/apk", { query });
+        if (r.ok && r.data) {
+          const arr = Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data?.result) ? r.data.result : (Array.isArray(r.data) ? r.data : []));
+          if (arr.length > 0) {
+            const first = arr[0];
+            const dl = first?.url || first?.download || first?.dllink || first?.link;
+            if (dl) return { dl, name: first?.name || first?.title || query, desc: first?.desc || first?.description };
+            const pkg = first?.packageName || first?.package || first?.id;
+            if (pkg) {
+              const r2 = await prexzyGet("/download/apk", { packageName: pkg });
+              const d2 = r2.data?.data || r2.data?.result || r2.data;
+              const dl2 = d2?.url || d2?.download || d2?.dllink || d2?.link;
+              if (dl2) return { dl: dl2, name: d2?.name || first?.name || query, desc: d2?.desc || first?.desc };
+            }
+          }
+        }
+      } catch {}
+      for (const host of ["https://apis.prexzyvilla.site", "https://prexzyapis.com"]) {
+        try {
+          const { data } = await axios.get(`${host}/download/apk?name=${encodeURIComponent(query)}`, { timeout: 25000 });
+          const d = data?.data || data?.result || data;
+          const dl = d?.url || d?.download || d?.dllink || d?.link;
+          if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
+        } catch {}
+      }
+      return null;
+    },
+    // 2. NexRay search & downloader
+    async () => {
+      if (nx?.search?.apkpure) {
+        try {
+          const r = await nx.search.apkpure({ query });
+          const res = Array.isArray(r?.result) ? r.result[0] : (r?.result || r?.data);
+          const dl = res?.download || res?.url || res?.dllink;
+          if (dl) return { dl, name: res?.name || res?.title || query, desc: res?.description };
+        } catch {}
+      }
+      if (nx?.downloader?.playstore) {
+        try {
+          const r = await nx.downloader.playstore({ url: query });
+          const res = r?.result || r?.data || r;
+          const dl = res?.download || res?.url || res?.dllink;
+          if (dl) return { dl, name: res?.name || res?.title || query, desc: res?.description || res?.desc };
+        } catch {}
+      }
+      return null;
+    },
+    // 3. ZeroAPI / DavidCyril
+    async () => {
+      try {
+        if (typeof zeroGet === "function") {
+          const r = await zeroGet("/api/apk", { url: query });
+          const d = r?.result || r?.data || r;
+          const dl = d?.dllink || d?.download || d?.url;
+          if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.description || d?.desc };
         }
       } catch {}
       return null;
     },
     // 4. Toxicapis
     async () => {
-      const t = (await toxicCall("/download/apk", { q: query, query, name: query }))
-             || (await toxicCall("/d/apk",        { q: query, query, name: query }));
-      if (!t) return null;
-      return { dl: t.url, name: t.title || query, desc: t.desc };
+      try {
+        const t = (await toxicCall("/download/apk", { q: query, query, name: query }))
+               || (await toxicCall("/d/apk",        { q: query, query, name: query }));
+        if (t?.url) return { dl: t.url, name: t.title || query, desc: t.desc };
+      } catch {}
+      return null;
     },
-    // 5. Gifted API
+    // 5. Siputzx
+    async () => {
+      try {
+        const { data } = await axios.get(`https://api.siputzx.my.id/api/d/apk?query=${encodeURIComponent(query)}`, { timeout: 30000 });
+        const r = data?.data || data?.result;
+        const dl = r?.download || r?.dllink || r?.url;
+        if (dl) return { dl, name: r?.name || query, desc: r?.description };
+      } catch {}
+      return null;
+    },
+    // 6. Nexoracle
+    async () => {
+      try {
+        const { data } = await axios.get(`https://api.nexoracle.com/downloader/apk?apikey=free_key@maher_apis&query=${encodeURIComponent(query)}`, { timeout: 30000 });
+        const r = data?.result;
+        const dl = r?.dllink || r?.download_url || r?.url;
+        if (dl) return { dl, name: r?.name || query, desc: r?.description };
+      } catch {}
+      return null;
+    },
+    // 7. Gifted API
     async () => {
       if (!CONFIG.GIFTED_API) return null;
-      const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/download/apk?apikey=${CONFIG.GIFTED_KEY}&query=${encodeURIComponent(query)}`, { timeout: 30000 });
-      const r = data?.result || data;
-      return { dl: r?.download_url || r?.dllink || r?.url, name: r?.name || query, desc: r?.description };
-    },
-    // 6. Siputzx
-    async () => {
-      const { data } = await axios.get(`https://api.siputzx.my.id/api/d/apk?query=${encodeURIComponent(query)}`, { timeout: 30000 });
-      const r = data?.data || data?.result;
-      return { dl: r?.download || r?.dllink || r?.url, name: r?.name || query, desc: r?.description };
-    },
-    // 7. Nexoracle
-    async () => {
-      const { data } = await axios.get(`https://api.nexoracle.com/downloader/apk?apikey=free_key@maher_apis&query=${encodeURIComponent(query)}`, { timeout: 30000 });
-      const r = data?.result;
-      return { dl: r?.dllink || r?.download_url || r?.url, name: r?.name || query, desc: r?.description };
+      try {
+        const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/download/apk?apikey=${CONFIG.GIFTED_KEY}&query=${encodeURIComponent(query)}`, { timeout: 30000 });
+        const r = data?.result || data;
+        const dl = r?.download_url || r?.dllink || r?.url;
+        if (dl) return { dl, name: r?.name || query, desc: r?.description };
+      } catch {}
+      return null;
     },
     // 8. Dreaded
     async () => {
-      const { data } = await axios.get(`https://api.dreaded.site/api/apkdl?app=${encodeURIComponent(query)}`, { timeout: 30000 });
-      return { dl: data?.download || data?.result?.download, name: data?.name || query, desc: data?.description };
+      try {
+        const { data } = await axios.get(`https://api.dreaded.site/api/apkdl?app=${encodeURIComponent(query)}`, { timeout: 30000 });
+        const dl = data?.download || data?.result?.download;
+        if (dl) return { dl, name: data?.name || query, desc: data?.description };
+      } catch {}
+      return null;
     },
     // 9. BK9 API
     async () => {
-      const { data } = await axios.get(`https://bk9.fun/download/apk?q=${encodeURIComponent(query)}`, { timeout: 30000 });
-      const r = data?.BK9 || data?.result || data;
-      const dl = r?.dllink || r?.url || r?.download;
-      return { dl, name: r?.name || query, desc: r?.desc };
+      try {
+        const { data } = await axios.get(`https://bk9.fun/download/apk?q=${encodeURIComponent(query)}`, { timeout: 30000 });
+        const r = data?.BK9 || data?.result || data;
+        const dl = r?.dllink || r?.url || r?.download;
+        if (dl) return { dl, name: r?.name || query, desc: r?.desc };
+      } catch {}
+      return null;
     },
   ];
 
@@ -19480,7 +19705,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
       const result = await tryApi();
       if (!result?.dl) continue;
 
-      await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching for *${query}*... ✅\n⬡ Downloading APK to disk...\n◻ Sending file...`);
+      await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n🌀 Searching for *${query}*... Done\n🌀 Downloading APK to disk...\n◻ Sending file...`).catch(() => {});
 
       // Check size with HEAD first
       let cLen = 0;
@@ -19490,7 +19715,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
       } catch {}
 
       if (cLen > 95 * 1024 * 1024) {
-        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬡ APK too large for direct WhatsApp delivery (${Math.round(cLen / 1024 / 1024)}MB > 95MB limit)\n\n📥 *Download link:*\n${result.dl}\n\n📛 App: ${result.name || query}${result.desc ? "\n📝 " + result.desc.slice(0, 200) : ""}`);
+        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n❌ *APK too large for direct WhatsApp delivery* (${Math.round(cLen / (1024 * 1024))} MB > 95 MB limit)\n\n📥 *Direct Download Link:*\n${result.dl}\n\n📛 *App:* ${result.name || query}${result.desc ? "\n📝 " + result.desc.slice(0, 200) : ""}`).catch(() => {});
         await sendCTAButtons(sock, jid, msg,
           `📱 *${result.name || query}*\n_Too large for WhatsApp — tap below to download directly_`,
           [
@@ -19499,10 +19724,11 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
           ],
           `${CONFIG.BOT_NAME} • APK Download`
         ).catch(() => {});
+        await react(sock, msg, "❌");
         return;
       }
 
-      // Stream download directly to disk
+      // Stream download directly to disk temp file
       tmpDir = await _fs.promises.mkdtemp(_path.join(_os.tmpdir(), "apkdl-"));
       const safeName = (result.name || query).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) || "app";
       const apkFilePath = _path.join(tmpDir, `${safeName}.apk`);
@@ -19531,14 +19757,15 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
         });
       } catch (streamErr) {
         if (streamErr?.__tooLarge || String(streamErr?.message) === "too-large") {
-          await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬡ APK too large to send via WhatsApp (>95MB)\n\n📥 *Download link:*\n${result.dl}\n\n📛 App: ${result.name || query}`);
+          await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n❌ *APK too large to send via WhatsApp* (>95MB)\n\n📥 *Download link:*\n${result.dl}\n\n📛 *App:* ${result.name || query}`).catch(() => {});
+          await react(sock, msg, "❌");
           return;
         }
         throw streamErr;
       }
 
       if (apkBytes > 1000) {
-        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬢ Downloading... ✅\n⬡ Sending file...`);
+        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n✅ Searching... Done\n✅ Downloading... Done\n🌀 Sending file...`).catch(() => {});
         await sock.sendMessage(jid, {
           document: { url: apkFilePath },
           mimetype: "application/vnd.android.package-archive",
@@ -19546,7 +19773,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
           caption: withJustXFooter(`📱 *${result.name || query}*\n📦 Size: ${(apkBytes / (1024 * 1024)).toFixed(2)} MB${result.desc ? "\n📝 " + result.desc.slice(0, 160) : ""}`)
         }, { quoted: msg });
 
-        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *${result.name || query}* sent!`);
+        await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n✅ *${result.name || query}* downloaded and sent successfully!`).catch(() => {});
         await react(sock, msg, "✅");
         return;
       }
@@ -19559,7 +19786,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     }
   }
 
-  await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n⬢ Searching... ❌\n\n⚠️ APK not found for: *${query}*\nTry a more specific app name or package ID.`);
+  await editMessage(sock, jid, apkKey, `❌ *APK Download Failed*\n\nCould not find or download an APK for: *${query}*.\n\n💡 *Suggestions:*\n• Try searching with the exact package name (e.g. \`com.whatsapp\`)\n• Make sure the name is spelled correctly\n• Some apps are paid, region-locked, or restricted from public download repositories.`).catch(() => {});
   await react(sock, msg, "❌");
 });
 

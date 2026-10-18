@@ -27,6 +27,8 @@ cmd(["setting", "settings", "config"], { desc: "Open bot settings", category: "S
         { id: "6.1", title: `Anti-Delete [${s.antiDelete ? "ON" : "OFF"}]`, description: "Forward deleted messages to owner DM" },
         { id: "26.1", title: `Anti-Mention [${s.antiMention ? "ON" : "OFF"}]`, description: "Block everyone/channel mass mentions" },
         { id: "27.1", title: `Anti-Bug [${s.antiBug ? "ON" : "OFF"}]`, description: "Drop crash and freeze payloads" },
+        { id: "39.1", title: `Anti-ViewOnce [${s.antiViewOnce ? "ON" : "OFF"}]`, description: "Auto-capture view-once media" },
+        { id: "40.1", title: `Anti-ViewOnce Mode [${(s.antiViewOnceMode || "private").toUpperCase()}]`, description: "Send to chat or private DM" },
       ]
     },
     {
