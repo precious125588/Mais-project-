@@ -9,6 +9,9 @@
 
 import { downloadContentFromMessage as _dlContent, getContentType } from "./gktwAdapter.js";
 import { fetchBuffer } from "./uploadHandler.js";
+import messageContent from "../lib/messageContent.cjs";
+
+const { unwrapMessage, getContextInfo, findMediaNode } = messageContent;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -24,18 +27,7 @@ const TYPE_MAP = {
 
 /** Unwrap nested message wrappers (ephemeral, device-sent, viewOnce, edit, documentWithCaption) */
 function _unwrap(message = {}) {
-  let cur = message;
-  for (let i = 0; i < 8; i++) {
-    if (cur?.deviceSentMessage?.message)           cur = cur.deviceSentMessage.message;
-    else if (cur?.ephemeralMessage?.message)        cur = cur.ephemeralMessage.message;
-    else if (cur?.viewOnceMessage?.message)         cur = cur.viewOnceMessage.message;
-    else if (cur?.viewOnceMessageV2?.message)       cur = cur.viewOnceMessageV2.message;
-    else if (cur?.viewOnceMessageV2Extension?.message) cur = cur.viewOnceMessageV2Extension.message;
-    else if (cur?.documentWithCaptionMessage?.message) cur = cur.documentWithCaptionMessage.message;
-    else if (cur?.editedMessage?.message)           cur = cur.editedMessage.message;
-    else break;
-  }
-  return cur || {};
+  return unwrapMessage(message);
 }
 
 async function _streamToBuffer(stream) {
@@ -69,6 +61,16 @@ export async function downloadMedia(msg, mediaType) {
     // Unwrap nested message types (ephemeral, device-sent, etc.)
     const m = _unwrap(raw);
 
+    // Prefer the actual message node so document-wrapped images are fetched
+    // with Baileys' "document" transport while still being recognized as images.
+    const mediaNode = findMediaNode(m);
+    if (
+      mediaNode &&
+      (!mediaType || mediaType === mediaNode.type || mediaType === mediaNode.messageType || mediaType === mediaNode.downloadType)
+    ) {
+      return await _downloadContent(mediaNode.content, mediaNode.downloadType);
+    }
+
     // Determine content type
     const type = mediaType ||
       (await getContentType(m)) ||
@@ -98,31 +100,20 @@ export async function downloadQuotedMedia(msg) {
     const raw = msg?.message;
     if (!raw) return null;
 
-    const m = _unwrap(raw);
-
-    // ContextInfo can appear inside several message types
-    const inner =
-      m.extendedTextMessage ||
-      m.imageMessage ||
-      m.videoMessage ||
-      m.documentMessage ||
-      m.audioMessage ||
-      m.stickerMessage ||
-      {};
-
-    const quotedMsg = inner?.contextInfo?.quotedMessage;
+    const quotedMsg = getContextInfo(msg)?.quotedMessage || msg?.quoted?.message || msg?.quoted?.msg;
     if (!quotedMsg) return null;
 
-    // The quoted message may also be wrapped
-    const unwrappedQuoted = _unwrap(quotedMsg);
-    const type = Object.keys(unwrappedQuoted).find(k => TYPE_MAP[k]) || Object.keys(unwrappedQuoted)[0];
-    const baileysType = TYPE_MAP[type] || type?.replace?.("Message", "") || "image";
-    const content = unwrappedQuoted[type];
+    const mediaNode = findMediaNode(quotedMsg);
+    if (!mediaNode) return null;
 
-    if (!content) return null;
-
-    const buffer = await _downloadContent(content, baileysType);
-    return { buffer, type: baileysType };
+    const buffer = await _downloadContent(mediaNode.content, mediaNode.downloadType);
+    return {
+      buffer,
+      type: mediaNode.type,
+      messageType: mediaNode.messageType,
+      mimetype: mediaNode.mimetype,
+      fileName: mediaNode.fileName,
+    };
   } catch (err) {
     console.error("[downloadQuotedMedia] Error:", err?.message);
     return null;
@@ -190,7 +181,7 @@ export async function getMessageType(msg) {
     const raw = msg?.message;
     if (!raw) return null;
     const m = _unwrap(raw);
-    return (await getContentType(m)) || Object.keys(m)[0] || null;
+    return findMediaNode(m)?.messageType || (await getContentType(m)) || Object.keys(m)[0] || null;
   } catch {
     return null;
   }
@@ -203,8 +194,7 @@ export async function getMessageType(msg) {
  */
 export function hasMedia(msg) {
   try {
-    const m = _unwrap(msg?.message || {});
-    return Object.keys(m).some(k => TYPE_MAP[k]);
+    return Boolean(findMediaNode(msg?.message || {}));
   } catch {
     return false;
   }

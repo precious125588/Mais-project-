@@ -8,6 +8,9 @@
  */
 
 import { getContentType as _getContentType, getBaileys } from "./gktwAdapter.js";
+import messageContent from "../lib/messageContent.cjs";
+
+const { extractTextFromMessage, getContextInfo } = messageContent;
 
 // ─── JID utilities ────────────────────────────────────────────────────────────
 
@@ -147,32 +150,7 @@ export async function getContentType(message) {
  * @returns {string}
  */
 export function extractText(msg) {
-  if (!msg?.message) return "";
-  const m = msg.message;
-
-  // Unwrap common wrappers
-  const inner =
-    m.ephemeralMessage?.message ||
-    m.viewOnceMessage?.message ||
-    m.viewOnceMessageV2?.message ||
-    m.deviceSentMessage?.message ||
-    m.documentWithCaptionMessage?.message ||
-    m;
-
-  return (
-    inner.conversation ||
-    inner.extendedTextMessage?.text ||
-    inner.imageMessage?.caption ||
-    inner.videoMessage?.caption ||
-    inner.documentMessage?.caption ||
-    inner.audioMessage?.caption ||
-    inner.buttonsResponseMessage?.selectedButtonId ||
-    inner.listResponseMessage?.singleSelectReply?.selectedRowId ||
-    inner.templateButtonReplyMessage?.selectedId ||
-    inner.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
-    inner.pollCreationMessage?.name ||
-    ""
-  );
+  return extractTextFromMessage(msg);
 }
 
 /**
@@ -190,25 +168,15 @@ export function extractBody(msg) {
  * @returns {object|null}
  */
 export function getQuoted(msg) {
-  const m = msg?.message;
-  if (!m) return null;
-  const unwrap = m.ephemeralMessage?.message || m.viewOnceMessage?.message || m;
-  const inner =
-    unwrap.extendedTextMessage ||
-    unwrap.imageMessage ||
-    unwrap.videoMessage ||
-    unwrap.documentMessage ||
-    unwrap.audioMessage ||
-    unwrap.stickerMessage ||
-    {};
-  const qMsg = inner?.contextInfo?.quotedMessage;
+  const context = getContextInfo(msg);
+  const qMsg = context?.quotedMessage || msg?.quoted?.message || msg?.quoted?.msg;
   if (!qMsg) return null;
   return {
     message: qMsg,
     key: {
-      id: inner.contextInfo.stanzaId,
-      remoteJid: inner.contextInfo.remoteJid || msg.key?.remoteJid,
-      participant: inner.contextInfo.participant,
+      id: context?.stanzaId,
+      remoteJid: context?.remoteJid || msg.key?.remoteJid,
+      participant: context?.participant,
     },
   };
 }
@@ -219,15 +187,7 @@ export function getQuoted(msg) {
  * @returns {string[]}
  */
 export function getMentions(msg) {
-  const m = msg?.message;
-  if (!m) return [];
-  const inner =
-    m.extendedTextMessage ||
-    m.imageMessage ||
-    m.videoMessage ||
-    m.stickerMessage ||
-    {};
-  return inner?.contextInfo?.mentionedJid || [];
+  return getContextInfo(msg)?.mentionedJid || [];
 }
 
 /**

@@ -306,7 +306,7 @@ async function checkDbStatus(force = false) {
     }
     const { Pool } = pgModule;
     const pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: require('./mias/lib/pgConnection.cjs').normalizePostgresConnectionString(process.env.DATABASE_URL),
       max: 1,
       connectionTimeoutMillis: 4000,
       ssl: { rejectUnauthorized: true },

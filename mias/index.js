@@ -1,12 +1,14 @@
 function __unwrapWaMsg(m) {
   if (!m) return null;
   let cur = m;
-  for (let i = 0; i < 6; i++) {
-    if (cur?.ephemeralMessage?.message) cur = cur.ephemeralMessage.message;
+  for (let i = 0; i < 12; i++) {
+    if (cur?.deviceSentMessage?.message) cur = cur.deviceSentMessage.message;
+    else if (cur?.ephemeralMessage?.message) cur = cur.ephemeralMessage.message;
     else if (cur?.viewOnceMessage?.message) cur = cur.viewOnceMessage.message;
     else if (cur?.viewOnceMessageV2?.message) cur = cur.viewOnceMessageV2.message;
     else if (cur?.viewOnceMessageV2Extension?.message) cur = cur.viewOnceMessageV2Extension.message;
     else if (cur?.documentWithCaptionMessage?.message) cur = cur.documentWithCaptionMessage.message;
+    else if (cur?.editedMessage?.message) cur = cur.editedMessage.message;
     else break;
   }
   return cur;
@@ -113,6 +115,8 @@ import { installSpotifyCommands } from "./features/spotifyCommands.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
+const __miasMessageContent = require("./lib/messageContent.cjs");
+const __facebookDownloader = require("./lib/facebookDownloader.cjs");
 // Legacy panel/button settings are retained only for backwards-compatible
 // settings reads. The button handler modules were intentionally removed from
 // this distribution; keeping a local no-op prevents old settings code from
@@ -5274,40 +5278,12 @@ function isCommandAllowedInContext(msg, fromOwner = false, fromGroupAdmin = fals
 }
 const isGroup   = msg => (msg.key.remoteJid || "").endsWith("@g.us");
 function getContextInfo(msg) {
-  const m = msg?.message || {};
-  return m.extendedTextMessage?.contextInfo
-    || m.stickerMessage?.contextInfo
-    || m.imageMessage?.contextInfo
-    || m.videoMessage?.contextInfo
-    || m.documentMessage?.contextInfo
-    || m.audioMessage?.contextInfo
-    || m.buttonsResponseMessage?.contextInfo
-    || m.listResponseMessage?.contextInfo
-    || m.templateButtonReplyMessage?.contextInfo
-    || m.interactiveResponseMessage?.contextInfo
-    || null;
+  return __miasMessageContent.getContextInfo(msg);
 }
 // Text of the quoted/replied message, including link-preview matchedText.
 function __quotedTextOf(msg) {
-  const ctx = getContextInfo(msg);
-  let q = ctx?.quotedMessage || null;
-  if (!q) return "";
-  for (let i = 0; i < 5; i++) {
-    const inner = q.viewOnceMessage?.message
-      || q.viewOnceMessageV2?.message
-      || q.viewOnceMessageV2Extension?.message
-      || q.ephemeralMessage?.message
-      || q.documentWithCaptionMessage?.message;
-    if (!inner || inner === q) break;
-    q = inner;
-  }
-  return q.conversation
-    || q.extendedTextMessage?.text
-    || q.extendedTextMessage?.matchedText
-    || q.imageMessage?.caption
-    || q.videoMessage?.caption
-    || q.documentMessage?.caption
-    || "";
+  const quoted = getContextInfo(msg)?.quotedMessage;
+  return quoted ? __miasMessageContent.extractTextFromMessage(quoted) : "";
 }
 
 // Lets a user reply to a message that holds a link and just type .aio / .tiktok
@@ -5415,6 +5391,7 @@ async function getStatusJidList(sock) {
 // ── Message normalization — unwrap ephemeral/viewOnce/documentWithCaption ──
 function normalizeMessage(msg) {
   if (!msg?.message) return msg;
+  const quoteContext = __miasMessageContent.getContextInfo(msg);
   const m = msg.message;
   // Unwrap deviceSentMessage (linked device messages)
   if (m.deviceSentMessage?.message) {
@@ -5450,6 +5427,7 @@ function normalizeMessage(msg) {
   if (msg.message.peerDataOperationRequestResponseMessage?.peerDataOperationResult) {
     // This is a system message, skip
   }
+  __miasMessageContent.attachCanonicalQuoteContext(msg, quoteContext);
   return msg;
 }
 
@@ -18509,91 +18487,135 @@ for (const [pCmd, pInfo] of Object.entries(DL_PLATFORMS)) {
   });
 }
 
-// Facebook — with quality options (video/audio/document)
-cmd(["facebook", "fb"], { desc: "Download from Facebook — .fb <URL> [video|audio|doc|hd]", category: "DOWNLOAD" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage:\n${CONFIG.PREFIX}fb <URL> — auto-detect\n${CONFIG.PREFIX}fb <URL> video — video\n${CONFIG.PREFIX}fb <URL> audio — audio only\n${CONFIG.PREFIX}fb <URL> doc — as document\n${CONFIG.PREFIX}fb <URL> hd — high quality`); return; }
-  await react(sock, msg, "📘");
-  const url = args[0];
-  const mode = (args[1] || "").toLowerCase();
-  const jid = msg.key.remoteJid;
-  const statusMsg = await sock.sendMessage(jid, { text: `📘 *MIAS MDX — Facebook*\n\n⬡ Fetching media...\n◻ Downloading${mode ? " (" + mode + ")" : ""}...\n◻ Sending...` }, { quoted: msg });
-for (const _a of ["fbv2", "facebookv2", "metav2"]) { const _c = commands.get("facebook"); if (_c) { commands.set(_a, { ..._c, canonical: "facebook", isAlias: true }); aliases.set(_a, "facebook"); } }
-  const dlKey = statusMsg.key;
-  try {
-    let result = null;
-
-    // 1) Prexzyvilla /download/facebook — fast dedicated endpoint
-    if (!result) {
-      try {
-        const rf = await prexzyGet("/download/facebook", { url }, 30000);
-        const df = rf.data;
-        if (rf.ok && df) {
-          const _d = df?.data || df;
-          const dl = (mode === "hd" ? (_d?.hd || _d?.sd) : (_d?.sd || _d?.hd)) || _d?.url || _d?.video || _d?.download_url;
-          if (dl) result = { dl, title: _d?.title || "Facebook Video" };
-        }
-      } catch {}
-    }
-
-    // 2) Prexzyvilla /download/facebookv2 — alternative endpoint
-    if (!result) {
-      try {
-        const rf2 = await prexzyGet("/download/facebookv2", { url }, 30000);
-        const df2 = rf2.data;
-        if (rf2.ok && df2) {
-          const _d2 = df2?.data || df2;
-          const dl = _d2?.hd || _d2?.sd || _d2?.url || _d2?.video || _d2?.download_url;
-          if (dl) result = { dl, title: _d2?.title || "Facebook Video" };
-        }
-      } catch {}
-    }
-
-    // 3) GiftedTech
-    if (!result) {
-      try {
-        const { data: gd } = await axios.get(`${CONFIG.GIFTED_API}/api/download/facebook?apikey=${CONFIG.GIFTED_KEY}&url=${encodeURIComponent(url)}`, { timeout: 30000 });
-        if (gd?.success && gd?.result) {
-          const gr = gd.result;
-          const dl = (mode === "hd" ? (gr.hd || gr.sd) : (gr.sd || gr.hd)) || gr.download_url || gr.url || gr.video;
-          if (dl) result = { dl, title: gr.title || "Facebook Video" };
-        }
-      } catch {}
-    }
-
-    // Nexray Facebook fallback
-    if (!result && nx?.downloader?.facebook) {
-      try {
-        const nxfb = await nx.downloader.facebook({ url });
-        const dl = (mode === "hd" ? (nxfb?.result?.hd || nxfb?.result?.sd) : (nxfb?.result?.sd || nxfb?.result?.hd)) || nxfb?.result?.video || nxfb?.result?.url;
-        if (dl) result = { dl, title: nxfb?.result?.title || "Facebook Video" };
-      } catch {}
-    }
-
-    // 4) universalDownload chain (cobalt, siputzx, ryzendesu, etc.)
-    if (!result) result = await universalDownload(url, "facebook").catch(() => null);
-
-    if (result?.dl) {
-      await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n⬢ Fetching media... ✅\n⬡ Downloading...\n◻ Sending...`);
-      const buf = Buffer.from((await axios.get(result.dl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { "User-Agent": "Mozilla/5.0" } })).data);
-      await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n⬢ Fetching media... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
-      const cap = `📘 *Facebook${mode === "hd" ? " (HD)" : ""}*\n\n${result.title || ""}`;
-      if (mode === "audio") {
-        await sock.sendMessage(jid, { audio: buf, mimetype: "audio/mpeg", ptt: false }, { quoted: msg });
-      } else if (mode === "doc" || mode === "document") {
-        await sock.sendMessage(jid, { document: buf, mimetype: "video/mp4", fileName: `facebook_${Date.now()}.mp4`, caption: cap }, { quoted: msg });
-      } else {
-        await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, fileName: `facebook_${Date.now()}.mp4`, quoted: msg });
+// One Facebook handler is shared by the canonical command and every hidden alias.
+// Providers are tried HD-first; a successful original buffer is sent without
+// TikTok-specific conversion so that source resolution is not reduced.
+const __facebookProviders = () => [
+  {
+    name: "NexRay",
+    fetch: async (url) => {
+      const response = await axios.get("https://api.nexray.eu.cc/downloader/facebook", {
+        params: { url, quality: "1080p" },
+        timeout: 25000,
+        responseType: "arraybuffer",
+        headers: { "User-Agent": "MIAS-MDX-Bot/2.0", Accept: "*/*" },
+        validateStatus: () => true,
+      });
+      const contentType = response.headers?.["content-type"] || "";
+      const body = Buffer.from(response.data || []);
+      if (response.status < 200 || response.status >= 300) throw new Error("NexRay provider failed");
+      if (/json|text\//i.test(contentType)) {
+        try { return JSON.parse(body.toString("utf8")); } catch {}
       }
-      await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n⬢ Fetching... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*`);
-      await react(sock, msg, "✅");
-    } else {
-      await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n⬢ Fetching media... ❌\n\n⚠️ Could not download. The URL may be private or geo-restricted.\n💡 Try sharing the video URL directly (not a post link).`);
-    }
-  } catch (e) {
-    await editMessage(sock, jid, dlKey, `📘 *MIAS MDX — Facebook*\n\n❌ Error: ${e.message}`);
-  }
+      return { type: "media", buffer: body, contentType };
+    },
+  },
+  {
+    name: "Prexzy",
+    fetch: async (url) => {
+      const response = await prexzyGet("/download/facebook", { url, quality: "hd", resolution: "1080p" }, 22000);
+      if (!response?.ok) throw new Error("Prexzy provider failed");
+      return response.data;
+    },
+  },
+  {
+    name: "Prexzy v2",
+    fetch: async (url) => {
+      const response = await prexzyGet("/download/facebookv2", { url, quality: "hd", resolution: "1080p" }, 22000);
+      if (!response?.ok) throw new Error("Prexzy v2 provider failed");
+      return response.data;
+    },
+  },
+  {
+    name: "DavidCyril",
+    fetch: async (url) => {
+      const response = await dcGet("/facebook", { url, quality: "hd" }, 22000);
+      if (!response?.ok) throw new Error("DavidCyril provider failed");
+      return response.data;
+    },
+  },
+  {
+    name: "GiftedTech",
+    fetch: async (url) => {
+      const response = await axios.get(`${CONFIG.GIFTED_API}/api/download/facebook`, {
+        params: { apikey: CONFIG.GIFTED_KEY, url, quality: "hd" },
+        timeout: 22000,
+      });
+      return response.data;
+    },
+  },
+  {
+    name: "Cobalt",
+    fetch: async (url) => {
+      const response = await axios.post("https://api.cobalt.tools/", {
+        url,
+        downloadMode: "auto",
+        videoQuality: "1080",
+        filenameStyle: "basic",
+      }, {
+        timeout: 22000,
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+      });
+      return response.data;
+    },
+  },
+  {
+    name: "Multi-provider fallback",
+    fetch: async (url) => universalDownload(url, "facebook"),
+  },
+];
+
+const __resolveFacebookMedia = (url) => {
+  const maxBytes = __facebookDownloader.maxFacebookBytes();
+  return __facebookDownloader.resolveAndDownloadFacebook(url, __facebookProviders(), {
+    maxBytes,
+    download: (mediaUrl) => axios.get(mediaUrl, {
+      responseType: "arraybuffer",
+      timeout: 120000,
+      maxContentLength: maxBytes,
+      maxBodyLength: maxBytes,
+      headers: { "User-Agent": "Mozilla/5.0 MIAS-MDX" },
+      validateStatus: () => true,
+    }),
+  });
+};
+
+const __facebookCommand = __facebookDownloader.createFacebookCommand({
+  getPrefix: () => CONFIG.PREFIX,
+  getQuotedText: __quotedTextOf,
+  react: forceReaction,
+  sendReply,
+  sendStatus: (sock, msg, text) => sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg }),
+  editStatus: (sock, msg, key, text) => editMessage(sock, msg.key.remoteJid, key, text),
+  resolveMedia: __resolveFacebookMedia,
+  sendVideo: (sock, msg, media, { caption }) => sock.sendMessage(
+    msg.key.remoteJid,
+    { video: media.buffer, mimetype: media.mimetype, caption },
+    { quoted: msg },
+  ),
+  sendDocument: (sock, msg, media, { caption }) => sock.sendMessage(
+    msg.key.remoteJid,
+    {
+      document: media.buffer,
+      mimetype: media.mimetype,
+      fileName: `facebook_${Date.now()}${media.extension || ".mp4"}`,
+      caption,
+    },
+    { quoted: msg },
+  ),
+  sendAudio: (sock, msg, audio, { title }) => sock.sendMessage(
+    msg.key.remoteJid,
+    { audio, mimetype: "audio/mpeg", fileName: "facebook_audio.mp3", ptt: false, caption: title },
+    { quoted: msg },
+  ),
+  extractAudio: async (buffer, media) => {
+    const { extractAudio } = await import("./services/VideoService.js");
+    return extractAudio(buffer, String(media.extension || ".mp4").replace(/^\./, ""), "mp3");
+  },
 });
-// Facebook hidden aliases — not counted, hidden from menu
+
+cmd(["facebook", "fb"], { desc: "Download Facebook videos — .fb <URL> [hd|video|audio|doc]", category: "DOWNLOAD" }, __facebookCommand);
+// Facebook aliases are deliberately hidden from the menu, but use the same handler.
 for (const _fbAlias of ["fb-dl", "fbdl", "facebook-dl", "fbv2", "facebookv2", "metav2"]) {
   const _fbEntry = commands.get("facebook");
   if (_fbEntry) {
@@ -36672,75 +36694,17 @@ try {
       commands.set(_n, _e);
     }
 
-    // ── 2. FACEBOOK — nexray as PRIMARY endpoint ────────────────────────
-    const __fbV19 = async (sock, msg, args) => {
-      const jid = msg.key.remoteJid;
-      if (!args.length) {
-        return sendReply(sock, msg, `Usage:\n${CONFIG.PREFIX}fb <URL> — auto\n${CONFIG.PREFIX}fb <URL> video\n${CONFIG.PREFIX}fb <URL> audio\n${CONFIG.PREFIX}fb <URL> doc\n${CONFIG.PREFIX}fb <URL> hd`);
-      }
-      const url = args[0];
-      const mode = (args[1] || '').toLowerCase();
-      let result = null;
-
-      // PRIMARY: nexray downloader.facebook
-      try {
-        if (nx && nx.downloader && typeof nx.downloader.facebook === 'function') {
-          const r = await nx.downloader.facebook({ url });
-          const d = r?.result || r?.data || r || {};
-          const arr = Array.isArray(d) ? d : (Array.isArray(d.media) ? d.media : (Array.isArray(d.videos) ? d.videos : null));
-          let dl = null, title = d.title || d.caption || 'Facebook Video';
-          if (arr && arr.length) {
-            const hd = arr.find(x => /hd/i.test(x.quality || x.resolution || '')) || arr[0];
-            const sd = arr.find(x => /sd/i.test(x.quality || x.resolution || '')) || arr[0];
-            const pick = mode === 'hd' ? hd : sd;
-            dl = pick?.url || pick?.link || pick?.download_url || pick?.src;
-          }
-          if (!dl) dl = (mode === 'hd' ? (d.hd || d.sd) : (d.sd || d.hd)) || d.url || d.video || d.download_url || d.link;
-          if (dl) result = { dl, title };
-        }
-      } catch (_nxErr) { try { console.error('[fb-nexray]', _nxErr?.message || _nxErr); } catch {} }
-
-      // FALLBACK: prexzyvilla /download/facebook
-      if (!result) {
-        try {
-          const rf = await prexzyGet('/download/facebook', { url }, 30000);
-          const df = rf.data;
-          if (rf.ok && df) {
-            const _d = df?.data || df;
-            const dl = (mode === 'hd' ? (_d?.hd || _d?.sd) : (_d?.sd || _d?.hd)) || _d?.url || _d?.video || _d?.download_url;
-            if (dl) result = { dl, title: _d?.title || 'Facebook Video' };
-          }
-        } catch {}
-      }
-      // FALLBACK: universalDownload chain
-      if (!result) result = await universalDownload(url, 'facebook').catch(() => null);
-
-      if (!result?.dl) {
-        return sendReply(sock, msg, `⚠️ Could not download Facebook video. URL may be private/geo-restricted.`);
-      }
-
-      try {
-        const buf = Buffer.from((await axios.get(result.dl, { responseType: 'arraybuffer', timeout: 120000, headers: { 'User-Agent': 'Mozilla/5.0' } })).data);
-        const cap = `📘 *Facebook${mode === 'hd' ? ' (HD)' : ''}*\n\n${result.title || ''}`;
-        if (mode === 'audio') {
-          await sock.sendMessage(jid, { audio: buf, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-        } else if (mode === 'doc' || mode === 'document') {
-          await sock.sendMessage(jid, { document: buf, mimetype: 'video/mp4', fileName: `facebook_${Date.now()}.mp4`, caption: cap }, { quoted: msg });
-        } else {
-          try {
-            await sock.sendMessage(jid, { video: buf, caption: cap }, { quoted: msg });
-          } catch {
-            await sock.sendMessage(jid, { document: buf, mimetype: 'video/mp4', fileName: `facebook_${Date.now()}.mp4`, caption: cap }, { quoted: msg });
-          }
-        }
-      } catch (sendErr) {
-        await sendReply(sock, msg, `❌ Failed to send Facebook media: ${sendErr?.message || sendErr}`);
-      }
-    };
-    for (const _fn of ['facebook', 'fb']) {
-      const _e = commands.get(_fn) || { desc: 'Facebook downloader (nexray primary)', category: 'DOWNLOAD' };
+    // ── 2. FACEBOOK — keep the canonical handler and every alias in sync ──
+    const __fbV19 = __facebookCommand;
+    for (const _fn of ["facebook", "fb", "fb-dl", "fbdl", "facebook-dl", "fbv2", "facebookv2", "metav2"]) {
+      const _e = commands.get(_fn) || { desc: "Facebook video downloader", category: "DOWNLOAD" };
       _e.handler = __fbV19;
       _e._origHandler = __fbV19;
+      if (_fn !== "facebook") {
+        _e.isAlias = true;
+        _e.canonical = "facebook";
+        aliases.set(_fn, "facebook");
+      }
       commands.set(_fn, _e);
     }
 

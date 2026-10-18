@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createHash } = require('crypto');
+const { normalizePostgresConnectionString } = require('./lib/pgConnection.cjs');
 
 let _pool = null;
 let _poolUrl = null;
@@ -40,7 +41,7 @@ function createPool() {
 
   const { Pool } = pg;
   _pool = new Pool({
-    connectionString: url,
+    connectionString: normalizePostgresConnectionString(url),
     max: 2,
     connectionTimeoutMillis: 5000,
     statement_timeout: 10000,
@@ -146,7 +147,12 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
       );
       count++;
     } catch (e) {
-      console.warn(`[session-persistence] Error syncing ${cleanFn}:`, e.message);
+      // Baileys can rotate/delete pre-key JSON files between readdirSync and
+      // readFileSync. ENOENT is an expected race; the next sync sees the current
+      // key set. Keep reporting real filesystem/DB errors.
+      if (e?.code !== 'ENOENT') {
+        console.warn(`[session-persistence] Error syncing ${cleanFn}:`, e.message);
+      }
     }
   }
 

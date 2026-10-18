@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import pgConnection from "./lib/pgConnection.cjs";
 
 const { Pool } = pg;
+const { normalizePostgresConnectionString } = pgConnection;
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations/", import.meta.url));
 const TRANSIENT_CODES = new Set([
   "ECONNRESET",
@@ -63,7 +65,7 @@ export function createNeonPool({
 
   try {
     return new PoolClass({
-      connectionString,
+      connectionString: normalizePostgresConnectionString(connectionString),
       max: 2,
       connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 30000,

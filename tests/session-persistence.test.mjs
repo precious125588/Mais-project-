@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 
 import sessionPersistence from "../sessionPersistence.cjs";
+import miasSessionPersistence from "../mias/sessionPersistence.cjs";
 
 test("normalizeSessionKeys handles bare digits, JIDs, and directory basenames", () => {
   const c1 = sessionPersistence.normalizeSessionKeys("2348123456789");
@@ -167,6 +168,45 @@ test("simulated PostgreSQL session sync, restore, and byte-for-byte fidelity", a
   const delRes = await mockPool.query("DELETE FROM mias_session_auth", [testJid, testNum]);
   assert.equal(delRes.rowCount, 2);
   assert.equal(storage.size, 0);
+});
+
+test("session sync treats a pre-key removed during rotation as an expected ENOENT race", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mias-test-sync-race-"));
+  const sessionDir = path.join(tmpRoot, "2348000012345@s.whatsapp.net");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, "creds.json"), "{}", "utf8");
+  fs.writeFileSync(path.join(sessionDir, "pre-key-1.json"), "{}", "utf8");
+
+  const originalReadFileSync = fs.readFileSync;
+  const originalWarn = console.warn;
+  const warnings = [];
+  const insertedFiles = [];
+  miasSessionPersistence.setPoolForTesting({
+    async query(sql, params = []) {
+      if (String(sql).includes("INSERT INTO mias_session_auth")) insertedFiles.push(params[1]);
+      return { rowCount: 1, rows: [] };
+    },
+  });
+  fs.readFileSync = function (filePath, ...args) {
+    if (path.basename(String(filePath)) === "pre-key-1.json") {
+      throw Object.assign(new Error("file disappeared during key rotation"), { code: "ENOENT" });
+    }
+    return originalReadFileSync.call(this, filePath, ...args);
+  };
+  console.warn = (...args) => warnings.push(args);
+
+  try {
+    const result = await miasSessionPersistence.syncSessionDirToDb("2348000012345", sessionDir);
+    assert.equal(result.ok, true);
+    assert.equal(result.synced, 1);
+    assert.deepEqual(insertedFiles, ["creds.json"]);
+    assert.equal(warnings.length, 0);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    console.warn = originalWarn;
+    miasSessionPersistence.setPoolForTesting(null);
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });
 
 test("getStoredSessionsCount deduplicates bare-number and canonical JID aliases", async () => {
