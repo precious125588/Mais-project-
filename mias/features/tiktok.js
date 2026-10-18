@@ -54,6 +54,19 @@ const MODES = {
 
 const pick = (...values) => values.find((value) => typeof value === "string" && value);
 
+export function isDirectMediaUrl(url) {
+  if (typeof url !== "string") return false;
+  const u = url.trim();
+  if (!/^https?:\/\/\S+$/i.test(u)) return false;
+  // A TikTok web page URL is never downloadable media
+  if (/^https?:\/\/(www\.|m\.|vm\.|vt\.)?tiktok\.com\/@/i.test(u) ||
+      /^https?:\/\/(vm|vt)\.tiktok\.com\//i.test(u) ||
+      /^https?:\/\/www\.tiktok\.com\/[^\/]+\/video\//i.test(u)) {
+    return false;
+  }
+  return true;
+}
+
 export function normalizeTikTokResponse(payload = {}) {
   const data = (payload?.data && typeof payload.data === "object")
     ? payload.data
@@ -65,6 +78,34 @@ export function normalizeTikTokResponse(payload = {}) {
       : []);
   const images = rawImages.filter((value) => typeof value === "string" && value);
 
+  let videoHd = pick(data.hdplay, data.hd, data.play_hd, data.download_url);
+  let videoSd = pick(data.play, data.sd, data.wmplay);
+  let videoWatermark = pick(data.wmplay, data.play);
+  let audio = pick(data.music, data.music_info?.play, data.music_info?.url, data.music_info?.music_url, data.audio, data.audio_url);
+
+  // Direct string payload.data or payload.result (e.g. NexRay downloader/tiktok)
+  const directData = typeof payload?.data === "string" && isDirectMediaUrl(payload.data)
+    ? payload.data
+    : (typeof payload?.result?.data === "string" && isDirectMediaUrl(payload.result.data)
+      ? payload.result.data
+      : (typeof data?.data === "string" && isDirectMediaUrl(data.data) ? data.data : null));
+  if (directData && !videoHd && !videoSd) {
+    videoHd = directData;
+    videoSd = directData;
+  }
+
+  // AIO media array (e.g. NexRay downloader/aio)
+  if (Array.isArray(data.medias) && data.medias.length > 0) {
+    const hd = data.medias.find(m => /hd/i.test(m.quality || "") || /hd/i.test(m.resolution || ""));
+    const sd = data.medias.find(m => !/watermark/i.test(m.quality || "") && !/audio/i.test(m.type || ""));
+    const wm = data.medias.find(m => /watermark/i.test(m.quality || ""));
+    const aud = data.medias.find(m => /audio/i.test(m.type || "") || /audio/i.test(m.quality || "") || /mp3/i.test(m.extension || ""));
+    videoHd = videoHd || hd?.url || sd?.url;
+    videoSd = videoSd || sd?.url || hd?.url;
+    videoWatermark = videoWatermark || wm?.url;
+    audio = audio || aud?.url;
+  }
+
   return {
     title: pick(data.title, data.desc, data.description, "TikTok video"),
     author: pick(data.author?.nickname, data.author?.unique_id, data.author, data.author_name, "Unknown author"),
@@ -74,10 +115,10 @@ export function normalizeTikTokResponse(payload = {}) {
     // link 403s — the picker should always carry the video image.
     covers: [data.cover, data.thumbnail, data.origin_cover, data.ai_dynamic_cover, data.dynamic_cover, data.music_info?.cover, ...images]
       .filter((value) => typeof value === "string" && value),
-    videoHd: pick(data.hdplay, data.hd, data.play_hd, data.download_url),
-    videoSd: pick(data.play, data.sd, data.wmplay),
-    videoWatermark: pick(data.wmplay, data.play),
-    audio: pick(data.music, data.music_info?.play, data.audio),
+    videoHd: isDirectMediaUrl(videoHd) ? videoHd : null,
+    videoSd: isDirectMediaUrl(videoSd) ? videoSd : null,
+    videoWatermark: isDirectMediaUrl(videoWatermark) ? videoWatermark : null,
+    audio,
     images,
   };
 }
@@ -206,7 +247,7 @@ export function isValidTikTokUrl(url) {
 
 function firstHttpUrl(...values) {
   for (const value of values) {
-    if (typeof value === "string" && /^https?:\/\/\S+$/i.test(value.trim())) return value.trim();
+    if (typeof value === "string" && isDirectMediaUrl(value)) return value.trim();
     if (Array.isArray(value)) {
       const found = firstHttpUrl(...value);
       if (found) return found;
@@ -246,6 +287,28 @@ function extractTikTokMedia(payload) {
     const videoSd = info.videoSd || sd;
     const videoWatermark = info.videoWatermark || firstHttpUrl(current.wmplay, current.watermark, current.watermarked);
     const audio = info.audio || firstHttpUrl(current.music, current.audio, current.audio_url, current.audioUrl);
+    if (Array.isArray(current.medias) && current.medias.length > 0) {
+      const hd = current.medias.find(m => /hd/i.test(m.quality || "") || /hd/i.test(m.resolution || ""));
+      const sd = current.medias.find(m => !/watermark/i.test(m.quality || "") && !/audio/i.test(m.type || ""));
+      const wm = current.medias.find(m => /watermark/i.test(m.quality || ""));
+      const aud = current.medias.find(m => /audio/i.test(m.type || "") || /audio/i.test(m.quality || "") || /mp3/i.test(m.extension || ""));
+      const mHd = hd?.url || sd?.url;
+      const mSd = sd?.url || hd?.url;
+      if (mHd || mSd || aud?.url) {
+        return {
+          title: current.title || "TikTok video",
+          author: current.author || "Unknown author",
+          duration: current.duration || "",
+          thumbnail: current.thumbnail || current.cover || "",
+          covers: [current.thumbnail, current.cover].filter(Boolean),
+          videoHd: isDirectMediaUrl(mHd) ? mHd : null,
+          videoSd: isDirectMediaUrl(mSd) ? mSd : null,
+          videoWatermark: isDirectMediaUrl(wm?.url) ? wm.url : null,
+          audio: aud?.url || null,
+          images: [],
+        };
+      }
+    }
     if (videoHd || videoSd || videoWatermark || audio || info.images?.length) {
       return { ...info, videoHd, videoSd, videoWatermark, audio };
     }

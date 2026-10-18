@@ -5137,8 +5137,21 @@ const isOwner = jid => {
   // every sender). We now require ≥10-digit equality, and never fall back to matching
   // the bot's own number as "owner" unless it really is the configured owner.
   if (ownerNum && _ownResolvedNum && _ownResolvedNum.length >= 10 && _ownResolvedNum === ownerNum) return true;
-  const _ownBotNum = _cleanNum(_botJid || "");
-  if (ownerNum && _botJid && _ownResolvedNum && _ownResolvedNum.length >= 10 && _ownBotNum.length >= 10 && _ownResolvedNum === _ownBotNum && _ownBotNum === ownerNum) return true;
+  // The bot itself is ALWAYS treated as bot owner so commands run in any chat (DM or GC)
+  const _ownBotNum = _cleanNum(_botJid || (typeof sock !== "undefined" && sock?.user?.id) || "");
+  if (_ownBotNum && _ownResolvedNum && _ownResolvedNum.length >= 10 && _ownResolvedNum === _ownBotNum) return true;
+  if (_botJid) {
+    const cleanBot = _stripDevice(_botJid).toLowerCase();
+    if (raw.toLowerCase() === cleanBot || resolved.toLowerCase() === cleanBot) return true;
+  }
+  if (typeof sock !== "undefined" && sock?.user?.id) {
+    const cleanSockUser = _stripDevice(sock.user.id).toLowerCase();
+    if (raw.toLowerCase() === cleanSockUser || resolved.toLowerCase() === cleanSockUser) return true;
+  }
+  if (typeof sock !== "undefined" && sock?.user?.lid) {
+    const cleanLid = _stripDevice(sock.user.lid).toLowerCase();
+    if (raw.toLowerCase() === cleanLid || resolved.toLowerCase() === cleanLid) return true;
+  }
   if (_ownerLidJid && ownerNum && (raw === _ownerLidJid || resolved === _ownerLidJid)) return true;
   return false;
 };
@@ -5271,7 +5284,9 @@ function __replyTrace(msg, reason, detail = "") {
   } catch {}
 }
 function isCommandAllowedInContext(msg, fromOwner = false, fromGroupAdmin = false) {
-  if (fromOwner) return true;
+  if (fromOwner || msg?.key?.fromMe) return true;
+  const sender = getSender(msg);
+  if (isOwner(sender) || (typeof isSudo === "function" && isSudoIn(sender, msg?.key?.remoteJid))) return true;
   try {
     const _cmdCheck = extractCommandName(msg);
     if (_cmdCheck === "aza" || _cmdCheck === "send") return true;
@@ -5375,6 +5390,10 @@ async function resolveCommandTarget(sock, msg, args = []) {
 const _stripDevice = j => String(j == null ? "" : j).replace(/:\d+(?=@)/, "");
 const getSender = msg => {
   try {
+    if (msg?.key?.fromMe) {
+      const selfJid = _botJid || (typeof sock !== "undefined" && sock?.user?.id);
+      if (selfJid) return _stripDevice(selfJid);
+    }
     const pn = _stripDevice(msg?.key?.participantPn || msg?.key?.senderPn || "");
     if (pn && pn.endsWith("@s.whatsapp.net")) return pn;
     const raw = _stripDevice(
@@ -8808,8 +8827,8 @@ function buildMenu(jid, senderName, sender, context = {}) {
     const pad = Math.max(0, Math.floor((ruleWidth - w) / 2));
     return " ".repeat(pad) + txt;
   };
-  let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
-  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
+  let t = rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
+  t += rule + "\n" + centerLine("*MIAS MDX*") + "\n" + rule + "\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
   t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
@@ -8902,7 +8921,13 @@ async function sendPremiumMenu(sock, msg, args, all = false) {
   let text;
   if (cat) {
     const uniq = getCategoryPrimaryCommands(cat, context);
-    text = "────────────────────\n*MIA'S MDX*\n────────────────────\n\n" + quoteSection(_randomMenuQuoteForUser(sender || jid)) + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\nPOWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
+    const rule = "────────────────────";
+    const centerLine = (txt) => {
+      const w = [...String(txt)].length;
+      const pad = Math.max(0, Math.floor((rule.length - w) / 2));
+      return " ".repeat(pad) + txt;
+    };
+    text = rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n" + rule + "\n" + centerLine("*MIAS MDX*") + "\n" + rule + "\n\n" + quoteSection(_randomMenuQuoteForUser(sender || jid)) + formatMenuCategory({ ...cat, cmds: uniq }) + '\n\nPOWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x';
   } else {
     text = buildMenu(jid, senderName, sender, context);
     // Main/all share exactly one complete canonical listing; only the reaction differs.
@@ -8934,8 +8959,8 @@ function buildMenuOverview(jid, sender, context = {}) {
     const pad = Math.max(0, Math.floor((rule.length - w) / 2));
     return " ".repeat(pad) + txt;
   };
-  let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
-  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
+  let t = rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
+  t += rule + "\n" + centerLine("*MIAS MDX*") + "\n" + rule + "\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
   t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
@@ -22403,9 +22428,15 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         for (const provider of providers) {
           try {
             const payload = await provider();
-            const refreshed = extractDcTiktok(payload, ttMode.kind === "audio")
-              || (payload?.data?.hdplay || payload?.data?.play || payload?.hdplay || payload?.play || payload?.video || payload?.url);
-            if (refreshed) candidateUrls.push(refreshed);
+            let refreshed = extractDcTiktok(payload, ttMode.kind === "audio");
+            if (!refreshed && Array.isArray(payload?.medias) && payload.medias.length > 0) {
+              const m = payload.medias.find(x => ttMode.quality === "hd" ? /hd/i.test(x.quality || "") : !/watermark/i.test(x.quality || "")) || payload.medias[0];
+              if (m?.url) refreshed = m.url;
+            }
+            if (!refreshed && typeof payload?.data === "string" && /^https?:\/\//i.test(payload.data)) refreshed = payload.data;
+            if (!refreshed && typeof payload?.result?.data === "string" && /^https?:\/\//i.test(payload.result.data)) refreshed = payload.result.data;
+            if (!refreshed) refreshed = payload?.data?.hdplay || payload?.data?.play || payload?.hdplay || payload?.play || payload?.video;
+            if (refreshed && typeof refreshed === "string" && !/^https?:\/\/(www\.|m\.|vm\.|vt\.)?tiktok\.com\/@/i.test(refreshed) && !/^https?:\/\/www\.tiktok\.com\/[^\/]+\/video\//i.test(refreshed)) candidateUrls.push(refreshed);
           } catch {}
         }
       };
