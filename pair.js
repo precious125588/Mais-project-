@@ -260,6 +260,10 @@ function getPairingRuntimeState(nexusDevNumber) {
 function unpairSession(nexusDevNumber) {
     endPairingWindow(nexusDevNumber);
     ownership.release(nexusDevNumber);
+    try {
+        const sessionPersistence = require('./mias/sessionPersistence.cjs');
+        sessionPersistence.deleteSessionCompletely({ number: nexusDevNumber, reason: 'unpairSession' });
+    } catch {}
     forceCleanupSession(nexusDevNumber, { force: true });
     markPurged(nexusDevNumber);
     // Unpairing is the ONLY thing that unlocks the bot choice, so the number
@@ -2043,6 +2047,15 @@ async function startpairing(nexusDevNumber, options = {}) {
                     try { await _safeSaveCreds(); } catch {}
                 }
 
+                // Sync newly paired credentials and all keys to Neon PostgreSQL
+                try {
+                    const sessionPersistence = require('./mias/sessionPersistence.cjs');
+                    await sessionPersistence.syncSessionDirToDb(nexusDevNumber, sessionDir);
+                    console.log(chalk.green(`✓ Synced paired session ${nexusDevNumber} to Neon Database`));
+                } catch (e) {
+                    console.log(chalk.gray(`[pair] Neon session sync skipped: ${e.message}`));
+                }
+
                 ownership.handOffToBot(nexusDevNumber, 'mias-mdx');
                 retireSocket(nexusDevNumber, 'handoff to MIAS MDX');
                 try { nexus.ev?.removeAllListeners?.(); } catch {}
@@ -2086,6 +2099,10 @@ async function startpairing(nexusDevNumber, options = {}) {
                 try { fs.mkdirSync(sessionPath, { recursive: true }); } catch {}
             }
             await saveCreds();
+            try {
+                const sessionPersistence = require('./mias/sessionPersistence.cjs');
+                sessionPersistence.syncSessionDirToDb(nexusDevNumber, sessionPath).catch(() => {});
+            } catch {}
             if (tracker && tracker.pairingCode && !tracker.hasEmittedLinking && !state.creds?.registered) {
                 tracker.hasEmittedLinking = true;
                 tracker.isLinking = true;

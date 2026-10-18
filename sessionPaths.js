@@ -128,6 +128,22 @@ function quarantineDir(target, why) {
 }
 
 /** Legacy folders old versions used — migrated into the volume on boot. */
+
+/**
+ * Permanently purge a session directory and all its quarantine copies
+ * when a user explicitly unlinks / logs out, freeing disk space.
+ */
+function purgeSession(target, why) {
+  try {
+    let persistence;
+    try { persistence = require('./mias/sessionPersistence.cjs'); } catch {}
+    if (persistence && typeof persistence.deleteSessionCompletely === 'function') {
+      return persistence.deleteSessionCompletely({ sessionDir: target, reason: why || 'purge' });
+    }
+  } catch {}
+  return null;
+}
+
 function legacySessionDirs() {
   return [
     'prezzy_auth',
@@ -149,5 +165,6 @@ module.exports = {
   ensureSessionRoot: ensureSessionRoot,
   sessionDirFor: sessionDirFor,
   quarantineDir: quarantineDir,
+  purgeSession: purgeSession,
   legacySessionDirs: legacySessionDirs,
 };

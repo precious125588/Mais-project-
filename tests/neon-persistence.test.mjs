@@ -68,6 +68,21 @@ class FakePool {
     if (/^CREATE INDEX IF NOT EXISTS mias_bot_state_updated_at_idx/.test(compact)) {
       return { rows: [] };
     }
+    if (/^CREATE TABLE IF NOT EXISTS mias_session_auth/.test(compact)) {
+      return { rows: [] };
+    }
+    if (/^CREATE INDEX IF NOT EXISTS mias_session_auth/.test(compact)) {
+      return { rows: [] };
+    }
+    if (/^CREATE TABLE IF NOT EXISTS mias_session_registry/.test(compact)) {
+      return { rows: [] };
+    }
+    if (/^CREATE INDEX IF NOT EXISTS mias_session_registry/.test(compact)) {
+      return { rows: [] };
+    }
+    if (/^CREATE TABLE IF NOT EXISTS mias_bot_selections/.test(compact)) {
+      return { rows: [] };
+    }
 
     throw new Error(`Unexpected fake SQL: ${compact}`);
   }
@@ -177,11 +192,11 @@ test("versioned migrations are idempotent and additive", async (t) => {
     "utf8",
   );
 
-  assert.deepEqual(appliedFirst, ["0001"]);
+  assert.deepEqual(appliedFirst, ["0001", "0002"]);
   assert.deepEqual(appliedAgain, []);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS mias_bot_state/);
   assert.doesNotMatch(sql, /\b(DROP|TRUNCATE|DELETE)\b/i);
-  assert.equal(pool.migrations.size, 1);
+  assert.equal(pool.migrations.size, 2);
   t.diagnostic(`migration files: ${pool.migrations.size}`);
 });
 

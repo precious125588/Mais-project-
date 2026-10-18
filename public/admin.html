@@ -814,7 +814,8 @@ async function checkAdminDb(){
     if (dot && txt) {
       if (d.status === 'connected') {
         dot.style.background = 'var(--green)';
-        txt.textContent = 'Neon: Connected (' + (d.database || 'neondb') + ')';
+        const sCount = typeof d.sessionsInDb === 'number' ? ' • ' + d.sessionsInDb + ' sessions' : '';
+        txt.textContent = 'Neon: Connected (' + (d.database || 'neondb') + sCount + ')';
       } else if (d.status === 'error') {
         dot.style.background = 'var(--red)';
         txt.textContent = 'Neon: Error (' + (d.message || 'failed') + ')';
@@ -826,7 +827,8 @@ async function checkAdminDb(){
     const sysDb = document.getElementById('sys-db');
     const sysVol = document.getElementById('sys-vol');
     if (sysDb) {
-      sysDb.textContent = d.status === 'connected' ? 'Connected (' + (d.database || 'neondb') + ')' : (d.status === 'error' ? 'Error' : 'Not Attached');
+      const sCount = typeof d.sessionsInDb === 'number' ? ' • ' + d.sessionsInDb + ' sess' : '';
+      sysDb.textContent = d.status === 'connected' ? 'Connected (' + (d.database || 'neondb') + sCount + ')' : (d.status === 'error' ? 'Error' : 'Not Attached');
     }
     if (sysVol) {
       sysVol.textContent = d.volumeMounted ? 'Mounted (/app/nexstore)' : 'Not Mounted';

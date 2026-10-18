@@ -312,6 +312,11 @@ async function checkDbStatus(force = false) {
       ssl: { rejectUnauthorized: true },
     });
     const res = await pool.query('SELECT 1 as ok, current_database() as db');
+    let sessionsInDb = 0;
+    try {
+      const sRes = await pool.query("SELECT COUNT(DISTINCT session_id) as count FROM mias_session_auth WHERE file_name = 'creds.json'");
+      sessionsInDb = parseInt(sRes?.rows?.[0]?.count || 0, 10);
+    } catch {}
     await pool.end().catch(() => {});
     const row = res.rows[0];
     _dbStatusCache = {
@@ -320,6 +325,7 @@ async function checkDbStatus(force = false) {
       status: 'connected',
       message: 'Neon Database connected',
       database: row?.db || 'neondb',
+      sessionsInDb,
       volumeMounted,
     };
   } catch (err) {
@@ -649,41 +655,35 @@ app.get('/api/logout/pending', (req,res) => {
     } catch {}
     res.json(items);
 });
-app.post('/api/logout/delete-session', (req,res) => {
+app.post('/api/logout/delete-session', async (req,res) => {
     if (!isAdmin(req)) return res.status(403).json({ ok: false, error: 'Unauthorized' });
     const num = String(req.body?.number || '').replace(/[^0-9]/g, '');
     if (!num) return res.json({ ok: false, error: 'number required' });
-    // Delete the session auth dir
-    const possible = [
-        path.join(__dirname, 'nexstore', 'pairing', num),
-        path.join(__dirname, 'nexstore', 'pairing', `${num}@s.whatsapp.net`),
-        path.join(__dirname, 'auth_info_baileys', num),
-    ];
     let deleted = 0;
-    for (const d of possible) {
-        try { if (fs.existsSync(d)) { fs.rmSync(d, { recursive: true, force: true }); deleted++; } } catch {}
+    try {
+        const sessionPersistence = require('./mias/sessionPersistence.cjs');
+        const purgeRes = await sessionPersistence.deleteSessionCompletely({ number: num, reason: 'admin_delete' });
+        deleted = purgeRes.filesDeleted || 0;
+    } catch (err) {
+        console.warn('[server] Admin delete persistence warning:', err.message);
     }
     try { _pair?.unpairSession ? _pair.unpairSession(`${num}@s.whatsapp.net`) : _pair?.forceCleanupSession?.(`${num}@s.whatsapp.net`); } catch {}
     try { _selectionStore?.clearSelection(num); } catch {}
-    // Remove any pending notification files for this number
-    try {
-        const NOTIF_DIR = path.join(__dirname, 'nexstore', 'logout_notifications');
-        if (fs.existsSync(NOTIF_DIR)) {
-            fs.readdirSync(NOTIF_DIR).filter(f => f.startsWith(num + '_') && f.endsWith('.json'))
-              .forEach(f => { try { fs.unlinkSync(path.join(NOTIF_DIR, f)); } catch {} });
-        }
-    } catch {}
     res.json({ ok: true, deleted });
 });
 
 // ── Unpair / reset a number so it can be paired again ────────────────────────
-app.post('/api/pair/reset', rateLimit(60000,10), (req,res) => {
+app.post('/api/pair/reset', rateLimit(60000,10), async (req,res) => {
     if (!_pair) return res.status(503).json({ok:false,error:'Server is still starting up.'});
     let {number} = req.body || {};
     if (!number) return res.status(400).json({ok:false,error:'Phone number required.'});
     number = String(number).replace(/[^0-9]/g,'');
     if (number.length<7||number.length>15) return res.status(400).json({ok:false,error:'Invalid phone number.'});
     const jid = `${number}@s.whatsapp.net`;
+    try {
+        const sessionPersistence = require('./mias/sessionPersistence.cjs');
+        await sessionPersistence.deleteSessionCompletely({ number, jid, reason: 'user_reset' });
+    } catch {}
     try { _pair.unpairSession ? _pair.unpairSession(jid) : _pair.forceCleanupSession(jid); } catch {}
     try { registry.remove?.(jid); } catch {}
     try { _selectionStore?.clearSelection(number); } catch {}

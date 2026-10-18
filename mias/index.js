@@ -2190,7 +2190,7 @@ async function connectToWA(force = false) {
   connectInFlight = true;
   const socketGeneration = ++activeSocketGeneration;
   try {
-    restoreSession();
+    await restoreSession();
     if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     let version;
@@ -2427,7 +2427,15 @@ async function connectToWA(force = false) {
       };
     } catch {}
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", async () => {
+      try {
+        await saveCreds();
+        try {
+          const sessionPersistence = __preciousRequire('../mias/sessionPersistence.cjs');
+          sessionPersistence.syncSessionDirToDb(path.basename(AUTH_DIR), AUTH_DIR).catch(() => {});
+        } catch {}
+      } catch {}
+    });
     sock.ev.on("contacts.upsert", (items = []) => {
       for (const item of items) {
         try {
@@ -2801,8 +2809,17 @@ async function connectToWA(force = false) {
               }));
             } catch {}
             cleanupLoggedOutRecords(sock?.user?.id || path.basename(AUTH_DIR));
-            try { require('../sessionPaths').quarantineDir(AUTH_DIR, 'confirmed logout — quarantined, never deleted'); } catch {}
-            console.log('🧹 Session quarantined after a confirmed logout.');
+            try {
+              const sessionPersistence = __preciousRequire('../mias/sessionPersistence.cjs');
+              await sessionPersistence.deleteSessionCompletely({
+                jid: sock?.user?.id,
+                sessionDir: AUTH_DIR,
+                reason: errMsg || 'confirmed logout'
+              });
+            } catch {
+              try { require('../sessionPaths').quarantineDir(AUTH_DIR, 'confirmed logout'); } catch {}
+            }
+            console.log('🧹 Session and all temporary/quarantine files deleted after confirmed logout to retain space.');
             return;
           }
 
@@ -4830,7 +4847,7 @@ process.on("uncaughtException", (e) => console.error("uncaughtException:", e?.me
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SESSION RESTORE
 // ═══════════════════════════════════════════════════════════════════════════════
-function restoreSession(sessionId = CONFIG.SESSION_ID, authDir = AUTH_DIR) {
+async function restoreSession(sessionId = CONFIG.SESSION_ID, authDir = AUTH_DIR) {
   if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
   const credsPath = path.join(authDir, "creds.json");
   // If creds already exist on disk from the pairing handoff, use them first.
@@ -4845,6 +4862,18 @@ function restoreSession(sessionId = CONFIG.SESSION_ID, authDir = AUTH_DIR) {
       }
     } catch {}
   }
+
+  // Attempt restoration from Neon PostgreSQL if not present on disk
+  try {
+    const sessionPersistence = __preciousRequire('../mias/sessionPersistence.cjs');
+    const folderName = path.basename(authDir);
+    const restored = await sessionPersistence.restoreSessionDirFromDb(folderName, authDir);
+    if (restored && restored.restored > 0 && fs.existsSync(credsPath)) {
+      console.log(`✅ Session restored from Neon PostgreSQL → ${authDir}`);
+      return true;
+    }
+  } catch (err) {}
+
   if (!sessionId) {
     console.log("ℹ️  No SESSION_ID set; waiting for paired creds in AUTH_DIR.");
     return false;

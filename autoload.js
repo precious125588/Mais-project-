@@ -38,8 +38,18 @@ async function processUser(user, index, total) {
     const sessionDir = path.join(require('./sessionPaths').ensureSessionRoot(), user);
     const credsPath = path.join(sessionDir, 'creds.json');
 
-    // If creds already exist, skip pairing — launch MAIS MDX directly.
+    // If creds are missing locally, attempt restoration from Neon PostgreSQL
     const fsSync = require('fs');
+    if (!fsSync.existsSync(credsPath)) {
+      try {
+        const sessionPersistence = require('./mias/sessionPersistence.cjs');
+        await sessionPersistence.restoreSessionDirFromDb(user, sessionDir);
+      } catch (err) {
+        console.log(chalk.gray(`[autoload] DB restore skipped for ${user}: ${err.message}`));
+      }
+    }
+
+    // If creds already exist, skip pairing — launch MAIS MDX directly.
     if (fsSync.existsSync(credsPath)) {
       const launcher = require('./mais_launcher');
       await launcher.launch(user, sessionDir);
@@ -133,6 +143,14 @@ module.exports = {
       } catch {
         console.log(chalk.red('❌ Pairing directory not found.'));
         return { success: false, message: 'Pairing directory not found', total: 0, successful: 0 };
+      }
+
+      // Restore sessions from Neon Database if configured (survives container restart/redeploy)
+      try {
+        const sessionPersistence = require('./mias/sessionPersistence.cjs');
+        await sessionPersistence.restoreAllSessionsFromDb(pairingDir);
+      } catch (e) {
+        console.log(chalk.gray(`[autoload] Neon session restore skipped: ${e.message}`));
       }
 
       // Read all directories in pairing folder

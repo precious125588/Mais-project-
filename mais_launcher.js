@@ -109,6 +109,12 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
         return running.get(number);
     }
     if (running.size >= MAX_INSTANCES) throw new Error(`Bot limit reached (${MAX_INSTANCES} on this server's memory). Other numbers stay paired; upgrade RAM or raise BOT_CHILD_BUDGET_MB to run more.`);
+    if (!fs.existsSync(sessionDir) || !fs.existsSync(path.join(sessionDir, 'creds.json'))) {
+        try {
+            const sessionPersistence = require('./mias/sessionPersistence.cjs');
+            await sessionPersistence.restoreSessionDirFromDb(cleanDigits, sessionDir);
+        } catch {}
+    }
     if (!fs.existsSync(sessionDir))   throw new Error(`Session dir missing: ${sessionDir}`);
 
     const existing     = running.get(number);
@@ -388,9 +394,14 @@ async function deletePairing(digits) {
     try { ownership.release(jid); } catch {}
     try { if (registry) registry.unregister(jid); } catch {}
     try { require('./deploy/botSelectionStore').clearSelection(jid); } catch {}
-    try { fs.rmSync(sessionDir, { recursive: true, force: true }); }
-    catch (e) { return { ok: false, message: `Stopped +${digits}, but could not delete its session: ${e.message}` }; }
-    return { ok: true, message: `Removed +${digits}. Its bot is stopped and its session is deleted.` };
+    try {
+        const sessionPersistence = require('./mias/sessionPersistence.cjs');
+        await sessionPersistence.deleteSessionCompletely({ jid, number: digits, sessionDir, reason: 'deletePairing' });
+    } catch (e) {
+        try { fs.rmSync(sessionDir, { recursive: true, force: true }); }
+        catch (err) { return { ok: false, message: `Stopped +${digits}, but could not delete its session: ${err.message}` }; }
+    }
+    return { ok: true, message: `Removed +${digits}. Its bot is stopped and all session files and database records are deleted.` };
 }
 require('./nexstore/adminRequests').createWatcher({ deletePairing });
 

@@ -1,0 +1,506 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+let _pool = null;
+let _poolUrl = null;
+
+function getDatabaseUrl() {
+  return String(process.env.DATABASE_URL || '').trim();
+}
+
+function createPool() {
+  const url = getDatabaseUrl();
+  if (!url) return null;
+  if (_pool && _poolUrl === url) return _pool;
+
+  if (_pool) {
+    try { _pool.end().catch(() => {}); } catch {}
+  }
+
+  let pg;
+  try {
+    pg = require('pg');
+  } catch (err) {
+    console.warn('[session-persistence] pg package not available:', err.message);
+    return null;
+  }
+
+  const { Pool } = pg;
+  _pool = new Pool({
+    connectionString: url,
+    max: 2,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 10000,
+    ssl: { rejectUnauthorized: true },
+    application_name: 'mais-session-store',
+  });
+  _poolUrl = url;
+
+  _pool.on('error', (err) => {
+    console.warn('[session-persistence] Pool background error:', err.message);
+  });
+
+  return _pool;
+}
+
+function normalizeSessionKeys(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return { number: '', jid: '', primary: '' };
+  const digits = raw.split('@')[0].replace(/[^0-9]/g, '');
+  const jid = digits ? `${digits}@s.whatsapp.net` : '';
+  const primary = raw.includes('@') ? raw : (jid || digits);
+  return { number: digits, jid: jid || raw, primary };
+}
+
+/**
+ * Persists a single auth file into Neon PostgreSQL.
+ */
+async function saveSessionFile(sessionId, fileName, content) {
+  const pool = createPool();
+  if (!pool) return false;
+  const { number, jid, primary } = normalizeSessionKeys(sessionId);
+  if (!primary || !fileName) return false;
+
+  const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+  const targetId = jid || primary;
+
+  try {
+    await pool.query(
+      `INSERT INTO mias_session_auth (session_id, file_name, content, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (session_id, file_name)
+       DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
+      [targetId, fileName, text]
+    );
+    if (number && number !== targetId) {
+      // Also alias under bare number for backwards compatibility
+      await pool.query(
+        `INSERT INTO mias_session_auth (session_id, file_name, content, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (session_id, file_name)
+         DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
+        [number, fileName, text]
+      );
+    }
+    return true;
+  } catch (err) {
+    console.warn(`[session-persistence] saveSessionFile error for ${targetId}/${fileName}:`, err.message);
+    return false;
+  }
+}
+
+/**
+ * Syncs all valid JSON files in a session directory to Neon PostgreSQL.
+ */
+async function syncSessionDirToDb(sessionId, sessionDir) {
+  const pool = createPool();
+  if (!pool) return { ok: false, synced: 0, reason: 'db_not_configured' };
+  if (!sessionDir || !fs.existsSync(sessionDir)) return { ok: false, synced: 0, reason: 'dir_missing' };
+
+  const { number, jid, primary } = normalizeSessionKeys(sessionId || path.basename(sessionDir));
+  const targetId = jid || primary;
+  if (!targetId) return { ok: false, synced: 0, reason: 'invalid_session_id' };
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(sessionDir, { withFileTypes: true });
+  } catch (err) {
+    return { ok: false, synced: 0, reason: err.message };
+  }
+
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const fn = entry.name;
+    if (!fn.endsWith('.json') && !fn.endsWith('.json.tmp')) continue;
+    if (fn.startsWith('.')) continue; // skip .owner.json, hidden files
+    const cleanFn = fn.replace(/\.tmp$/, '');
+
+    try {
+      const fullPath = path.join(sessionDir, fn);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      if (!content || !content.trim()) continue;
+
+      await pool.query(
+        `INSERT INTO mias_session_auth (session_id, file_name, content, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (session_id, file_name)
+         DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
+        [targetId, cleanFn, content]
+      );
+      if (number && number !== targetId) {
+        await pool.query(
+          `INSERT INTO mias_session_auth (session_id, file_name, content, updated_at)
+           VALUES ($1, $2, $3, now())
+           ON CONFLICT (session_id, file_name)
+           DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
+          [number, cleanFn, content]
+        );
+      }
+      count++;
+    } catch (e) {
+      console.warn(`[session-persistence] Error syncing ${fn}:`, e.message);
+    }
+  }
+
+  return { ok: true, synced: count, targetId };
+}
+
+/**
+ * Restores all session files for sessionId from Neon PostgreSQL into targetDir.
+ */
+async function restoreSessionDirFromDb(sessionId, targetDir) {
+  const pool = createPool();
+  if (!pool) return { ok: false, restored: 0, reason: 'db_not_configured' };
+  const { number, jid, primary } = normalizeSessionKeys(sessionId || path.basename(targetDir));
+  const targetId = jid || primary;
+
+  try {
+    const res = await pool.query(
+      `SELECT file_name, content FROM mias_session_auth
+       WHERE session_id = $1 OR session_id = $2
+       ORDER BY (file_name = 'creds.json') DESC, updated_at DESC`,
+      [targetId, number]
+    );
+
+    if (!res.rows || res.rows.length === 0) {
+      return { ok: true, restored: 0, message: 'no_records_in_db' };
+    }
+
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    const writtenFiles = new Set();
+    let writtenCount = 0;
+
+    for (const row of res.rows) {
+      if (writtenFiles.has(row.file_name)) continue;
+      const filePath = path.join(targetDir, row.file_name);
+      fs.writeFileSync(filePath, row.content, 'utf8');
+      writtenFiles.add(row.file_name);
+      writtenCount++;
+    }
+
+    console.log(`[session-persistence] Restored ${writtenCount} files for ${targetId} into ${targetDir}`);
+    return { ok: true, restored: writtenCount, files: Array.from(writtenFiles) };
+  } catch (err) {
+    console.warn(`[session-persistence] Failed to restore session ${targetId}:`, err.message);
+    return { ok: false, restored: 0, reason: err.message };
+  }
+}
+
+/**
+ * Restores all sessions from Neon PostgreSQL if they do not exist locally on disk.
+ * Runs on container boot / restart to survive container replacement.
+ */
+async function restoreAllSessionsFromDb(pairingRoot) {
+  const pool = createPool();
+  if (!pool) return { ok: false, restored: 0, reason: 'db_not_configured' };
+
+  try {
+    const res = await pool.query(
+      `SELECT DISTINCT session_id FROM mias_session_auth`
+    );
+
+    if (!res.rows || res.rows.length === 0) {
+      return { ok: true, restored: 0, message: 'no_sessions_stored' };
+    }
+
+    if (!fs.existsSync(pairingRoot)) {
+      fs.mkdirSync(pairingRoot, { recursive: true });
+    }
+
+    let restoredSessions = 0;
+    const handledDigits = new Set();
+
+    for (const row of res.rows) {
+      const { number, jid, primary } = normalizeSessionKeys(row.session_id);
+      if (number && handledDigits.has(number)) continue;
+      if (number) handledDigits.add(number);
+
+      // Prefer standard folder name: <number>@s.whatsapp.net
+      const folderName = jid || primary;
+      const targetDir = path.join(pairingRoot, folderName);
+      const credsPath = path.join(targetDir, 'creds.json');
+
+      if (!fs.existsSync(credsPath)) {
+        const result = await restoreSessionDirFromDb(row.session_id, targetDir);
+        if (result.ok && result.restored > 0) {
+          restoredSessions++;
+        }
+      }
+    }
+
+    // Also restore registry and selections if possible
+    await syncRegistryAndSelectionsFromDb();
+
+    console.log(`[session-persistence] Total sessions restored from Neon DB: ${restoredSessions}`);
+    return { ok: true, restored: restoredSessions };
+  } catch (err) {
+    console.warn('[session-persistence] restoreAllSessionsFromDb error:', err.message);
+    return { ok: false, restored: 0, reason: err.message };
+  }
+}
+
+/**
+ * Restores session_registry.json and bot selections from Neon DB if present.
+ */
+async function syncRegistryAndSelectionsFromDb() {
+  const pool = createPool();
+  if (!pool) return;
+
+  try {
+    const regRes = await pool.query('SELECT jid, number, source, status, telegram_user_id, metadata, updated_at FROM mias_session_registry');
+    if (regRes.rows && regRes.rows.length > 0) {
+      try {
+        const registry = require('../nexstore/sessionRegistry');
+        for (const r of regRes.rows) {
+          if (!registry.has(r.jid)) {
+            registry.register(r.jid, {
+              number: r.number,
+              source: r.source,
+              status: r.status,
+              telegramUserId: r.telegram_user_id,
+              ...(r.metadata || {})
+            });
+          }
+        }
+        registry.flush?.();
+      } catch {}
+    }
+  } catch {}
+
+  try {
+    const selRes = await pool.query('SELECT number, bot_id, bot_name, source, chosen_by, locked, deployed FROM mias_bot_selections');
+    if (selRes.rows && selRes.rows.length > 0) {
+      try {
+        const botStore = require('../deploy/botSelectionStore');
+        for (const s of selRes.rows) {
+          botStore.saveSelection(s.number, {
+            botId: s.bot_id,
+            botName: s.bot_name,
+            source: s.source,
+            chosenBy: s.chosen_by,
+            locked: s.locked,
+            deployed: s.deployed
+          });
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
+/**
+ * Gets count of unique sessions stored in Neon PostgreSQL.
+ */
+async function getStoredSessionsCount() {
+  const pool = createPool();
+  if (!pool) return 0;
+  try {
+    const res = await pool.query(
+      `SELECT COUNT(DISTINCT session_id) as count FROM mias_session_auth WHERE file_name = 'creds.json'`
+    );
+    return parseInt(res.rows?.[0]?.count || 0, 10);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Completely purges a session upon confirmed user logout, unlinking, or explicit reset.
+ * Deletes from Neon PostgreSQL, purges disk files, and purges all .quarantine-* folders
+ * for that specific session to retain disk space.
+ */
+async function deleteSessionCompletely(options = {}) {
+  const { jid: rawJid, number: rawNumber, sessionDir: explicitDir, reason = 'logout' } = options;
+  const { number, jid, primary } = normalizeSessionKeys(rawJid || rawNumber || (explicitDir ? path.basename(explicitDir) : ''));
+
+  if (!number && !jid) {
+    return { ok: false, error: 'session_identifier_required' };
+  }
+
+  console.log(`[session-persistence] Purging all session files and database records for ${number || jid} (reason: ${reason})`);
+
+  let dbRowsDeleted = 0;
+  const pool = createPool();
+  if (pool) {
+    try {
+      const authDel = await pool.query(
+        `DELETE FROM mias_session_auth WHERE session_id = $1 OR session_id = $2`,
+        [jid || primary, number]
+      );
+      dbRowsDeleted += (authDel.rowCount || 0);
+
+      const regDel = await pool.query(
+        `DELETE FROM mias_session_registry WHERE jid = $1 OR number = $2`,
+        [jid, number]
+      );
+      dbRowsDeleted += (regDel.rowCount || 0);
+
+      const selDel = await pool.query(
+        `DELETE FROM mias_bot_selections WHERE number = $1`,
+        [number]
+      );
+      dbRowsDeleted += (selDel.rowCount || 0);
+
+      // Clean up scoped bot state for this session
+      if (number) {
+        await pool.query(
+          `DELETE FROM mias_bot_state WHERE scope LIKE $1`,
+          [`%${number}%`]
+        );
+      }
+    } catch (err) {
+      console.warn(`[session-persistence] Error deleting DB records for ${number}:`, err.message);
+    }
+  }
+
+  // Teardown disk files and quarantine directories
+  let filesDeleted = 0;
+  let sessionPathsMod = null;
+  try { sessionPathsMod = require('../sessionPaths'); } catch {}
+
+  const pairingRoot = sessionPathsMod
+    ? sessionPathsMod.resolveSessionRoot()
+    : path.resolve(__dirname, '..', 'nexstore', 'pairing');
+
+  const targets = new Set();
+  if (explicitDir) targets.add(path.resolve(explicitDir));
+  if (number) {
+    targets.add(path.join(pairingRoot, number));
+    targets.add(path.join(pairingRoot, `${number}@s.whatsapp.net`));
+  }
+  if (jid) {
+    targets.add(path.join(pairingRoot, jid));
+  }
+
+  // 1. Delete target session directories
+  for (const dir of targets) {
+    try {
+      if (fs.existsSync(dir)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        filesDeleted++;
+      }
+    } catch (e) {
+      console.warn(`[session-persistence] Error removing ${dir}:`, e.message);
+    }
+  }
+
+  // 2. Scan pairing root and parent of explicit directory for matching .quarantine-* folders and permanently remove them to retain space
+  const scanRoots = new Set();
+  if (fs.existsSync(pairingRoot)) scanRoots.add(pairingRoot);
+  if (explicitDir && fs.existsSync(path.dirname(path.resolve(explicitDir)))) {
+    scanRoots.add(path.dirname(path.resolve(explicitDir)));
+  }
+
+  if (number) {
+    for (const sRoot of scanRoots) {
+      try {
+        const items = fs.readdirSync(sRoot);
+        for (const item of items) {
+          if (item.includes(number) && item.includes('.quarantine-')) {
+            const qDir = path.join(sRoot, item);
+            try {
+              fs.rmSync(qDir, { recursive: true, force: true });
+              filesDeleted++;
+              console.log(`[session-persistence] Purged quarantine directory: ${item}`);
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // 3. Clear temporary files and notifications for this number
+  const repoRoot = path.resolve(__dirname, '..');
+  const tempCleanups = [
+    path.join(repoRoot, 'nexstore', 'bot_status', `${number}.json`),
+    path.join(repoRoot, 'nexstore', `pairing_code_${number}.json`),
+    path.join(repoRoot, 'nexstore', `pairing_qr_${number}.json`),
+  ];
+
+  for (const p of tempCleanups) {
+    try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+  }
+
+  // Remove logout notifications
+  const notifDir = path.join(repoRoot, 'nexstore', 'logout_notifications');
+  if (fs.existsSync(notifDir) && number) {
+    try {
+      const files = fs.readdirSync(notifDir);
+      for (const f of files) {
+        if (f.startsWith(`${number}_`) && f.endsWith('.json')) {
+          try { fs.unlinkSync(path.join(notifDir, f)); } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Clear in-memory caches and stores
+  try {
+    const registry = require('../nexstore/sessionRegistry');
+    if (jid) registry.unregister(jid);
+    if (number) registry.unregister(number);
+    registry.flush?.();
+  } catch {}
+
+  try {
+    const selections = require('../deploy/botSelectionStore');
+    if (number) {
+      selections.clearSelection(number);
+      selections.clearPending?.(number);
+      selections.clearOwner?.(number);
+    }
+  } catch {}
+
+  try {
+    const ownership = require('../sessionOwnership');
+    if (explicitDir) ownership.release(explicitDir);
+    if (number) ownership.release(number);
+    if (jid) ownership.release(jid);
+  } catch {}
+
+  // 5. Subsequent delayed sweeps to absorb trailing writes from dying sockets
+  const delayedSweep = () => {
+    for (const dir of targets) {
+      try { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    }
+    if (fs.existsSync(pairingRoot) && number) {
+      try {
+        const items = fs.readdirSync(pairingRoot);
+        for (const item of items) {
+          if (item.includes(number) && item.includes('.quarantine-')) {
+            try { fs.rmSync(path.join(pairingRoot, item), { recursive: true, force: true }); } catch {}
+          }
+        }
+      } catch {}
+    }
+  };
+
+  setTimeout(delayedSweep, 250);
+  setTimeout(delayedSweep, 1200);
+
+  return {
+    ok: true,
+    number,
+    jid,
+    filesDeleted,
+    dbRowsDeleted,
+    message: `Session ${number || jid} completely deleted from disk and database.`
+  };
+}
+
+module.exports = {
+  createPool,
+  saveSessionFile,
+  syncSessionDirToDb,
+  restoreSessionDirFromDb,
+  restoreAllSessionsFromDb,
+  syncRegistryAndSelectionsFromDb,
+  getStoredSessionsCount,
+  deleteSessionCompletely,
+  normalizeSessionKeys,
+};

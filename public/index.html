@@ -683,9 +683,10 @@
       const d = await r.json();
       if (pill) {
         if (d.status === 'connected') {
-          pill.textContent = 'Neon DB: Connected';
+          const sCount = typeof d.sessionsInDb === 'number' ? ' • ' + d.sessionsInDb + ' session' + (d.sessionsInDb === 1 ? '' : 's') : '';
+          pill.textContent = 'Neon DB: Connected' + sCount;
           pill.className = 'pill ok';
-          pill.title = 'Neon database (' + (d.database || 'neondb') + ') is attached and persistent.';
+          pill.title = 'Neon database (' + (d.database || 'neondb') + ') is attached with ' + (d.sessionsInDb || 0) + ' sessions in DB.';
         } else if (d.status === 'error') {
           pill.textContent = 'Neon DB: Error';
           pill.className = 'pill bad';
@@ -698,7 +699,8 @@
       }
       if (dbTxt) {
         if (d.status === 'connected') {
-          dbTxt.innerHTML = '<span style="color:var(--green);font-weight:700;">Neon PostgreSQL (' + (d.database || 'neondb') + ')</span>';
+          const sCount = typeof d.sessionsInDb === 'number' ? ' (' + d.sessionsInDb + ' session' + (d.sessionsInDb === 1 ? '' : 's') + ' in DB)' : '';
+          dbTxt.innerHTML = '<span style="color:var(--green);font-weight:700;">Neon PostgreSQL (' + (d.database || 'neondb') + ')' + sCount + '</span>';
         } else if (d.status === 'error') {
           dbTxt.innerHTML = '<span style="color:var(--red);font-weight:700;">Connection Error (' + (d.message || 'failed') + ')</span>';
         } else {
