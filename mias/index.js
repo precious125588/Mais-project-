@@ -18825,6 +18825,7 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
             if (_buf && _buf.length > 1024) { thumb = _buf; break; }
           } catch {}
         }
+        const resolvedUrl = info?.url || url;
         let pickerSent = false;
         let sentPickerMsg = null;
         try {
@@ -22428,15 +22429,9 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         for (const provider of providers) {
           try {
             const payload = await provider();
-            let refreshed = extractDcTiktok(payload, ttMode.kind === "audio");
-            if (!refreshed && Array.isArray(payload?.medias) && payload.medias.length > 0) {
-              const m = payload.medias.find(x => ttMode.quality === "hd" ? /hd/i.test(x.quality || "") : !/watermark/i.test(x.quality || "")) || payload.medias[0];
-              if (m?.url) refreshed = m.url;
-            }
-            if (!refreshed && typeof payload?.data === "string" && /^https?:\/\//i.test(payload.data)) refreshed = payload.data;
-            if (!refreshed && typeof payload?.result?.data === "string" && /^https?:\/\//i.test(payload.result.data)) refreshed = payload.result.data;
-            if (!refreshed) refreshed = payload?.data?.hdplay || payload?.data?.play || payload?.hdplay || payload?.play || payload?.video;
-            if (refreshed && typeof refreshed === "string" && !/^https?:\/\/(www\.|m\.|vm\.|vt\.)?tiktok\.com\/@/i.test(refreshed) && !/^https?:\/\/www\.tiktok\.com\/[^\/]+\/video\//i.test(refreshed)) candidateUrls.push(refreshed);
+            const refreshed = extractDcTiktok(payload, ttMode.kind === "audio")
+              || (payload?.data?.hdplay || payload?.data?.play || payload?.hdplay || payload?.play || payload?.video || payload?.url);
+            if (refreshed) candidateUrls.push(refreshed);
           } catch {}
         }
       };
