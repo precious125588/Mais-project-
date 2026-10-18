@@ -268,7 +268,7 @@ let _dbStatusCache = {
   checkedAt: 0,
   attached: false,
   status: 'not_configured',
-  message: 'DATABASE_URL is not set',
+  message: 'SESSION_DATABASE_URL (or legacy DATABASE_URL) is not set',
   database: null,
   volumeMounted: false,
 };
@@ -279,7 +279,7 @@ async function checkDbStatus(force = false) {
     return _dbStatusCache;
   }
 
-  const hasDbUrl = Boolean(String(process.env.DATABASE_URL || '').trim());
+  const hasDbUrl = Boolean(require('./mias/sessionPersistence.cjs').getDatabaseUrl());
   let volumeMounted = false;
   try {
     volumeMounted = Boolean(_sessionPaths && typeof _sessionPaths.isVolumeMounted === 'function' ? _sessionPaths.isVolumeMounted() : false);
@@ -290,7 +290,7 @@ async function checkDbStatus(force = false) {
       checkedAt: now,
       attached: false,
       status: 'not_configured',
-      message: 'DATABASE_URL is not set',
+      message: 'SESSION_DATABASE_URL (or legacy DATABASE_URL) is not set',
       database: null,
       volumeMounted,
     };
@@ -298,31 +298,10 @@ async function checkDbStatus(force = false) {
   }
 
   try {
-    let pgModule;
-    try {
-      pgModule = require('pg');
-    } catch {
-      pgModule = await import('pg').then(m => m.default || m);
-    }
-    const { Pool } = pgModule;
-    const pool = new Pool({
-      connectionString: require('./mias/lib/pgConnection.cjs').normalizePostgresConnectionString(process.env.DATABASE_URL),
-      max: 1,
-      connectionTimeoutMillis: 4000,
-      ssl: { rejectUnauthorized: true },
-    });
+    const sessionStore = require('./mias/sessionPersistence.cjs');
+    const pool = await sessionStore.readyPool();
     const res = await pool.query('SELECT 1 as ok, current_database() as db');
-    let sessionsInDb = 0;
-    try {
-      const sRes = await pool.query("SELECT DISTINCT session_id FROM mias_session_auth WHERE file_name = 'creds.json'");
-      const seenNums = new Set();
-      for (const r of (sRes?.rows || [])) {
-        const num = String(r.session_id || "").split("@")[0].replace(/\D/g, "");
-        if (num) seenNums.add(num);
-      }
-      sessionsInDb = seenNums.size;
-    } catch {}
-    await pool.end().catch(() => {});
+    const sessionsInDb = await sessionStore.getStoredSessionsCount({ strict: true });
     const row = res.rows[0];
     _dbStatusCache = {
       checkedAt: now,
@@ -331,6 +310,8 @@ async function checkDbStatus(force = false) {
       message: 'Neon Database connected',
       database: row?.db || 'neondb',
       sessionsInDb,
+      role: 'sessions',
+      separateSessionDatabase: Boolean(String(process.env.SESSION_DATABASE_URL || '').trim()),
       volumeMounted,
     };
   } catch (err) {
@@ -404,7 +385,18 @@ app.post('/api/pair', rateLimit(60000,10), async (req,res) => {
             return rDigits === cleanDigits && r.alive;
         }) : false;
 
-        if (force || (!live && !botRunning)) {
+        if (!force && !live && !botRunning) {
+            try {
+                const sd = _sessionPaths.sessionDirFor(jid);
+                if (!_launcher) return res.status(503).json({ ok: false, error: 'Bot launcher is warming up. Session kept.' });
+                if (_launcher.isPaused(jid)) return res.status(409).json({ ok: false, error: 'This bot is paused. Resume it from admin; the session is saved.' });
+                await _launcher.launch(jid, sd);
+                return res.json({ ok: true, restored: true, number, message: 'Starting from the saved session; no new pairing code is needed.' });
+            } catch (e) {
+                return res.status(503).json({ ok: false, error: 'Saved-session startup failed. Your credentials were kept. Use Restart bot in admin.' });
+            }
+        }
+        if (force) {
             logger.log('pairing', `Re-pair requested for ${jid} (force=${force}, live=${live}, bot=${botRunning}) — clearing dead session`);
             try { _pair.unpairSession ? _pair.unpairSession(jid) : _pair.forceCleanupSession(jid); } catch {}
             try { registry.remove?.(jid); } catch {}
@@ -628,7 +620,7 @@ app.get('/api/pair/stream/:number', (req,res) => {
                         const bot=_launcher.list().find(r=>r.number===jid);
                         if((bot&&bot.alive)||checks>30){
                             clearInterval(bp);
-                            if(bot&&bot.alive) sendPairingEvent(res, 'bot_started', {number,pid:bot.pid,msg:'Bot is live!'});
+                            if(bot&&bot.alive) sendPairingEvent(res, 'bot_started', {number,pid:bot.pid,msg:'Bot process started; waiting for WhatsApp connection.'});
                         }
                     },2000);
                 }
@@ -724,13 +716,13 @@ function buildPairHealth({paired, live, botRunning, botStarting, startError, act
     else if (botStarting)                       { phase='starting';     label='Starting bot';                         tone='info'; }
     else if (!botRunning && startError)         { phase='start_failed'; label='Startup failed — use Restart bot';     tone='bad'; }
     else if (!botRunning)                       { phase='stopped';      label='Linked, bot not running';              tone='warn'; }
-    else if (state==='open' || !!live)          { phase='live';         label='Live and connected';                   tone='ok'; }
+    else if (state==='open')                    { phase='live';         label='Live and connected';                   tone='ok'; }
     else if (state==='closed')                  { phase='reconnecting'; label='Disconnected, reconnecting';           tone='warn'; }
     else                                        { phase='starting';     label='Starting the connection';              tone='info'; }
     const checks = [
         {label:'Session saved',         ok:!!paired,                                   value: paired ? 'yes' : 'no'},
         {label:'Bot process running',   ok:!!botRunning,                               value: botRunning ? 'yes' : 'no'},
-        {label:'Connected to WhatsApp', ok:state==='open' || !!live,                   value: state || (live ? 'live' : 'waiting')},
+        {label:'Connected to WhatsApp', ok:state==='open',                   value: state || (live ? 'live' : 'waiting')},
         {label:'Last disconnect',       ok:code==null || code===515,                   value: code != null ? ('code ' + code) : 'none'},
     ];
     if (error) checks.push({label:'Runtime error', ok:false, value:String(error).slice(0,160)});
@@ -754,6 +746,10 @@ app.get('/api/pair/status/:number', (req,res) => {
     const startError  = (!botRunning && _launcher && _launcher.lastError) ? (_launcher.lastError(jid)||null) : null;
     const selection = _selectionStore ? _selectionStore.get(number) : null;
     const bs = readBotStatus(number);
+    if (registry.get(jid) && botRunning) {
+        const status = bs?.state === 'open' ? 'connected' : 'connecting';
+        if (registry.get(jid)?.status !== status) registry.updateStatus(jid, status);
+    }
     const health = buildPairHealth({paired, live, botRunning, botStarting, startError, active:!!runtime.active, error:runtime.error||null, bs});
     res.json({
         ok:true,paired,live,
@@ -1123,7 +1119,7 @@ async function _autoLoadPairs() {
             if(!fs.existsSync(path.join(sd,'creds.json'))) continue;
             try {
                 if(!_launcher.list().find(r=>r.number===jid&&r.alive)){
-                    await _launcher.launch(jid,sd);registry.updateStatus(jid,'connected');launched++;await _sleep(2000);
+                    await _launcher.launch(jid,sd);registry.updateStatus(jid,'connecting');launched++;await _sleep(2000);
                 }
             } catch(e){ registry.updateStatus(jid,'disconnected'); }
         }

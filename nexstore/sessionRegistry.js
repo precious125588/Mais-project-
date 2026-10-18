@@ -2,8 +2,21 @@
 const fs   = require('fs');
 const path = require('path');
 
-const REGISTRY_FILE = path.join(__dirname, 'session_registry.json');
+const REGISTRY_FILE = path.join(require('../sessionPaths').nexstoreRoot(), 'session_registry.json');
 let _cache = null, _dirty = false, _saveTimer = null;
+const _dbWrites = new Map();
+function persist(row, remove = false) {
+    const key = typeof row === 'string' ? row : row.jid;
+    const snapshot = typeof row === 'object' ? { ...row } : row;
+    const pending = (_dbWrites.get(key) || Promise.resolve()).catch(() => {}).then(async () => {
+        const store = require('../mias/sessionPersistence.cjs');
+        if (remove) await store.deleteRegistryEntry(key);
+        else await store.saveRegistryEntry(snapshot);
+    }).catch(e => console.warn('[session-registry] DB sync pending:', e?.code || 'FAILED'));
+    _dbWrites.set(key, pending);
+    pending.finally(() => { if (_dbWrites.get(key) === pending) _dbWrites.delete(key); });
+}
+
 
 function _load() {
     if (_cache) return _cache;
@@ -17,7 +30,13 @@ function _scheduleSave() {
 }
 function _flush() {
     if (!_dirty || !_cache) return;
-    try { fs.writeFileSync(REGISTRY_FILE, JSON.stringify(_cache,null,2),'utf8'); _dirty = false; } catch {}
+    try {
+        fs.mkdirSync(path.dirname(REGISTRY_FILE), { recursive: true });
+        const tmp = `${REGISTRY_FILE}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(_cache,null,2), 'utf8');
+        fs.renameSync(tmp, REGISTRY_FILE);
+        _dirty = false;
+    } catch {}
 }
 
 function register(jid, source, extra={}) {
@@ -25,14 +44,14 @@ function register(jid, source, extra={}) {
     d[jid]={jid, number:jid.replace('@s.whatsapp.net',''), source:source||'web',
              pairedAt:d[jid]?.pairedAt||now, lastActivity:now, status:'connecting',
              telegramUserId:extra.telegramUserId||d[jid]?.telegramUserId||null, ...extra};
-    _dirty=true; _scheduleSave(); return d[jid];
+    _dirty=true; _scheduleSave(); persist(d[jid]); return d[jid];
 }
 function updateStatus(jid, status) {
     const d=_load(); if (!d[jid]) return false;
     d[jid].status=status; d[jid].lastActivity=new Date().toISOString();
-    _dirty=true; _scheduleSave(); return true;
+    _dirty=true; _scheduleSave(); persist(d[jid]); return true;
 }
-function unregister(jid) { const d=_load(); if(!d[jid])return false; delete d[jid]; _dirty=true; _scheduleSave(); return true; }
+function unregister(jid) { const d=_load(); if(!d[jid])return false; delete d[jid]; _dirty=true; _scheduleSave(); persist(jid, true); return true; }
 function get(jid)        { return _load()[jid]||null; }
 function getAll()        { return Object.values(_load()); }
 function getBySource(s)  { return Object.values(_load()).filter(x=>x.source===s); }

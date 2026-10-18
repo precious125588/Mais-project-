@@ -265,3 +265,69 @@ test("restoreSessionDirFromDb sanitizes traversal in file_name", async () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+
+
+test('session database is separate from settings URL with legacy fallback', () => {
+  const oldSettings = process.env.DATABASE_URL, oldSession = process.env.SESSION_DATABASE_URL;
+  try {
+    process.env.DATABASE_URL = 'postgresql://settings.test/neondb';
+    process.env.SESSION_DATABASE_URL = 'postgresql://sessions.test/neondb';
+    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.SESSION_DATABASE_URL);
+    assert.equal(process.env.DATABASE_URL, 'postgresql://settings.test/neondb');
+    delete process.env.SESSION_DATABASE_URL;
+    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.DATABASE_URL);
+  } finally {
+    if (oldSettings === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = oldSettings;
+    if (oldSession === undefined) delete process.env.SESSION_DATABASE_URL; else process.env.SESSION_DATABASE_URL = oldSession;
+  }
+});
+
+test('session backup skips unfinished temp files and unchanged auth documents', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-snapshot-'));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); sessionPersistence.setPoolForTesting(null); });
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{"generation":1}');
+  fs.writeFileSync(path.join(dir, 'creds.json.tmp'), '{"generation":0}');
+  const writes = [];
+  sessionPersistence.setPoolForTesting({ query: async (sql, params) => { if (sql.includes('INSERT INTO mias_session_auth')) writes.push(params); return { rows: [] }; } });
+  assert.equal((await sessionPersistence.syncSessionDirToDb('123456789', dir)).synced, 1);
+  assert.equal((await sessionPersistence.syncSessionDirToDb('123456789', dir)).synced, 0);
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{"generation":2}');
+  assert.equal((await sessionPersistence.syncSessionDirToDb('123456789', dir)).synced, 1);
+  assert.deepEqual(writes.map(p => JSON.parse(p[2]).generation), [1, 2]);
+});
+
+test('session backup reports database failures instead of returning false success', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-db-error-'));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); sessionPersistence.setPoolForTesting(null); });
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{}');
+  sessionPersistence.setPoolForTesting({ query: async () => { throw Object.assign(new Error('test offline'), { code: 'ECONNRESET' }); } });
+  const result = await sessionPersistence.syncSessionDirToDb('123456789', dir);
+  assert.equal(result.ok, false);
+  assert.equal(result.synced, 0);
+  assert.equal(result.failed, 1);
+});
+
+test('overlapping auth backups coalesce and keep latest contents', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-coalesce-'));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); sessionPersistence.setPoolForTesting(null); });
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{"generation":1}');
+  let release, entered;
+  const waiting = new Promise(r => { entered = r; });
+  const values = [];
+  sessionPersistence.setPoolForTesting({ query: async (sql, params) => {
+    if (sql.includes('INSERT INTO mias_session_auth')) {
+      values.push(params[2]);
+      if (values.length === 1) { entered(); await new Promise(r => { release = r; }); }
+    }
+    return { rows: [] };
+  } });
+  const first = sessionPersistence.syncSessionDirToDb('123456789', dir);
+  await waiting;
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{"generation":2}');
+  const second = sessionPersistence.syncSessionDirToDb('123456789', dir);
+  assert.equal(first, second);
+  release();
+  await second;
+  assert.deepEqual(values.map(v => JSON.parse(v).generation), [1, 2]);
+});

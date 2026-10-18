@@ -8,9 +8,11 @@ const { normalizePostgresConnectionString } = require('./lib/pgConnection.cjs');
 let _pool = null;
 let _poolUrl = null;
 let _testPool = null;
+const _fileDigests = new Map();
 
 function setPoolForTesting(pool) {
   _testPool = pool;
+  _fileDigests.clear();
 }
 
 function getPool() {
@@ -19,7 +21,7 @@ function getPool() {
 }
 
 function getDatabaseUrl() {
-  return String(process.env.DATABASE_URL || '').trim();
+  return String(process.env.SESSION_DATABASE_URL || process.env.DATABASE_URL || '').trim();
 }
 
 function createPool() {
@@ -45,16 +47,79 @@ function createPool() {
     max: 2,
     connectionTimeoutMillis: 5000,
     statement_timeout: 10000,
+    query_timeout: 15000,
+    idleTimeoutMillis: 30000,
+    allowExitOnIdle: true,
     ssl: { rejectUnauthorized: true },
     application_name: 'mais-session-store',
   });
   _poolUrl = url;
+  _fileDigests.clear();
 
   _pool.on('error', (err) => {
     console.warn('[session-persistence] Pool background error:', err.message);
   });
 
   return _pool;
+}
+
+// Only the session schema belongs in the second database. Do not run the
+// bot-settings migrations here or move settings/prefixes between databases.
+let _schemaPool = null;
+let _schemaReady = null;
+async function readyPool() {
+  const pool = getPool();
+  if (!pool || pool === _testPool) return pool;
+  if (_schemaPool !== pool || !_schemaReady) {
+    _schemaPool = pool;
+    _schemaReady = pool.query(fs.readFileSync(path.join(__dirname, 'migrations', '0002_create_whatsapp_sessions.sql'), 'utf8'))
+      .catch(error => { _schemaReady = null; throw error; });
+  }
+  await _schemaReady;
+  return pool;
+}
+
+// Coalesce overlapping directory snapshots: an old snapshot must not race a
+// new one and overwrite freshly rotated auth keys.
+const _syncs = new Map();
+function syncSessionDirToDb(sessionId, sessionDir) {
+  const key = path.resolve(String(sessionDir || '.'));
+  const current = _syncs.get(key);
+  if (current) { current.again = true; return current.promise; }
+  const entry = { again: false, promise: null };
+  entry.promise = Promise.resolve().then(async () => {
+    let result;
+    do {
+      entry.again = false;
+      result = await syncSessionSnapshot(sessionId, sessionDir);
+      // A failed DB is retried on the next real auth change, not in a hot loop.
+    } while (entry.again && result.ok);
+    return result;
+  }).finally(() => { if (_syncs.get(key) === entry) _syncs.delete(key); });
+  _syncs.set(key, entry);
+  return entry.promise;
+}
+
+// Parent-owned registry persistence. JSON remains a local recovery copy.
+async function saveRegistryEntry(row) {
+  const pool = await readyPool();
+  if (!pool || !row?.jid) return false;
+  const { jid, number } = normalizeSessionKeys(row.jid);
+  await pool.query(`INSERT INTO mias_session_registry (jid, number, source, status, telegram_user_id, metadata, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb, now())
+    ON CONFLICT (jid) DO UPDATE SET source=EXCLUDED.source, status=EXCLUDED.status,
+      telegram_user_id=EXCLUDED.telegram_user_id, metadata=EXCLUDED.metadata, updated_at=now()`,
+    [jid, number, String(row.source || 'web'), String(row.status || 'connecting'),
+     row.telegramUserId == null ? null : String(row.telegramUserId),
+     JSON.stringify({ pairedAt: row.pairedAt, lastActivity: row.lastActivity })]);
+  return true;
+}
+async function deleteRegistryEntry(id) {
+  const pool = await readyPool();
+  if (!pool) return false;
+  const { jid, number } = normalizeSessionKeys(id);
+  await pool.query('DELETE FROM mias_session_registry WHERE jid = $1 OR number = $2', [jid, number]);
+  return true;
 }
 
 function normalizeSessionKeys(input) {
@@ -71,7 +136,7 @@ function normalizeSessionKeys(input) {
  * Stored strictly under canonical JID (<number>@s.whatsapp.net) to prevent duplicate session counts.
  */
 async function saveSessionFile(sessionId, fileName, content) {
-  const pool = getPool();
+  const pool = await readyPool();
   if (!pool) return false;
   const { number, jid, primary } = normalizeSessionKeys(sessionId);
   const targetId = jid || primary;
@@ -109,8 +174,8 @@ async function saveSessionFile(sessionId, fileName, content) {
  * Syncs all valid JSON files in a session directory to Neon PostgreSQL.
  * Uses only canonical JID (<number>@s.whatsapp.net).
  */
-async function syncSessionDirToDb(sessionId, sessionDir) {
-  const pool = getPool();
+async function syncSessionSnapshot(sessionId, sessionDir) {
+  const pool = await readyPool();
   if (!pool) return { ok: false, synced: 0, reason: 'db_not_configured' };
   if (!sessionDir || !fs.existsSync(sessionDir)) return { ok: false, synced: 0, reason: 'dir_missing' };
 
@@ -126,17 +191,22 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
   }
 
   let count = 0;
+  let failed = 0;
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const fn = entry.name;
-    if (!fn.endsWith('.json') && !fn.endsWith('.json.tmp')) continue;
+    if (!fn.endsWith('.json')) continue; // unfinished .tmp writes never replace committed auth
     if (fn.startsWith('.')) continue; // skip .owner.json, hidden files
     const cleanFn = path.basename(fn.replace(/\.tmp$/, ''));
 
     try {
       const fullPath = path.join(sessionDir, fn);
       const content = fs.readFileSync(fullPath, 'utf8');
-      if (!content || !content.trim()) continue;
+      if (!content || !content.trim()) { failed++; continue; }
+      JSON.parse(content); // never persist a partially written auth document
+      const digestKey = `${path.resolve(sessionDir)}:${cleanFn}`;
+      const digest = createHash('sha256').update(content).digest('hex');
+      if (_fileDigests.get(digestKey) === digest) continue;
 
       await pool.query(
         `INSERT INTO mias_session_auth (session_id, file_name, content, updated_at)
@@ -145,15 +215,30 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
          DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
         [targetId, cleanFn, content]
       );
+      _fileDigests.set(digestKey, digest);
       count++;
     } catch (e) {
       // Baileys can rotate/delete pre-key JSON files between readdirSync and
       // readFileSync. ENOENT is an expected race; the next sync sees the current
       // key set. Keep reporting real filesystem/DB errors.
       if (e?.code !== 'ENOENT') {
+        failed++;
         console.warn(`[session-persistence] Error syncing ${cleanFn}:`, e.message);
       }
     }
+  }
+
+  // Snapshot cleanup prevents deleted pre-keys from being resurrected after
+  // a redeploy. Never prune an incomplete/error snapshot or an empty folder.
+  const names = entries.filter(e => e.isFile() && e.name.endsWith('.json') && !e.name.startsWith('.')).map(e => e.name);
+  if (failed === 0 && names.includes('creds.json')) {
+    try {
+      await pool.query('DELETE FROM mias_session_auth WHERE session_id = $1 AND NOT (file_name = ANY($2::text[]))', [targetId, names]);
+      const prefix = `${path.resolve(sessionDir)}:`;
+      for (const key of _fileDigests.keys()) {
+        if (key.startsWith(prefix) && !names.includes(key.slice(prefix.length))) _fileDigests.delete(key);
+      }
+    } catch (e) { failed++; }
   }
 
   // Purge any legacy bare-number entries for this session from DB
@@ -166,7 +251,7 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
     } catch {}
   }
 
-  return { ok: true, synced: count, targetId };
+  return { ok: failed === 0, synced: count, failed, targetId };
 }
 
 /**
@@ -174,7 +259,7 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
  * Enforces path.basename on all filenames to prevent directory traversal.
  */
 async function restoreSessionDirFromDb(sessionId, targetDir) {
-  const pool = getPool();
+  const pool = await readyPool();
   if (!pool) return { ok: false, restored: 0, reason: 'db_not_configured' };
   const { number, jid, primary } = normalizeSessionKeys(sessionId || path.basename(targetDir));
   const targetId = jid || primary;
@@ -221,7 +306,7 @@ async function restoreSessionDirFromDb(sessionId, targetDir) {
  * Always restores into canonical folder name: <number>@s.whatsapp.net
  */
 async function restoreAllSessionsFromDb(pairingRoot) {
-  const pool = getPool();
+  const pool = await readyPool();
   if (!pool) return { ok: false, restored: 0, reason: 'db_not_configured' };
 
   try {
@@ -274,7 +359,7 @@ async function restoreAllSessionsFromDb(pairingRoot) {
  * Restores session_registry.json and bot selections from Neon DB if present.
  */
 async function syncRegistryAndSelectionsFromDb() {
-  const pool = getPool();
+  const pool = await readyPool();
   if (!pool) return;
 
   try {
@@ -284,7 +369,7 @@ async function syncRegistryAndSelectionsFromDb() {
         const registry = require('../nexstore/sessionRegistry');
         for (const r of regRes.rows) {
           if (!registry.has(r.jid)) {
-            registry.register(r.jid, {
+            registry.register(r.jid, r.source || 'web', {
               number: r.number,
               source: r.source,
               status: r.status,
@@ -304,9 +389,7 @@ async function syncRegistryAndSelectionsFromDb() {
       try {
         const botStore = require('../deploy/botSelectionStore');
         for (const s of selRes.rows) {
-          botStore.saveSelection(s.number, {
-            botId: s.bot_id,
-            botName: s.bot_name,
+          botStore.setSelection(s.number, { id: s.bot_id, name: s.bot_name }, {
             source: s.source,
             chosenBy: s.chosen_by,
             locked: s.locked,
@@ -322,8 +405,8 @@ async function syncRegistryAndSelectionsFromDb() {
  * Gets count of unique physical sessions stored in Neon PostgreSQL.
  * Deduplicates canonical JID and legacy bare-number aliases by phone number.
  */
-async function getStoredSessionsCount() {
-  const pool = getPool();
+async function getStoredSessionsCount({ strict = false } = {}) {
+  const pool = await readyPool();
   if (!pool) return 0;
   try {
     const res = await pool.query(
@@ -335,7 +418,8 @@ async function getStoredSessionsCount() {
       if (num) seen.add(num);
     }
     return seen.size;
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return 0;
   }
 }
@@ -356,7 +440,7 @@ async function deleteSessionCompletely(options = {}) {
   console.log(`[session-persistence] Purging all session files and database records for ${number || jid} (reason: ${reason})`);
 
   let dbRowsDeleted = 0;
-  const pool = getPool();
+  const pool = await readyPool();
   if (pool) {
     try {
       const authDel = await pool.query(
@@ -377,24 +461,15 @@ async function deleteSessionCompletely(options = {}) {
       );
       dbRowsDeleted += (selDel.rowCount || 0);
 
-      // Clean up scoped bot state for this session (both phone pattern and hashed directory scopes)
-      if (number) {
-        await pool.query(
-          `DELETE FROM mias_bot_state WHERE scope LIKE $1`,
-          [`%${number}%`]
-        );
-      }
-      if (explicitDir) {
-        try {
-          const stableSource = path.resolve(explicitDir);
-          const digest = createHash('sha256').update(stableSource).digest('hex');
-          const scope = `session_${digest.slice(0, 40)}`;
-          await pool.query(`DELETE FROM mias_bot_state WHERE scope = $1`, [scope]);
-        } catch {}
-      }
+      // Bot settings/prefixes remain in DATABASE_URL. A session logout must
+      // not wipe unrelated settings (nor query bot-state tables in Neon 2).
     } catch (err) {
       console.warn(`[session-persistence] Error deleting DB records for ${number}:`, err.message);
     }
+  }
+
+  for (const key of _fileDigests.keys()) {
+    if (explicitDir && key.startsWith(`${path.resolve(explicitDir)}:`)) _fileDigests.delete(key);
   }
 
   // Teardown disk files and quarantine directories
@@ -534,6 +609,10 @@ async function deleteSessionCompletely(options = {}) {
 
 module.exports = {
   createPool,
+  readyPool,
+  getDatabaseUrl,
+  saveRegistryEntry,
+  deleteRegistryEntry,
   setPoolForTesting,
   saveSessionFile,
   syncSessionDirToDb,

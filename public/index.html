@@ -266,14 +266,14 @@
   // What the ring shows when no pairing is running: driven by the server's health phase.
   const RING_BY_PHASE = {
     live:[100,'Bot is live','ok'], reconnecting:[85,'Reconnecting','warn'], starting:[80,'Starting up','info'],
-    stopped:[70,'Linked, bot stopped','warn'], pairing:[35,'Waiting for approval','info'],
+    stopped:[70,'Linked, bot stopped','warn'], start_failed:[70,'Startup failed','bad'], pairing:[35,'Waiting for approval','info'],
     logged_out:[40,'Logged out','bad'], replaced:[40,'Taken over','bad'], new:[0,'Not linked','muted']
   };
   const WAIT_LIMIT_MS = 150000;   // no code or QR after this long = failure
   const STALL_NOTE_MS = 90000;    // log a note if WhatsApp is slow
   const HEALTH_MS = 5000;         // live condition refresh
   const CIRC = 2 * Math.PI * 54;
-  const EVENTS = ['waiting','state','connecting','authenticating','qr_ready','code_ready','linked','bot_started','failed','timeout','debug','linking','paired'];
+  const EVENTS = ['waiting','state','connecting','authenticating','qr_ready','code_ready','linked','bot_started','failed','timeout','debug','linking','paired','bot_error'];
 
   let mode = 'code', number = '', es = null, stage = 'idle', pending = false;
   let startedAt = 0, lastEventAt = 0, stallNoted = false;
@@ -393,7 +393,8 @@
     if (h.lastClose) hint = 'Last disconnect: ' + h.lastClose.hint + (h.lastClose.at ? ' (' + ago(h.lastClose.at) + ')' : '');
     else if (h.phase === 'live') hint = 'Connected and listening for messages. Updates every few seconds.';
     else if (h.phase === 'new') hint = 'Enter your number to start. Once linked, this monitor shows the live bot connection.';
-    else if (h.phase === 'stopped') hint = 'The number is linked but its bot process is not running. Use Reset number or restart it from the admin page.';
+    else if (h.phase === 'start_failed') hint = h.startError || 'Bot startup failed. Your session is saved; use Restart bot in admin.';
+    else if (h.phase === 'stopped') hint = 'The number is linked but its bot process is not running. Restart it from the admin page; a valid link does not need Reset.';
     $('phaseHint').textContent = hint;
     $('checks').innerHTML = (h.checks || []).map(c =>
       '<div class="chk ' + (c.ok ? 'ok' : '') + '"><i></i><span>' + esc(c.label) + '</span><em title="' + esc(c.value ?? '') + '">' + esc(c.value ?? '') + '</em></div>'
@@ -408,6 +409,7 @@
       }
       if (h.phase === 'live') showDone();
       else if (h.phase === 'logged_out' || h.phase === 'replaced') showNote('<div class="bad-mark" aria-hidden="true">!</div>', h.phase === 'replaced' ? 'Another device took over this session. Press Get pairing code to link it again.' : 'WhatsApp logged this device out. Press Get pairing code to link it again.');
+      else if (h.phase === 'start_failed') showNote('<div class="bad-mark" aria-hidden="true">!</div>', h.startError || 'Bot startup failed. Your session is saved; use Restart bot in admin.');
       else if (h.phase === 'stopped') showNote('<div class="bad-mark" aria-hidden="true">!</div>', 'Linked, but the bot process is not running. Press Check status again in a moment.');
       else if (h.phase === 'reconnecting' || h.phase === 'starting') showNote('<div class="spin" aria-hidden="true"></div>', 'The bot is reconnecting on its own. This updates live.');
       else if (h.phase === 'pairing') showNote('<div class="spin" aria-hidden="true"></div>', 'A pairing is waiting for approval on your phone.');
@@ -437,6 +439,7 @@
     stopAll();
     setRing(PCT[stage] || 0, 'Failed', 'bad');
     markSteps(stage === 'idle' ? 'connect' : stage, true);
+    showNote('<div class="bad-mark" aria-hidden="true">!</div>', msg);
     alertMsg(msg, 'err');
     log('Failed: ' + msg);
   }
@@ -502,12 +505,14 @@
         setStage('linked', 'WhatsApp linked. Starting the bot'); 
         showSpinner(d.msg || 'Starting the bot…'); 
         break;
-      case 'bot_started':    
-        setStage('bot', 'Bot is live'); 
-        showDone(); 
-        pending = false; 
-        stopAll(); 
-        refreshHealth(); 
+      case 'bot_started':
+        setStage('linked', 'Bot process started; checking WhatsApp connection');
+        showSpinner('Bot process started. Waiting for the WhatsApp connection…');
+        refreshHealth();
+        break;
+      case 'bot_error':
+        fail(d.msg || 'WhatsApp is linked, but the bot could not start. Your session is saved; restart from the admin page.');
+        refreshHealth();
         break;
       case 'failed':         
         if (d.debug) showDiagnosticInfo(d.debug);
@@ -522,6 +527,7 @@
     const s = await refreshHealth();
     if (!s) return;
     if (s.debug) showDiagnosticInfo(s.debug);
+    if (s.health?.phase === 'start_failed') { fail(s.health.startError || 'Bot startup failed. Session saved — use Restart bot in admin.'); return; }
     // Only the server's health phase can declare the bot live. A stale botRunning flag is not enough.
     const live = s.health ? s.health.phase === 'live' : !!s.botRunning;
     if (live && stage !== 'bot') { setStage('bot', 'Bot is live'); showDone(); pending = false; stopAll(); return; }
@@ -533,6 +539,11 @@
   function watch(){
     if (!pending) return;
     const waited = Date.now() - startedAt;
+    if (stage === 'linked' && waited > 240000) {
+      fail('WhatsApp is linked, but startup has not completed. Your session is saved. Check status or use Restart bot in admin; do not reset a valid link.');
+      refreshHealth();
+      return;
+    }
     if (stage !== 'linked' && stage !== 'bot' && waited > WAIT_LIMIT_MS) {
       fail('No code or QR after two and a half minutes. Press Reset number, then start again.');
       return;
@@ -605,7 +616,10 @@
       if (r.status === 503) return fail(data.error || "The server is still starting. Try again in 30 seconds.");
       if (r.status === 429) return fail("Too many attempts. Wait a minute, then try again.");
       if (!r.ok || data.ok === false) return fail(data.error || "Could not start pairing. Try again.");
-      setStage("connect", "Request accepted");
+      if (data.restored) {
+        setStage('linked', data.message || 'Starting from saved session');
+        showSpinner('Reconnecting using saved credentials. No new code is needed.');
+      } else setStage("connect", "Request accepted");
       pollTimer = setInterval(pollStatus, 3000);
       watchTimer = setInterval(watch, 1000);
     } catch {

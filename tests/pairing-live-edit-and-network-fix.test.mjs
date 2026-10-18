@@ -84,3 +84,148 @@ test("pair.js exports event emitter and runtime state query", async () => {
   assert.equal(typeof mod.waitForPairingResult, "function", "waitForPairingResult must be a function");
   assert.equal(typeof mod.startpairing, "function", "startpairing must be a function");
 });
+
+
+
+// Whole launcher evaluated with mocked child processes; never opens WhatsApp.
+const { default: vm } = await import('node:vm');
+const { EventEmitter } = await import('node:events');
+const { createRequire } = await import('node:module');
+const realRequire = createRequire(import.meta.url);
+function launcherHarness(pairRuntime = null) {
+  const children = [], timers = new Set(), statuses = [];
+  const fakeProcess = new EventEmitter();
+  Object.assign(fakeProcess, { env: { MAX_INSTANCES: '6' }, execPath: process.execPath, stdout: { write() {} }, stderr: { write() {} }, memoryUsage: () => ({ rss: 1 }) });
+  const mockRegistry = { updateStatus: (...args) => statuses.push(args) };
+  const timeout = (fn, ms) => { const timer = { fn, ms, unref() {} }; timers.add(timer); return timer; };
+  const sandbox = {
+    __dirname: ROOT, module: { exports: {} }, console: { log() {}, error() {} }, process: fakeProcess,
+    setTimeout: timeout, clearTimeout: timer => timers.delete(timer),
+    setInterval: () => ({ unref() {} }), Date, Map, Set, Promise,
+    require: name => {
+      if (name === 'child_process') return { spawn: (...args) => {
+        const child = new EventEmitter();
+        Object.assign(child, { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 100 + children.length, exitCode: null, signalCode: null, killed: false,
+          kill(signal) { this.killed = true; this.lastSignal = signal; return true; } });
+        children.push({ child, args });
+        return child;
+      } };
+      if (name === 'fs') return { existsSync: () => true, readFileSync: () => '', readdirSync: () => [] };
+      if (name === './nexstore/sessionRegistry') return mockRegistry;
+      if (name === './sessionOwnership') return { handOffToBot() {}, release() {} };
+      if (name === './nexstore/adminRequests') return { createWatcher() {} };
+      if (name === './sessionPaths') return { sessionDirFor: () => '/test/session', ensureSessionRoot: () => '/test' };
+      if (name.startsWith('./')) throw Error('Not loaded in harness: ' + name);
+      return realRequire(name);
+    },
+  };
+  sandbox.require.resolve = () => '/mock/pair';
+  sandbox.require.cache = pairRuntime ? { '/mock/pair': { exports: pairRuntime } } : {};
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'mais_launcher.js'), 'utf8'), sandbox);
+  return { api: sandbox.module.exports, children, timers, statuses };
+}
+
+test('launcher starts more than six distinct users without a count limit', async () => {
+  const h = launcherHarness();
+  await Promise.all(Array.from({ length: 12 }, (_, i) => h.api.launch(String(123456700 + i), '/test/session')));
+  assert.equal(h.children.length, 12);
+  assert.equal(h.api.list().filter(r => r.alive).length, 12);
+  assert.match(h.children[0].args[1].join(' '), /--max-old-space-size=512/);
+});
+
+test('launcher shares one in-flight start for bare number, JID and device JID', async () => {
+  const h = launcherHarness();
+  const one = h.api.launch('123456789', '/test/session');
+  const two = h.api.launch('123456789@s.whatsapp.net', '/test/session');
+  const three = h.api.launch('123456789:12@s.whatsapp.net', '/test/session');
+  assert.equal(one, two);
+  assert.equal(one, three);
+  await Promise.all([one, two, three]);
+  assert.equal(h.children.length, 1);
+});
+
+test('launcher pause cancels a scheduled crash restart', async () => {
+  const h = launcherHarness();
+  await h.api.launch('123456789', '/test/session');
+  const child = h.children[0].child;
+  child.exitCode = 1;
+  child.emit('exit', 1, null);
+  assert.equal([...h.timers].filter(t => t.ms === 8000).length, 1);
+  h.api.pause('123456789');
+  assert.equal([...h.timers].filter(t => t.ms === 8000).length, 0);
+  assert.equal(h.api.isPaused('123456789@s.whatsapp.net'), true);
+});
+
+test('launcher does not spawn replacement while old process is still stopping', async () => {
+  const h = launcherHarness();
+  await h.api.launch('123456789', '/test/session');
+  const child = h.children[0].child;
+  h.api.stop('123456789');
+  const next = h.api.launch('123456789', '/test/session');
+  await Promise.resolve();
+  assert.equal(h.children.length, 1);
+  assert.equal(h.api.list()[0].alive, true, 'signal sent does not mean exited');
+  child.signalCode = 'SIGTERM';
+  child.emit('exit', null, 'SIGTERM');
+  await next;
+  assert.equal(h.children.length, 2);
+  child.emit('exit', 1, null); // delayed duplicate event must not delete new child
+  assert.equal(h.api.list().length, 1);
+  assert.equal(h.api.list()[0].pid, h.children[1].child.pid);
+});
+
+test('launcher spawn failure is visible and not reported as connected', async () => {
+  const h = launcherHarness();
+  await h.api.launch('123456789', '/test/session');
+  h.children[0].child.emit('error', Object.assign(new Error('spawn failed'), { code: 'EAGAIN' }));
+  assert.equal(h.api.list().length, 0);
+  assert.match(h.api.lastError('123456789').message, /EAGAIN/);
+  assert.equal(h.statuses.some(([, state]) => state === 'connected'), false);
+});
+
+test('launcher waits for companion socket retirement before spawning', async () => {
+  let pairingLive = true;
+  const h = launcherHarness({ isSessionLive: () => pairingLive });
+  const starting = h.api.launch('123456789', '/test/session');
+  await Promise.resolve();
+  assert.equal(h.children.length, 0);
+  const poll = [...h.timers].find(t => t.ms === 250);
+  assert.ok(poll, 'waits instead of stealing the pairing socket');
+  pairingLive = false;
+  poll.fn();
+  await new Promise(resolve => setImmediate(resolve));
+  const settle = [...h.timers].find(t => t.ms === 3000);
+  assert.ok(settle, 'retired socket receives a settling interval');
+  settle.fn();
+  await starting;
+  assert.equal(h.children.length, 1);
+});
+
+test('pairing API resumes an offline saved session without deleting credentials', async () => {
+  const source = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  const start = source.indexOf("app.post('/api/pair',");
+  const end = source.indexOf("app.get(", start);
+  let handler, launched = 0, deleted = 0, response;
+  const sandbox = {
+    app: { post: (route, middleware, fn) => { handler = fn; } }, rateLimit: () => () => {},
+    _pair: { hasPairedSession: () => true, isSessionLive: () => false, unpairSession: () => { deleted++; } },
+    _launcher: { list: () => [], isPaused: () => false, launch: async () => { launched++; } },
+    _sessionPaths: { sessionDirFor: () => '/saved/session' },
+    Date, console,
+  };
+  vm.runInNewContext(source.slice(start, end), sandbox);
+  const res = { status() { return this; }, json(body) { response = body; return body; } };
+  await handler({ body: { number: '123456789' } }, res);
+  assert.equal(response.ok, true);
+  assert.equal(response.restored, true);
+  assert.equal(launched, 1);
+  assert.equal(deleted, 0);
+});
+
+test('pairing UI subscribes to startup failures and bounds linked startup waiting', () => {
+  const ui = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
+  assert.match(ui, /'bot_error'/);
+  assert.match(ui, /case 'bot_error':\s*fail\(/);
+  assert.match(ui, /s\.health\?\.phase === 'start_failed'/);
+  assert.match(ui, /stage === 'linked' && waited > 240000/);
+});

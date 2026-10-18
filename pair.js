@@ -2084,8 +2084,10 @@ async function startpairing(nexusDevNumber, options = {}) {
                 // Sync newly paired credentials and all keys to Neon PostgreSQL
                 try {
                     const sessionPersistence = require('./mias/sessionPersistence.cjs');
-                    await sessionPersistence.syncSessionDirToDb(nexusDevNumber, sessionDir);
-                    console.log(chalk.green(`✓ Synced paired session ${nexusDevNumber} to Neon Database`));
+                    sessionPersistence.syncSessionDirToDb(nexusDevNumber, sessionDir).then(result => {
+                        if (result.ok) console.log(chalk.green(`✓ Synced paired session ${nexusDevNumber} to Neon Database`));
+                        else if (result.reason !== 'db_not_configured') console.warn('[pair] Session backup pending; will retry in the bot runtime.');
+                    }).catch(e => console.warn('[pair] Session backup pending:', e?.code || 'BACKUP_FAILED'));
                 } catch (e) {
                     console.log(chalk.gray(`[pair] Neon session sync skipped: ${e.message}`));
                 }

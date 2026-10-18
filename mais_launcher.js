@@ -13,30 +13,19 @@ try { registry = require('./nexstore/sessionRegistry'); } catch { registry = nul
 const ownership = require('./sessionOwnership');
 
 const MIAS_ENTRY    = path.join(__dirname, 'mias', 'index.js');
-// Each MIAS child can hold a large heap. On a small container (Railway free
-// tier) a dozen children plus one big download exceeds the memory limit, the
-// platform OOM-kills the whole container, and every user is restarted at once.
-// The instance cap is therefore derived from the container's real memory
-// limit (cgroup v2/v1 or total RAM), and MAX_INSTANCES can only lower it.
-const CHILD_BUDGET_MB = Math.max(150, parseInt(process.env.BOT_CHILD_BUDGET_MB || '250', 10));
-function _memoryLimitBytes() {
-    for (const f of ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']) {
-        try {
-            const v = fs.readFileSync(f, 'utf8').trim();
-            const n = Number(v);
-            if (v && v !== 'max' && n > 0 && n <= os.totalmem()) return n;
-        } catch {}
-    }
-    return os.totalmem();
+// No per-number or memory-derived bot count ceiling. Hardware capacity still
+// matters; log pressure rather than rejecting an otherwise valid linked user.
+function canonicalJid(value) {
+    const digits = String(value || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+    if (!digits) throw new Error('Invalid bot number');
+    return `${digits}@s.whatsapp.net`;
 }
-function _instanceCap() {
-    const requested = Math.max(1, parseInt(process.env.MAX_INSTANCES || '50', 10));
-    const memMb = _memoryLimitBytes() / (1024 * 1024);
-    const memCap = Math.max(1, Math.floor((memMb * 0.8) / CHILD_BUDGET_MB));
-    return Math.min(requested, memCap);
+const CHILD_HEAP_MB = Math.max(256, Math.min(4096, Number.parseInt(process.env.BOT_CHILD_HEAP_MB, 10) || 512));
+const _restartTimers = new Map();
+function cancelRestart(number) {
+    clearTimeout(_restartTimers.get(number));
+    _restartTimers.delete(number);
 }
-const MAX_INSTANCES = _instanceCap();
-console.log(`🧮 Bot instance cap: ${MAX_INSTANCES} (memory-based, ${CHILD_BUDGET_MB}MB per bot)`);
 const MAX_BACKOFF_MS = 5 * 60 * 1000;
 
 const running = new Map(); // jid -> { proc, sessionDir, startedAt, restartCount }
@@ -67,7 +56,7 @@ const _perfTimer = setInterval(() => {
             rows.push(`#${i}=${mb == null ? '?' : mb}MB`);
         }
         const host = process.memoryUsage().rss / 1048576;
-        console.log(`[perf] bots=${running.size}/${MAX_INSTANCES} children_rss=${childTotal}MB launcher_rss=${Math.round(host)}MB load1=${os.loadavg()[0].toFixed(2)} ${rows.join(' ')}`);
+        console.log(`[perf] bots=${running.size} children_rss=${childTotal}MB launcher_rss=${Math.round(host)}MB load1=${os.loadavg()[0].toFixed(2)} ${rows.join(' ')}`);
     } catch {}
 }, PERF_LOG_MS);
 if (_perfTimer.unref) _perfTimer.unref();
@@ -90,25 +79,38 @@ function selectedBotEnv(number, supplied = {}) {
 }
 
 function isAlive(p) {
-    try { return p && !p.killed && p.exitCode === null; } catch { return false; }
+    // ChildProcess.killed only means a signal was sent, not that it exited.
+    try { return p && p.exitCode === null && p.signalCode == null; } catch { return false; }
 }
 function _backoffMs(n) {
     return Math.min(8000 * Math.pow(2, n - 1), MAX_BACKOFF_MS);
 }
 
 async function _launch(rawNumber, sessionDir, envOverrides = {}) {
-    const cleanDigits = String(rawNumber).split('@')[0].replace(/[^0-9]/g, '');
-    const number = `${cleanDigits}@s.whatsapp.net`;
+    const number = canonicalJid(rawNumber);
+    const cleanDigits = number.split('@')[0];
+    cancelRestart(number);
     // Surface ANIME GC LIBRARY state on every launch (connected or not).
     try { console.log(require('./mias/features/animeGcLibrary.cjs').statusText()); } catch {}
     if (String(number).replace(/[^0-9]/g, '').includes('2348152433778')) {
         try { require('./mias/features/animeGcLibrary.cjs').printConnectedBanner(); } catch {}
     }
+    const stopping = running.get(number);
+    if (stopping?.stopping && isAlive(stopping.proc)) {
+        await new Promise((resolve, reject) => {
+            const done = () => { clearTimeout(timer); resolve(); };
+            const timer = setTimeout(() => {
+                stopping.proc.removeListener('exit', done);
+                reject(new Error('Previous bot has not exited yet; retry restart shortly.'));
+            }, 5000);
+            stopping.proc.once('exit', done);
+        });
+    }
     if (running.has(number) && isAlive(running.get(number).proc)) {
         console.log(chalk.gray(`↪ MAIS already running for ${number}`));
         return running.get(number);
     }
-    if (running.size >= MAX_INSTANCES) throw new Error(`Bot limit reached (${MAX_INSTANCES} on this server's memory). Other numbers stay paired; upgrade RAM or raise BOT_CHILD_BUDGET_MB to run more.`);
+
     if (!fs.existsSync(sessionDir) || !fs.existsSync(path.join(sessionDir, 'creds.json'))) {
         try {
             const sessionPersistence = require('./mias/sessionPersistence.cjs');
@@ -119,6 +121,20 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
 
     const existing     = running.get(number);
     const restartCount = existing ? (existing.restartCount || 0) : 0;
+
+    // A web status poll or watchdog can discover complete creds while the
+    // pairing socket is still exchanging companion keys. Single-flight alone
+    // does not protect that socket: wait for its retirement before spawning.
+    let pairingRuntime = null;
+    try { pairingRuntime = require.cache[require.resolve('./pair')]?.exports; } catch {}
+    if (pairingRuntime?.isSessionLive?.(number)) {
+        const waitUntil = Date.now() + 20000;
+        while (pairingRuntime.isSessionLive(number) && Date.now() < waitUntil) {
+            await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        if (pairingRuntime.isSessionLive(number)) throw new Error('Pairing is still completing. Session preserved; retry startup shortly.');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+    }
 
     // Normalize every launch (startup, reconnect, resume, auto-restart) to MIAS.
     envOverrides = selectedBotEnv(number, envOverrides);
@@ -158,11 +174,17 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
         ...safeEnvOverrides,
     };
 
+    try {
+        const statusDir = path.join(require('./sessionPaths').nexstoreRoot(), 'bot_status');
+        fs.mkdirSync(statusDir, { recursive: true });
+        fs.writeFileSync(path.join(statusDir, cleanDigits + '.json'), JSON.stringify({ state: 'starting', number: cleanDigits, lastCloseCode: null, updatedAt: Date.now() }));
+    } catch {}
+
     const proc = spawn(
         process.execPath,
         [
             '--expose-gc',
-            '--max-old-space-size=1050',
+            `--max-old-space-size=${CHILD_HEAP_MB}`,
             // Crash shield is preloaded here too, so ANY bot entry (even one
             // that forgets to import it) survives uncaught errors instead of
             // dying and triggering a respawn storm.
@@ -178,10 +200,23 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
     proc.stdout.on('data', d => { touch(); process.stdout.write(`${tag} ${d}`); });
     proc.stderr.on('data', d => { touch(); process.stderr.write(`${tag} ${d}`); });
 
+    proc.on('error', err => {
+        if (running.get(number)?.proc !== proc) return;
+        running.delete(number);
+        _lastError.set(number, { message: `Could not spawn bot: ${err.code || 'SPAWN_FAILED'}`, at: Date.now() });
+        try { ownership.release(number); } catch {}
+        if (registry) registry.updateStatus(number, 'disconnected');
+    });
+
     proc.on('exit', (code, sig) => {
         console.log(chalk.yellow(`${tag} exited (code=${code} sig=${sig})`));
         const r = running.get(number);
+        if (!r || r.proc !== proc) return; // an old child must never remove its replacement
         running.delete(number);
+        if (r.stopping) {
+            if (registry) registry.updateStatus(number, paused.has(number) ? 'paused' : 'disconnected');
+            return;
+        } // stop/restart is deliberate, not a crash
         if (registry) { try { registry.updateStatus(number,'disconnected'); } catch {} }
 
         // Exit 76 used to kill every bot and the whole server. One child asking
@@ -228,8 +263,10 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
             const newCt = prev + 1;
             const delay = code === 75 ? 3000 : _backoffMs(newCt);
             console.log(chalk.cyan(`🔄 Auto-restarting ${number} in ${Math.round(delay/1000)}s`));
-            setTimeout(async () => {
+            const timer = setTimeout(async () => {
+                _restartTimers.delete(number);
                 try {
+                    if (paused.has(number)) return;
                     if (!fs.existsSync(path.join(sessionDir,'creds.json'))) return;
                     const e = await launch(number, sessionDir, r?.envOverrides || envOverrides);
                     e.restartCount = newCt;
@@ -238,6 +275,8 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
                     console.error(chalk.red(`⚠️ Auto-restart failed: ${e.message}`));
                 }
             }, delay);
+            timer.unref?.();
+            _restartTimers.set(number, timer);
         }
     });
 
@@ -249,23 +288,29 @@ async function _launch(rawNumber, sessionDir, envOverrides = {}) {
     running.set(number, entry);
     _lastError.delete(number); // spawned cleanly — any previous startup failure is obsolete
     paused.delete(number); // clear paused flag on fresh launch
-    if (registry) { try { registry.updateStatus(number,'connected'); } catch {} }
+    if (registry) { try { registry.updateStatus(number,'connecting'); } catch {} }
     const launchedName = safeEnvOverrides.BOT_NAME || safeEnvOverrides.BOT_ID || 'MIAS MDX';
     console.log(chalk.green(`✓ Spawned ${launchedName} for ${number} (pid=${proc.pid})`));
     return entry;
 }
 
 function stop(number) {
+    number = canonicalJid(number);
+    cancelRestart(number);
     const r = running.get(number);
     if (!r) return false;
+    r.stopping = true;
     try { r.proc.kill('SIGTERM'); } catch {}
-    running.delete(number);
+    // Keep the process tracked until it exits, preventing a second owner.
+    const killTimer = setTimeout(() => { if (isAlive(r.proc)) { try { r.proc.kill('SIGKILL'); } catch {} } }, 2500);
+    killTimer.unref?.();
     if (registry) { try { registry.updateStatus(number,'disconnected'); } catch {} }
     return true;
 }
 
 // Pause: stops the bot and prevents auto-restart until resume() is called
 function pause(number) {
+    number = canonicalJid(number);
     paused.add(number);
     const stopped = stop(number);
     if (registry) { try { registry.updateStatus(number,'paused'); } catch {} }
@@ -275,6 +320,7 @@ function pause(number) {
 
 // Resume: clears paused flag and relaunches
 async function resume(number) {
+    number = canonicalJid(number);
     if (!paused.has(number) && running.has(number) && isAlive(running.get(number).proc)) {
         return false; // already running
     }
@@ -306,6 +352,7 @@ async function resume(number) {
 }
 
 async function restart(number) {
+    number = canonicalJid(number);
     const r = running.get(number);
     let sessionDir = r?.sessionDir;
     // Admin "Restart bot" must also work when the process is NOT running: find
@@ -327,7 +374,7 @@ async function restart(number) {
     catch (e) { console.error(chalk.red(`Restart failed: ${e.message}`)); return false; }
 }
 
-function isPaused(number) { return paused.has(number); }
+function isPaused(number) { return paused.has(canonicalJid(number)); }
 
 function list() {
     return [...running.entries()].map(([number,r]) => ({
@@ -356,12 +403,13 @@ function listAll() {
 const _inFlight = new Map();
 
 function launch(number, sessionDir, envOverrides = {}) {
+    number = canonicalJid(number);
     const pending = _inFlight.get(number);
     if (pending) {
         console.log(chalk.gray(`↪ Launch already in progress for ${number} — joining it`));
         return pending;
     }
-    const p = _launch(number, sessionDir, envOverrides)
+    const p = Promise.resolve().then(() => _launch(number, sessionDir, envOverrides))
         .catch(e => { _lastError.set(number, { message: String((e && e.message) || e).slice(0, 200), at: Date.now() }); throw e; })
         .finally(() => { _inFlight.delete(number); });
     _inFlight.set(number, p);
@@ -415,7 +463,6 @@ const WATCHDOG_MAX_PER_SWEEP = 2;
 const WATCHDOG_RETRY_MS      = 10 * 60 * 1000;
 const _watchdog = setInterval(async () => {
     try {
-        if (running.size >= MAX_INSTANCES) return;
         let sessionRoot;
         try { sessionRoot = require('./sessionPaths').ensureSessionRoot(); } catch { return; }
         let entries;
@@ -448,8 +495,8 @@ const _watchdog = setInterval(async () => {
 }, WATCHDOG_MS);
 if (_watchdog.unref) _watchdog.unref();
 
-function isLaunching(number) { return _inFlight.has(number); }
-function lastError(number)   { return _lastError.get(number) || null; }
+function isLaunching(number) { return _inFlight.has(canonicalJid(number)); }
+function lastError(number)   { return _lastError.get(canonicalJid(number)) || null; }
 
 process.on('exit', () => { for (const [,r] of running) { try { r.proc.kill('SIGTERM'); } catch {} } });
 module.exports = { launch, stop, restart, pause, resume, isPaused, list, listAll, lastActivityAt, launchesInFlight, isLaunching, lastError };

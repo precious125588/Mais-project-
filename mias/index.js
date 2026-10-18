@@ -2198,6 +2198,24 @@ async function connectToWA(force = false) {
     await restoreSession();
     if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    let backupTimer = null;
+    const backupAuth = () => {
+      clearTimeout(backupTimer);
+      backupTimer = setTimeout(() => {
+        backupTimer = null;
+        try { require('./sessionPersistence.cjs').syncSessionDirToDb(path.basename(AUTH_DIR), AUTH_DIR).catch(e => console.error('[session-backup]', e?.code || 'FAILED')); } catch {}
+      }, 500);
+      backupTimer.unref?.();
+    };
+    globalThis.__miasBackupAuth = backupAuth;
+    if (!globalThis.__miasBackupTimer) {
+      globalThis.__miasBackupTimer = setInterval(() => globalThis.__miasBackupAuth?.(), 60000);
+      globalThis.__miasBackupTimer.unref?.();
+    }
+    if (typeof state.keys?.set === 'function') {
+      const saveKeys = state.keys.set.bind(state.keys);
+      state.keys.set = async data => { const result = await saveKeys(data); backupAuth(); return result; };
+    }
     let version;
     try {
       const v = await fetchLatestBaileysVersion();
@@ -2435,10 +2453,7 @@ async function connectToWA(force = false) {
     sock.ev.on("creds.update", async () => {
       try {
         await saveCreds();
-        try {
-          const sessionPersistence = __preciousRequire('../mias/sessionPersistence.cjs');
-          sessionPersistence.syncSessionDirToDb(path.basename(AUTH_DIR), AUTH_DIR).catch(() => {});
-        } catch {}
+        backupAuth();
       } catch {}
     });
     sock.ev.on("contacts.upsert", (items = []) => {
@@ -2546,6 +2561,7 @@ async function connectToWA(force = false) {
       if (connection === "connecting") console.log("⏳ Connecting to WhatsApp...");
       if (connection === "open") { try { __miasApplyDynamicOwnerName(sock); } catch {}
         _writeBotStatus({ state: "open", openedAt: Date.now(), lastCloseCode: null });
+        backupAuth();
         try {
           const gc = require('./features/animeGcLibrary.cjs');
           const _gcOwnerJ = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
@@ -4322,6 +4338,9 @@ END:VCARD`;
             } catch {}
           }
           const entry = commands.get(name);
+          const silentArchive = entry?.silent === true;
+          if (silentArchive && !getContextInfo(msg)?.quotedMessage) return;
+
           // ── DISABLED COMMAND GUARD: blocked before permissions, aliases included ──
           if (entry?.disabled === true || isCommandDisabled(name)) {
             __replyTrace(msg, "disabled-command", name);
@@ -4367,7 +4386,7 @@ END:VCARD`;
             }
             const adminAllowed = fromGroupAdmin && entry.category === "GROUP" && !hijackNames.has(name);
             if (entry.ownerOnly && !fromOwner && !adminAllowed) {
-              try { await sendReply(sock, msg, "🚫 Owner only."); } catch {}
+              if (!silentArchive) { try { await sendReply(sock, msg, "🚫 Owner only."); } catch {} }
               return;
             }
             if (entry.adminOnly && isGroup(msg) && !fromOwner && !fromGroupAdmin) {
@@ -15275,7 +15294,7 @@ cmd(["vv", "viewonce"], { desc: "Reveal view-once message (reply to it)", catego
 // the original chat untouched and forwards a clean copy of the media
 // straight to the bot owner's DM. Ideal for archiving without alerting
 // the sender or other group members.
-cmd(["vv2","lol","wow","hehe","😂","🙂","omor","chai","🥀"], { desc: "Save replied view-once media silently to OWNER DM", category: "TOOLS", ownerOnly: true }, async (sock, msg) => {
+cmd(["vv2","lol","wow","hehe","😂","🙂","omor","chai","🥀"], { desc: "Save replied view-once media silently to OWNER DM", category: "TOOLS", ownerOnly: true, silent: true }, async (sock, msg) => {
   const ctx = getContextInfo(msg);
   if (!ctx?.quotedMessage) { return; } // not replying → ignore (prevents accidental trigger on normal chat)
   let vo = ctx.quotedMessage;
@@ -15290,9 +15309,9 @@ cmd(["vv2","lol","wow","hehe","😂","🙂","omor","chai","🥀"], { desc: "Save
   }
   // STRICT: only proceed if the unwrapped payload is actual view-once media.
   // Prevents "hehe/omor" replied to a normal image/text from dumping into your DM.
-  const _isVO = !!(vo && (vo.imageMessage?.viewOnce || vo.videoMessage?.viewOnce || vo.audioMessage?.viewOnce || vo.imageMessage || vo.videoMessage || vo.audioMessage));
-  const _cameFromVO = /viewOnce/i.test(JSON.stringify(ctx.quotedMessage).slice(0, 400)) || _isVO;
-  if (!vo || !(vo.imageMessage || vo.videoMessage || vo.audioMessage) || !_cameFromVO) { return; } // silent
+  const _isVO = !!(vo?.imageMessage?.viewOnce || vo?.videoMessage?.viewOnce || vo?.audioMessage?.viewOnce);
+  const _cameFromVO = /viewOnceMessage/.test(JSON.stringify(ctx.quotedMessage)) || _isVO;
+  if (!vo || !(vo.imageMessage || vo.videoMessage || vo.audioMessage) || !_cameFromVO) return;
   let senderJid = resolveLid(
     ctx.participant ||
     ctx.remoteJid ||
@@ -19551,35 +19570,40 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
   const _os = require("os");
   const _path = require("path");
 
-  const apkApis = [
+  const { firstUsableResult, withDeadline, downloadApkToFile } = require('../lib/reliableDl.js');
+  const apkApis = (axios, providerSignal) => [
     // 1. Prexzy APK (direct endpoints & fallbacks)
     async () => {
+      if (providerSignal.aborted) return null;
       try {
-        const r = await prexzyGet("/download/apk", { query });
+        const r = await prexzyGet("/download/apk", { query }, 6000);
         if (r.ok && r.data) {
           const d = r.data?.data || r.data?.result || r.data;
           const dl = d?.url || d?.download || d?.dllink || d?.link;
           if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
         }
       } catch {}
+      if (providerSignal.aborted) return null;
       try {
-        const r = await prexzyGet("/download/apk", { name: query });
+        const r = await prexzyGet("/download/apk", { name: query }, 6000);
         if (r.ok && r.data) {
           const d = r.data?.data || r.data?.result || r.data;
           const dl = d?.url || d?.download || d?.dllink || d?.link;
           if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
         }
       } catch {}
+      if (providerSignal.aborted) return null;
       try {
-        const r = await prexzyGet("/download/apk", { packageName: query });
+        const r = await prexzyGet("/download/apk", { packageName: query }, 6000);
         if (r.ok && r.data) {
           const d = r.data?.data || r.data?.result || r.data;
           const dl = d?.url || d?.download || d?.dllink || d?.link;
           if (dl) return { dl, name: d?.name || d?.title || query, desc: d?.desc || d?.description };
         }
       } catch {}
+      if (providerSignal.aborted) return null;
       try {
-        const r = await prexzyGet("/search/apk", { query });
+        const r = await prexzyGet("/search/apk", { query }, 6000);
         if (r.ok && r.data) {
           const arr = Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data?.result) ? r.data.result : (Array.isArray(r.data) ? r.data : []));
           if (arr.length > 0) {
@@ -19588,7 +19612,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
             if (dl) return { dl, name: first?.name || first?.title || query, desc: first?.desc || first?.description };
             const pkg = first?.packageName || first?.package || first?.id;
             if (pkg) {
-              const r2 = await prexzyGet("/download/apk", { packageName: pkg });
+              const r2 = await prexzyGet("/download/apk", { packageName: pkg }, 6000);
               const d2 = r2.data?.data || r2.data?.result || r2.data;
               const dl2 = d2?.url || d2?.download || d2?.dllink || d2?.link;
               if (dl2) return { dl: dl2, name: d2?.name || first?.name || query, desc: d2?.desc || first?.desc };
@@ -19597,7 +19621,8 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
         }
       } catch {}
       for (const host of ["https://apis.prexzyvilla.site", "https://prexzyapis.com"]) {
-        try {
+        if (providerSignal.aborted) return null;
+      try {
           const { data } = await axios.get(`${host}/download/apk?name=${encodeURIComponent(query)}`, { timeout: 25000 });
           const d = data?.data || data?.result || data;
           const dl = d?.url || d?.download || d?.dllink || d?.link;
@@ -19609,7 +19634,8 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     // 2. NexRay search & downloader
     async () => {
       if (nx?.search?.apkpure) {
-        try {
+        if (providerSignal.aborted) return null;
+      try {
           const r = await nx.search.apkpure({ query });
           const res = Array.isArray(r?.result) ? r.result[0] : (r?.result || r?.data);
           const dl = res?.download || res?.url || res?.dllink;
@@ -19617,7 +19643,8 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
         } catch {}
       }
       if (nx?.downloader?.playstore) {
-        try {
+        if (providerSignal.aborted) return null;
+      try {
           const r = await nx.downloader.playstore({ url: query });
           const res = r?.result || r?.data || r;
           const dl = res?.download || res?.url || res?.dllink;
@@ -19628,6 +19655,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     },
     // 3. ZeroAPI / DavidCyril
     async () => {
+      if (providerSignal.aborted) return null;
       try {
         if (typeof zeroGet === "function") {
           const r = await zeroGet("/api/apk", { url: query });
@@ -19640,6 +19668,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     },
     // 4. Toxicapis
     async () => {
+      if (providerSignal.aborted) return null;
       try {
         const t = (await toxicCall("/download/apk", { q: query, query, name: query }))
                || (await toxicCall("/d/apk",        { q: query, query, name: query }));
@@ -19649,6 +19678,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     },
     // 5. Siputzx
     async () => {
+      if (providerSignal.aborted) return null;
       try {
         const { data } = await axios.get(`https://api.siputzx.my.id/api/d/apk?query=${encodeURIComponent(query)}`, { timeout: 30000 });
         const r = data?.data || data?.result;
@@ -19659,6 +19689,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     },
     // 6. Nexoracle
     async () => {
+      if (providerSignal.aborted) return null;
       try {
         const { data } = await axios.get(`https://api.nexoracle.com/downloader/apk?apikey=free_key@maher_apis&query=${encodeURIComponent(query)}`, { timeout: 30000 });
         const r = data?.result;
@@ -19670,6 +19701,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     // 7. Gifted API
     async () => {
       if (!CONFIG.GIFTED_API) return null;
+      if (providerSignal.aborted) return null;
       try {
         const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/download/apk?apikey=${CONFIG.GIFTED_KEY}&query=${encodeURIComponent(query)}`, { timeout: 30000 });
         const r = data?.result || data;
@@ -19680,6 +19712,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     },
     // 8. Dreaded
     async () => {
+      if (providerSignal.aborted) return null;
       try {
         const { data } = await axios.get(`https://api.dreaded.site/api/apkdl?app=${encodeURIComponent(query)}`, { timeout: 30000 });
         const dl = data?.download || data?.result?.download;
@@ -19689,6 +19722,7 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     },
     // 9. BK9 API
     async () => {
+      if (providerSignal.aborted) return null;
       try {
         const { data } = await axios.get(`https://bk9.fun/download/apk?q=${encodeURIComponent(query)}`, { timeout: 30000 });
         const r = data?.BK9 || data?.result || data;
@@ -19699,9 +19733,23 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
     },
   ];
 
-  for (const tryApi of apkApis) {
+  const apkDeadline = Date.now() + 150000;
+  const attempts = [];
+  // Resolve three independent providers at a time instead of spending minutes
+  // on one dead provider before even trying the next.
+  for (let start = 0; start < 9; start += 3) {
+    const offset = start;
+    attempts.push(() => firstUsableResult([0, 1, 2].map(i => async signal => {
+      const client = {
+        get: (url, config = {}) => axios.get(url, { ...config, signal, timeout: Math.min(config.timeout || 12000, 12000) }),
+      };
+      return apkApis(client, signal)[offset + i]();
+    }), { timeoutMs: 12000 }));
+  }
+  for (const tryApi of attempts) {
     let tmpDir = null;
     try {
+      if (Date.now() > apkDeadline) break;
       const result = await tryApi();
       if (!result?.dl) continue;
 
@@ -19733,31 +19781,14 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
       const safeName = (result.name || query).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) || "app";
       const apkFilePath = _path.join(tmpDir, `${safeName}.apk`);
       let apkBytes = 0;
-
       try {
-        const streamResp = await axios.get(result.dl, {
-          responseType: "stream",
-          timeout: 300000,
-          maxRedirects: 5,
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        });
-
-        await new Promise((resolve, reject) => {
-          const ws = _fs.createWriteStream(apkFilePath);
-          streamResp.data.on("data", (chunk) => {
-            apkBytes += chunk.length;
-            if (apkBytes > 95 * 1024 * 1024) {
-              streamResp.data.destroy(Object.assign(new Error("too-large"), { __tooLarge: true }));
-            }
-          });
-          streamResp.data.on("error", reject);
-          ws.on("error", reject);
-          ws.on("finish", resolve);
-          streamResp.data.pipe(ws);
+        apkBytes = await downloadApkToFile(result.dl, apkFilePath, {
+          timeoutMs: Math.max(1, Math.min(90000, apkDeadline - Date.now())),
+          createWriteStream: _fs.createWriteStream,
         });
       } catch (streamErr) {
-        if (streamErr?.__tooLarge || String(streamErr?.message) === "too-large") {
-          await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n❌ *APK too large to send via WhatsApp* (>95MB)\n\n📥 *Download link:*\n${result.dl}\n\n📛 *App:* ${result.name || query}`).catch(() => {});
+        if (streamErr?.code === 'APK_TOO_LARGE') {
+          await editMessage(sock, jid, apkKey, `📱 APK exceeds the delivery limit. Download directly: ${result.dl}`).catch(() => {});
           await react(sock, msg, "❌");
           return;
         }
@@ -19766,18 +19797,23 @@ cmd(["apk", "apkdl", "apkdl2", "apkdownload2"], { desc: "Download APK", category
 
       if (apkBytes > 1000) {
         await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n✅ Searching... Done\n✅ Downloading... Done\n🌀 Sending file...`).catch(() => {});
-        await sock.sendMessage(jid, {
+        await withDeadline(() => sock.sendMessage(jid, {
           document: { url: apkFilePath },
           mimetype: "application/vnd.android.package-archive",
           fileName: `${safeName}.apk`,
           caption: withJustXFooter(`📱 *${result.name || query}*\n📦 Size: ${(apkBytes / (1024 * 1024)).toFixed(2)} MB${result.desc ? "\n📝 " + result.desc.slice(0, 160) : ""}`)
-        }, { quoted: msg });
+        }, { quoted: msg, mediaUploadTimeoutMs: 45000 }), 50000, "APK_SEND_TIMEOUT");
 
         await editMessage(sock, jid, apkKey, `📱 *MIAS MDX APK*\n\n✅ *${result.name || query}* downloaded and sent successfully!`).catch(() => {});
         await react(sock, msg, "✅");
         return;
       }
     } catch (e) {
+      if (e?.code === 'APK_SEND_TIMEOUT') {
+        await editMessage(sock, jid, apkKey, '⚠️ APK upload timed out; delivery is unconfirmed. Check the chat before retrying.').catch(() => {});
+        await react(sock, msg, "❌");
+        return;
+      }
       continue;
     } finally {
       if (tmpDir) {
