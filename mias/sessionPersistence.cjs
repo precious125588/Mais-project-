@@ -2,9 +2,20 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createHash } = require('crypto');
 
 let _pool = null;
 let _poolUrl = null;
+let _testPool = null;
+
+function setPoolForTesting(pool) {
+  _testPool = pool;
+}
+
+function getPool() {
+  if (_testPool) return _testPool;
+  return createPool();
+}
 
 function getDatabaseUrl() {
   return String(process.env.DATABASE_URL || '').trim();
@@ -56,15 +67,17 @@ function normalizeSessionKeys(input) {
 
 /**
  * Persists a single auth file into Neon PostgreSQL.
+ * Stored strictly under canonical JID (<number>@s.whatsapp.net) to prevent duplicate session counts.
  */
 async function saveSessionFile(sessionId, fileName, content) {
-  const pool = createPool();
+  const pool = getPool();
   if (!pool) return false;
   const { number, jid, primary } = normalizeSessionKeys(sessionId);
-  if (!primary || !fileName) return false;
+  const targetId = jid || primary;
+  if (!targetId || !fileName) return false;
 
   const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
-  const targetId = jid || primary;
+  const cleanFileName = path.basename(fileName);
 
   try {
     await pool.query(
@@ -72,30 +85,31 @@ async function saveSessionFile(sessionId, fileName, content) {
        VALUES ($1, $2, $3, now())
        ON CONFLICT (session_id, file_name)
        DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
-      [targetId, fileName, text]
+      [targetId, cleanFileName, text]
     );
+
+    // Clean up any legacy bare-number record for this file to prevent duplicate session counts
     if (number && number !== targetId) {
-      // Also alias under bare number for backwards compatibility
-      await pool.query(
-        `INSERT INTO mias_session_auth (session_id, file_name, content, updated_at)
-         VALUES ($1, $2, $3, now())
-         ON CONFLICT (session_id, file_name)
-         DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
-        [number, fileName, text]
-      );
+      try {
+        await pool.query(
+          `DELETE FROM mias_session_auth WHERE session_id = $1 AND file_name = $2`,
+          [number, cleanFileName]
+        );
+      } catch {}
     }
     return true;
   } catch (err) {
-    console.warn(`[session-persistence] saveSessionFile error for ${targetId}/${fileName}:`, err.message);
+    console.warn(`[session-persistence] saveSessionFile error for ${targetId}/${cleanFileName}:`, err.message);
     return false;
   }
 }
 
 /**
  * Syncs all valid JSON files in a session directory to Neon PostgreSQL.
+ * Uses only canonical JID (<number>@s.whatsapp.net).
  */
 async function syncSessionDirToDb(sessionId, sessionDir) {
-  const pool = createPool();
+  const pool = getPool();
   if (!pool) return { ok: false, synced: 0, reason: 'db_not_configured' };
   if (!sessionDir || !fs.existsSync(sessionDir)) return { ok: false, synced: 0, reason: 'dir_missing' };
 
@@ -116,7 +130,7 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
     const fn = entry.name;
     if (!fn.endsWith('.json') && !fn.endsWith('.json.tmp')) continue;
     if (fn.startsWith('.')) continue; // skip .owner.json, hidden files
-    const cleanFn = fn.replace(/\.tmp$/, '');
+    const cleanFn = path.basename(fn.replace(/\.tmp$/, ''));
 
     try {
       const fullPath = path.join(sessionDir, fn);
@@ -130,19 +144,20 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
          DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
         [targetId, cleanFn, content]
       );
-      if (number && number !== targetId) {
-        await pool.query(
-          `INSERT INTO mias_session_auth (session_id, file_name, content, updated_at)
-           VALUES ($1, $2, $3, now())
-           ON CONFLICT (session_id, file_name)
-           DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
-          [number, cleanFn, content]
-        );
-      }
       count++;
     } catch (e) {
-      console.warn(`[session-persistence] Error syncing ${fn}:`, e.message);
+      console.warn(`[session-persistence] Error syncing ${cleanFn}:`, e.message);
     }
+  }
+
+  // Purge any legacy bare-number entries for this session from DB
+  if (number && number !== targetId) {
+    try {
+      await pool.query(
+        `DELETE FROM mias_session_auth WHERE session_id = $1`,
+        [number]
+      );
+    } catch {}
   }
 
   return { ok: true, synced: count, targetId };
@@ -150,9 +165,10 @@ async function syncSessionDirToDb(sessionId, sessionDir) {
 
 /**
  * Restores all session files for sessionId from Neon PostgreSQL into targetDir.
+ * Enforces path.basename on all filenames to prevent directory traversal.
  */
 async function restoreSessionDirFromDb(sessionId, targetDir) {
-  const pool = createPool();
+  const pool = getPool();
   if (!pool) return { ok: false, restored: 0, reason: 'db_not_configured' };
   const { number, jid, primary } = normalizeSessionKeys(sessionId || path.basename(targetDir));
   const targetId = jid || primary;
@@ -177,10 +193,11 @@ async function restoreSessionDirFromDb(sessionId, targetDir) {
     let writtenCount = 0;
 
     for (const row of res.rows) {
-      if (writtenFiles.has(row.file_name)) continue;
-      const filePath = path.join(targetDir, row.file_name);
+      const safeName = path.basename(row.file_name);
+      if (!safeName || safeName.startsWith('.') || writtenFiles.has(safeName)) continue;
+      const filePath = path.join(targetDir, safeName);
       fs.writeFileSync(filePath, row.content, 'utf8');
-      writtenFiles.add(row.file_name);
+      writtenFiles.add(safeName);
       writtenCount++;
     }
 
@@ -195,9 +212,10 @@ async function restoreSessionDirFromDb(sessionId, targetDir) {
 /**
  * Restores all sessions from Neon PostgreSQL if they do not exist locally on disk.
  * Runs on container boot / restart to survive container replacement.
+ * Always restores into canonical folder name: <number>@s.whatsapp.net
  */
 async function restoreAllSessionsFromDb(pairingRoot) {
-  const pool = createPool();
+  const pool = getPool();
   if (!pool) return { ok: false, restored: 0, reason: 'db_not_configured' };
 
   try {
@@ -217,12 +235,13 @@ async function restoreAllSessionsFromDb(pairingRoot) {
     const handledDigits = new Set();
 
     for (const row of res.rows) {
-      const { number, jid, primary } = normalizeSessionKeys(row.session_id);
-      if (number && handledDigits.has(number)) continue;
-      if (number) handledDigits.add(number);
+      const { number, jid } = normalizeSessionKeys(row.session_id);
+      if (!number) continue;
+      if (handledDigits.has(number)) continue;
+      handledDigits.add(number);
 
-      // Prefer standard folder name: <number>@s.whatsapp.net
-      const folderName = jid || primary;
+      // Always restore into canonical folder name: <number>@s.whatsapp.net
+      const folderName = jid || `${number}@s.whatsapp.net`;
       const targetDir = path.join(pairingRoot, folderName);
       const credsPath = path.join(targetDir, 'creds.json');
 
@@ -249,7 +268,7 @@ async function restoreAllSessionsFromDb(pairingRoot) {
  * Restores session_registry.json and bot selections from Neon DB if present.
  */
 async function syncRegistryAndSelectionsFromDb() {
-  const pool = createPool();
+  const pool = getPool();
   if (!pool) return;
 
   try {
@@ -294,16 +313,22 @@ async function syncRegistryAndSelectionsFromDb() {
 }
 
 /**
- * Gets count of unique sessions stored in Neon PostgreSQL.
+ * Gets count of unique physical sessions stored in Neon PostgreSQL.
+ * Deduplicates canonical JID and legacy bare-number aliases by phone number.
  */
 async function getStoredSessionsCount() {
-  const pool = createPool();
+  const pool = getPool();
   if (!pool) return 0;
   try {
     const res = await pool.query(
-      `SELECT COUNT(DISTINCT session_id) as count FROM mias_session_auth WHERE file_name = 'creds.json'`
+      `SELECT DISTINCT session_id FROM mias_session_auth WHERE file_name = 'creds.json'`
     );
-    return parseInt(res.rows?.[0]?.count || 0, 10);
+    const seen = new Set();
+    for (const r of (res.rows || [])) {
+      const num = String(r.session_id || '').split('@')[0].replace(/\D/g, '');
+      if (num) seen.add(num);
+    }
+    return seen.size;
   } catch {
     return 0;
   }
@@ -325,7 +350,7 @@ async function deleteSessionCompletely(options = {}) {
   console.log(`[session-persistence] Purging all session files and database records for ${number || jid} (reason: ${reason})`);
 
   let dbRowsDeleted = 0;
-  const pool = createPool();
+  const pool = getPool();
   if (pool) {
     try {
       const authDel = await pool.query(
@@ -346,12 +371,20 @@ async function deleteSessionCompletely(options = {}) {
       );
       dbRowsDeleted += (selDel.rowCount || 0);
 
-      // Clean up scoped bot state for this session
+      // Clean up scoped bot state for this session (both phone pattern and hashed directory scopes)
       if (number) {
         await pool.query(
           `DELETE FROM mias_bot_state WHERE scope LIKE $1`,
           [`%${number}%`]
         );
+      }
+      if (explicitDir) {
+        try {
+          const stableSource = path.resolve(explicitDir);
+          const digest = createHash('sha256').update(stableSource).digest('hex');
+          const scope = `session_${digest.slice(0, 40)}`;
+          await pool.query(`DELETE FROM mias_bot_state WHERE scope = $1`, [scope]);
+        } catch {}
       }
     } catch (err) {
       console.warn(`[session-persistence] Error deleting DB records for ${number}:`, err.message);
@@ -495,6 +528,7 @@ async function deleteSessionCompletely(options = {}) {
 
 module.exports = {
   createPool,
+  setPoolForTesting,
   saveSessionFile,
   syncSessionDirToDb,
   restoreSessionDirFromDb,

@@ -5466,8 +5466,8 @@ break;
 
 case '__dup_removed_pinterest__':  // moved to mias/index.js
 case 'pin': {
-  if (m.quoted && !isUrl(text)) break; // Pass through to message pinner
-  if (!text || !isUrl(text)) return reply(`📌 *Pinterest Downloader*\n\nUsage: ${prefix}pinterest <pin-url>\nExample: ${prefix}pinterest https://pin.it/xxxxxx`);
+  // Pass through to WhatsApp pin command unless an explicit Pinterest URL is provided
+  if (!text || !isUrl(text) || (!text.includes("pin.it") && !text.includes("pinterest."))) break;
   await devtrust.sendMessage(m.chat, { react: { text: '📌', key: m.key } });
   reply('⏳ Downloading Pinterest media...');
   try {

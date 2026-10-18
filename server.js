@@ -314,8 +314,13 @@ async function checkDbStatus(force = false) {
     const res = await pool.query('SELECT 1 as ok, current_database() as db');
     let sessionsInDb = 0;
     try {
-      const sRes = await pool.query("SELECT COUNT(DISTINCT session_id) as count FROM mias_session_auth WHERE file_name = 'creds.json'");
-      sessionsInDb = parseInt(sRes?.rows?.[0]?.count || 0, 10);
+      const sRes = await pool.query("SELECT DISTINCT session_id FROM mias_session_auth WHERE file_name = 'creds.json'");
+      const seenNums = new Set();
+      for (const r of (sRes?.rows || [])) {
+        const num = String(r.session_id || "").split("@")[0].replace(/\D/g, "");
+        if (num) seenNums.add(num);
+      }
+      sessionsInDb = seenNums.size;
     } catch {}
     await pool.end().catch(() => {});
     const row = res.rows[0];
@@ -1103,6 +1108,13 @@ httpServer.on('error',e=>{ console.error('[HTTP server error]',e.message,' — s
 async function _autoLoadPairs() {
     if (!_pair||!_launcher) return;
     try {
+        // Restore sessions from Neon Database first if configured (survives redeploy/container restart)
+        try {
+            const sessionPersistence = require("./mias/sessionPersistence.cjs");
+            await sessionPersistence.restoreAllSessionsFromDb(PAIRING_DIR);
+        } catch (e) {
+            console.warn("[AutoLoad] Neon session restore skipped:", e.message);
+        }
         const paired=_pair.listPairedDevices(false);
         let launched=0;
         for(const jid of paired){

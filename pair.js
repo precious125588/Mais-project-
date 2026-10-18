@@ -155,7 +155,10 @@ function readCredsFile(nexusDevNumber) {
 }
 
 function credsAreComplete(creds) {
-    return !!(creds && creds.registered === true && creds.me && creds.me.id);
+    if (!creds) return false;
+    if (creds.registered === true && creds.me && creds.me.id) return true;
+    if (creds.me && creds.me.id && (creds.noiseKey || creds.signedIdentityKey || creds.account)) return true;
+    return false;
 }
 
 // Returns true only for a session that is genuinely still linked.
@@ -402,18 +405,49 @@ function writePairingQrRecord(nexusDevNumber, qr) {
 function listPairedDevices(includePending = false) {
     if (!fs.existsSync(PAIRING_ROOT)) return [];
 
-    return fs.readdirSync(PAIRING_ROOT).filter((entry) => {
-        const fullPath = path.join(PAIRING_ROOT, entry);
-        if (entry === 'pairing.json' || !entry.endsWith('@s.whatsapp.net')) return false;
+    const entries = fs.readdirSync(PAIRING_ROOT);
+    const resultJids = new Set();
+    const seenDigits = new Set();
 
+    // Migrate any legacy bare-number directory containing creds.json to canonical @s.whatsapp.net
+    for (const entry of entries) {
+        if (entry === "pairing.json" || entry.endsWith("@s.whatsapp.net")) continue;
+        const fullPath = path.join(PAIRING_ROOT, entry);
         try {
-            if (!fs.statSync(fullPath).isDirectory()) return false;
-            if (includePending) return true;
-            return hasPairedSession(entry);
-        } catch {
-            return false;
-        }
-    });
+            if (!fs.statSync(fullPath).isDirectory()) continue;
+            const digits = entry.replace(/[^0-9]/g, "");
+            if (!digits) continue;
+            const credsFile = path.join(fullPath, "creds.json");
+            if (fs.existsSync(credsFile)) {
+                const targetDir = path.join(PAIRING_ROOT, `${digits}@s.whatsapp.net`);
+                if (!fs.existsSync(targetDir)) {
+                    try {
+                        fs.cpSync(fullPath, targetDir, { recursive: true });
+                        console.log(chalk.green(`[pair] Migrated legacy bare-number session ${entry} to canonical ${digits}@s.whatsapp.net`));
+                    } catch {}
+                }
+            }
+        } catch {}
+    }
+
+    const refreshed = fs.readdirSync(PAIRING_ROOT);
+    for (const entry of refreshed) {
+        if (entry === "pairing.json" || !entry.endsWith("@s.whatsapp.net")) continue;
+        const fullPath = path.join(PAIRING_ROOT, entry);
+        try {
+            if (!fs.statSync(fullPath).isDirectory()) continue;
+            const digits = entry.split("@")[0].replace(/[^0-9]/g, "");
+            if (seenDigits.has(digits)) continue;
+
+            const isPaired = includePending ? true : hasPairedSession(entry, { clean: false });
+            if (isPaired) {
+                seenDigits.add(digits);
+                resultJids.add(entry);
+            }
+        } catch {}
+    }
+
+    return Array.from(resultJids);
 }
 
 // Fix for makeInMemoryStore

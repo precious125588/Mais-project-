@@ -31927,49 +31927,79 @@ const variants = realLastMsgs
     return { ok: false, err: lastErr };
   }
 
+  // ── PIN / UNPIN HELPERS & HANDLERS ───────────────────────────────────────
+  const {
+    extractQuotedContext,
+    parsePinDuration,
+    getPinDurationLabel,
+    buildPinKey
+  } = require("../lib/pin-helper.cjs");
+
+  const _isBotGroupAdmin = async (sock, gid) => {
+    try {
+      const candidates = [sock?.user?.id, sock?.user?.jid, sock?.user?.lid].filter(Boolean);
+      for (const cand of candidates) {
+        if (await isGroupAdmin(sock, gid, cand)) return true;
+      }
+    } catch {}
+    return false;
+  };
+
+  const _canSenderPin = async (sock, gid, sender) => {
+    try {
+      if (isOwner(sender) || isCreator(sender)) return true;
+      if (!String(gid || "").endsWith("@g.us")) return true;
+      return await isGroupAdmin(sock, gid, sender);
+    } catch {
+      return false;
+    }
+  };
+
   // ── PIN (chat + message) ────────────────────────────────────────────────
-  const __miasPin = async (sock, msg) => {
+  const __miasPin = async (sock, msg, args) => {
     const jid = msg.key.remoteJid;
-    const ctx = msg.message?.extendedTextMessage?.contextInfo
-             || msg.message?.imageMessage?.contextInfo
-             || msg.message?.videoMessage?.contextInfo
-             || msg.message?.documentMessage?.contextInfo;
-    if (ctx?.stanzaId) { // v2026-10: reply-pin now works in DMs AND groups
-      const pinKey = { remoteJid: jid, fromMe: ctx.fromMe || false, id: ctx.stanzaId, participant: ctx.participant || undefined };
-      // PRECIOUS v28 FIX: the bare pinInChat envelope is silently ignored by
-      // WhatsApp on current protocol versions (never errors, never pins — the
-      // bot said "📌 Message pinned!" but nothing pinned). Try the payloads in
-      // the order that actually pins, keep the same success text.
-      // CURRENT PROTOCOL FIX: WhatsApp honours the pin only when pinInChatMessage
-      // is built with the socket's OWN generateWAMessageFromContent and sent via
-      // relayMessage (correct wa version), or via the official sendMessage(jid,
-      // { pin, type, time }) content form. The bare { pinInChat } envelope is
-      // silently dropped. The old code also did require("@whiskeysockets/baileys")
-      // which resolves to NOTHING here (dep is aliased to @itsliaaa/baileys), so
-      // every attempt failed silently and nothing ever pinned.
-      let _pinned = false, _pinErr = null;
-      try {
-        if (typeof globalThis.__v37PinInChat === "function") {
-          const _r = await globalThis.__v37PinInChat(sock, jid, { stanzaId: ctx.stanzaId, participant: ctx.participant, remoteJid: jid, fromMe: ctx.fromMe }, 604800);
-          if (_r && _r.ok) _pinned = true;
+    const isGroup = String(jid || "").endsWith("@g.us");
+    const sender = getSender(msg);
+    const qCtx = extractQuotedContext(msg);
+
+    if (qCtx && qCtx.stanzaId) {
+      if (isGroup) {
+        const canPin = await _canSenderPin(sock, jid, sender);
+        if (!canPin) {
+          await sendReply(sock, msg, "❌ Only group admins and the bot owner can pin messages in this group.");
+          return;
         }
-      } catch (e) { _pinErr = e; }
-      if (!_pinned && typeof generateWAMessageFromContent === "function" && typeof sock.relayMessage === "function") {
-        try {
-          const _pm = await generateWAMessageFromContent(jid, {
-            pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now() },
-            messageContextInfo: { messageAddOnDurationInSecs: 604800 },
-          }, { userJid: (typeof _nativeFlowUserJid === "function" ? _nativeFlowUserJid(sock) : undefined) || undefined });
-          await sock.relayMessage(jid, _pm.message, { messageId: _pm.key?.id });
-          _pinned = true;
-        } catch (e) { _pinErr = e; }
+        const botIsAdmin = await _isBotGroupAdmin(sock, jid);
+        if (!botIsAdmin) {
+          await sendReply(sock, msg, "❌ The bot must be an admin in this group to pin messages.");
+          return;
+        }
+      } else {
+        if (!isOwner(sender) && !isCreator(sender)) {
+          await sendReply(sock, msg, "❌ Only the bot owner can use this command in DMs.");
+          return;
+        }
       }
-      if (!_pinned && typeof sock.sendMessage === "function") {
-        try { await sock.sendMessage(jid, { pin: pinKey, type: 1, time: 604800 }); _pinned = true; }
-        catch (e) { _pinErr = e; }
+
+      const durationSecs = parsePinDuration(args?.[0]);
+      const durationText = getPinDurationLabel(durationSecs);
+      const pinKey = buildPinKey(sock, jid, qCtx);
+
+      await react(sock, msg, "⏳");
+      try {
+        await sock.sendMessage(jid, { pin: pinKey, type: 1, time: durationSecs });
+        await react(sock, msg, "📌");
+        await sendReply(sock, msg, `📌 *Message pinned successfully for ${durationText}!*`);
+      } catch (err) {
+        await react(sock, msg, "❌");
+        await sendReply(sock, msg, `❌ Pin failed: ${err?.message || err}`);
       }
-      if (_pinned) await sendReply(sock, msg, "📌 *Message pinned!*");
-      else await sendReply(sock, msg, `❌ Pin failed: ${_pinErr?.message || _pinErr}`);
+      return;
+    }
+
+    // Chat pin mode (no quoted message)
+    if (!isOwner(sender) && !isCreator(sender)) {
+      await sendReply(sock, msg, "❌ Only the bot owner can pin this chat.");
       return;
     }
     await react(sock, msg, "⏳");
@@ -31978,8 +32008,12 @@ const variants = realLastMsgs
     if (res.ok) { await react(sock, msg, "📌"); await sendReply(sock, msg, "📌 *Chat pinned!*"); }
     else        { await react(sock, msg, "❌"); await sendReply(sock, msg, `❌ Pin failed.\n_${res.err}_`); }
   };
+
   for (const n of ["pin", "pinchat"]) {
-    const ex = commands.get(n) || { desc: "Pin chat", category: "WHATSAPP", ownerOnly: true };
+    const ex = commands.get(n) || { desc: "Pin a message (reply) or chat", category: "GROUP", adminOnly: true };
+    ex.desc = "Pin a message (reply) or chat";
+    ex.category = "GROUP";
+    ex.adminOnly = true;
     ex.handler = __miasPin;
     commands.set(n, ex);
   }
@@ -31987,18 +32021,45 @@ const variants = realLastMsgs
   // ── UNPIN ───────────────────────────────────────────────────────────────
   const __miasUnpin = async (sock, msg) => {
     const jid = msg.key.remoteJid;
-    const q = msg.message?.extendedTextMessage?.contextInfo
-           || msg.message?.imageMessage?.contextInfo
-           || msg.message?.videoMessage?.contextInfo
-           || msg.message?.documentMessage?.contextInfo;
-    if (q?.stanzaId && jid.endsWith("@g.us")) {
-      const pinKey = { remoteJid: jid, fromMe: q.fromMe || false, id: q.stanzaId, participant: q.participant || undefined };
-      try {
-        await sock.sendMessage(jid, { pinInChat: { key: pinKey, type: 2, senderTimestampMs: Date.now() } });
-        await sendReply(sock, msg, "📌 *Message unpinned!*");
-      } catch (e) {
-        await sendReply(sock, msg, `❌ Unpin failed: ${e?.message || e}`);
+    const isGroup = String(jid || "").endsWith("@g.us");
+    const sender = getSender(msg);
+    const qCtx = extractQuotedContext(msg);
+
+    if (qCtx && qCtx.stanzaId) {
+      if (isGroup) {
+        const canPin = await _canSenderPin(sock, jid, sender);
+        if (!canPin) {
+          await sendReply(sock, msg, "❌ Only group admins and the bot owner can unpin messages in this group.");
+          return;
+        }
+        const botIsAdmin = await _isBotGroupAdmin(sock, jid);
+        if (!botIsAdmin) {
+          await sendReply(sock, msg, "❌ The bot must be an admin in this group to unpin messages.");
+          return;
+        }
+      } else {
+        if (!isOwner(sender) && !isCreator(sender)) {
+          await sendReply(sock, msg, "❌ Only the bot owner can use this command in DMs.");
+          return;
+        }
       }
+
+      const pinKey = buildPinKey(sock, jid, qCtx);
+      await react(sock, msg, "⏳");
+      try {
+        await sock.sendMessage(jid, { pin: pinKey, type: 2 });
+        await react(sock, msg, "📌");
+        await sendReply(sock, msg, "📌 *Message unpinned!*");
+      } catch (err) {
+        await react(sock, msg, "❌");
+        await sendReply(sock, msg, `❌ Unpin failed: ${err?.message || err}`);
+      }
+      return;
+    }
+
+    // Chat unpin mode (no quoted message)
+    if (!isOwner(sender) && !isCreator(sender)) {
+      await sendReply(sock, msg, "❌ Only the bot owner can unpin this chat.");
       return;
     }
     await react(sock, msg, "⏳");
@@ -32006,90 +32067,67 @@ const variants = realLastMsgs
     if (res.ok) { await react(sock, msg, "📌"); await sendReply(sock, msg, "📌 *Chat unpinned!*"); }
     else        { await react(sock, msg, "❌"); await sendReply(sock, msg, `❌ Unpin failed.\n_${res.err}_`); }
   };
+
   for (const n of ["unpin", "unpinchat"]) {
-    const ex = commands.get(n) || { desc: "Unpin chat", category: "WHATSAPP", ownerOnly: true };
+    const ex = commands.get(n) || { desc: "Unpin a message (reply) or chat", category: "GROUP", adminOnly: true };
+    ex.desc = "Unpin a message (reply) or chat";
+    ex.category = "GROUP";
+    ex.adminOnly = true;
     ex.handler = __miasUnpin;
     commands.set(n, ex);
   }
 
   // ── PINTEXT / PINMSG ────────────────────────────────────────────────────────
-  // Two modes:
-  //
-  //  REPLY MODE — reply to any existing message then run the command:
-  //    .pintext              → pin the replied-to message for 7 days (default)
-  //    .pintext 24h          → pin the replied-to message for 24 hours
-  //    .pintext 7d           → pin the replied-to message for 7 days
-  //    .pintext 30d          → pin the replied-to message for 30 days
-  //
-  //  SEND+PIN MODE — no reply, just type the message:
-  //    .pintext Hello!       → send "Hello!" then pin it for 7 days
-  //    .pintext 24h Hello!   → send "Hello!" then pin it for 24 hours
-  //
-  // Works in DMs and groups (bot must be admin in groups).
-  // WA pinInChat: type 1 = pin, type 2 = unpin; duration in seconds.
-  const _pinDurMap = { "24h": 86400, "1d": 86400, "7d": 604800, "1w": 604800, "30d": 2592000, "1m": 2592000 };
-  const _pinDurLabel = (d) => d === 86400 ? "24 hours" : d === 604800 ? "7 days" : "30 days";
-
   const __miasPinText = async (sock, msg, args) => {
     const sender = getSender(msg);
-    if (!isOwner(sender) && !isCreator(sender)) {
-      await sendReply(sock, msg, "❌ Only the bot owner can use this command.");
-      return;
-    }
     const jid = msg.key.remoteJid;
+    const isGroup = String(jid || "").endsWith("@g.us");
 
-    // Parse optional leading duration token (e.g. "24h", "7d", "30d")
-    let duration = 604800; // default 7 days
-    let textArgs  = (args || []).slice();
-    const _mayDur = (textArgs[0] || "").toLowerCase();
-    if (_pinDurMap[_mayDur] !== undefined) {
-      duration = _pinDurMap[_mayDur];
+    if (isGroup) {
+      const canPin = await _canSenderPin(sock, jid, sender);
+      if (!canPin) {
+        await sendReply(sock, msg, "❌ Only group admins and the bot owner can pin messages in this group.");
+        return;
+      }
+      const botIsAdmin = await _isBotGroupAdmin(sock, jid);
+      if (!botIsAdmin) {
+        await sendReply(sock, msg, "❌ The bot must be an admin in this group to pin messages.");
+        return;
+      }
+    } else {
+      if (!isOwner(sender) && !isCreator(sender)) {
+        await sendReply(sock, msg, "❌ Only the bot owner can use this command.");
+        return;
+      }
+    }
+
+    let durationSecs = 604800; // default 7 days
+    let textArgs = (args || []).slice();
+    const firstArg = (textArgs[0] || "").toLowerCase();
+    const parsedDur = parsePinDuration(firstArg);
+    if (["24h", "1d", "7d", "1w", "30d", "1m"].includes(firstArg)) {
+      durationSecs = parsedDur;
       textArgs = textArgs.slice(1);
     }
-    const _label = _pinDurLabel(duration);
+    const label = getPinDurationLabel(durationSecs);
 
-    // Detect reply context — works for text, image, video, audio, doc, sticker
-    const _ctx =
-      msg.message?.extendedTextMessage?.contextInfo ||
-      msg.message?.imageMessage?.contextInfo         ||
-      msg.message?.videoMessage?.contextInfo         ||
-      msg.message?.audioMessage?.contextInfo         ||
-      msg.message?.documentMessage?.contextInfo      ||
-      msg.message?.stickerMessage?.contextInfo       ||
-      null;
-    const _isReply = !!(_ctx?.stanzaId);
-
-    // ── REPLY MODE: pin the quoted message ───────────────────────────────────
-    if (_isReply) {
-      const pinKey = {
-        remoteJid:   jid,
-        fromMe:      _ctx.fromMe    || false,
-        id:          _ctx.stanzaId,
-        participant: _ctx.participant || undefined,
-      };
-      await react(sock, msg, "📌");
-      // PRECIOUS v28 FIX: try the payload order WhatsApp actually honours
-      // before falling back to the legacy pinInChat envelope. Same reply text.
-      let _pinnedR = false, _pinErrR = null;
-      for (const _p of [
-        { pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now(), time: duration } },
-        { pin: pinKey, type: 1, time: duration },
-        { pinInChatMessage: { key: pinKey, type: 1, senderTimestampMs: Date.now() } },
-        { pinInChat: { key: pinKey, type: 1, senderTimestampMs: Date.now() } },
-      ]) {
-        try { await sock.sendMessage(jid, _p); _pinnedR = true; break; } catch (e) { _pinErrR = e; }
-      }
-      if (_pinnedR) {
-        await react(sock, msg, "✅");
-        await sendReply(sock, msg, `📌 *Message pinned for ${_label}!*`);
-      } else {
+    const qCtx = extractQuotedContext(msg);
+    if (qCtx && qCtx.stanzaId) {
+      // Reply mode: pin the quoted message
+      const pinKey = buildPinKey(sock, jid, qCtx);
+      await react(sock, msg, "⏳");
+      try {
+        await sock.sendMessage(jid, { pin: pinKey, type: 1, time: durationSecs });
+        await react(sock, msg, "📌");
+        await sendReply(sock, msg, `📌 *Message pinned successfully for ${label}!*`);
+      } catch (err) {
         await react(sock, msg, "❌");
-        await sendReply(sock, msg, `❌ Pin failed: ${_pinErrR?.message || _pinErrR}\n\n_In groups the bot must be admin._`);
+        await sendReply(sock, msg, `❌ Pin failed: ${err?.message || err}`);
       }
       return;
     }
 
-    // ── SEND+PIN MODE: send new text then pin it ─────────────────────────────
+    // Send+pin mode: send text then pin
     const text = textArgs.join(" ").trim();
     if (!text) {
       await sendReply(sock, msg,
@@ -32105,86 +32143,85 @@ const variants = realLastMsgs
       );
       return;
     }
-    await react(sock, msg, "📌");
+
+    await react(sock, msg, "⏳");
     try {
       const sentMsg = await sock.sendMessage(jid, { text }, { quoted: msg });
       if (!sentMsg?.key) {
         await sendReply(sock, msg, "❌ Message sent but key missing — cannot pin.");
         return;
       }
-      // PRECIOUS v28 FIX: same payload reorder for the send+pin path.
-      let _pinnedS = false, _pinErrS = null;
-      for (const _p of [
-        { pinInChatMessage: { key: sentMsg.key, type: 1, senderTimestampMs: Date.now(), time: duration } },
-        { pin: sentMsg.key, type: 1, time: duration },
-        { pinInChatMessage: { key: sentMsg.key, type: 1, senderTimestampMs: Date.now() } },
-      ]) {
-        try { await sock.sendMessage(jid, _p); _pinnedS = true; break; } catch (e) { _pinErrS = e; }
-      }
-      if (!_pinnedS) throw (_pinErrS || new Error("pin rejected"));
-      await react(sock, msg, "✅");
-      await sendReply(sock, msg, `📌 *Message pinned for ${_label}!*`);
-    } catch (e) {
+      await sock.sendMessage(jid, { pin: sentMsg.key, type: 1, time: durationSecs });
+      await react(sock, msg, "📌");
+      await sendReply(sock, msg, `📌 *Message pinned successfully for ${label}!*`);
+    } catch (err) {
       await react(sock, msg, "❌");
-      await sendReply(sock, msg, `❌ Pin failed: ${e?.message || e}\n\n_In groups the bot must be admin._`);
+      await sendReply(sock, msg, `❌ Pin failed: ${err?.message || err}`);
     }
   };
+
+  for (const n of ["pintext", "pinmsg", "pinmessage"]) {
+    const ex = commands.get(n) || { desc: "Pin a message — reply to it or .pintext [24h|7d|30d] <text>", category: "GROUP", adminOnly: true };
+    ex.desc = "Pin a message — reply to it or .pintext [24h|7d|30d] <text>";
+    ex.category = "GROUP";
+    ex.adminOnly = true;
+    ex.handler = __miasPinText;
+    commands.set(n, ex);
+  }
 
   // ── UNPINMSG — reply to a pinned message to unpin it ─────────────────────
   const __miasUnpinMsg = async (sock, msg) => {
     const sender = getSender(msg);
-    if (!isOwner(sender) && !isCreator(sender)) {
-      await sendReply(sock, msg, "❌ Only the bot owner can use this command.");
-      return;
-    }
     const jid = msg.key.remoteJid;
-    const ctx =
-      msg.message?.extendedTextMessage?.contextInfo ||
-      msg.message?.imageMessage?.contextInfo         ||
-      msg.message?.videoMessage?.contextInfo         ||
-      msg.message?.documentMessage?.contextInfo      ||
-      msg.message?.audioMessage?.contextInfo         ||
-      msg.message?.stickerMessage?.contextInfo       ||
-      null;
-    if (!ctx?.stanzaId) {
+    const isGroup = String(jid || "").endsWith("@g.us");
+
+    if (isGroup) {
+      const canPin = await _canSenderPin(sock, jid, sender);
+      if (!canPin) {
+        await sendReply(sock, msg, "❌ Only group admins and the bot owner can unpin messages in this group.");
+        return;
+      }
+      const botIsAdmin = await _isBotGroupAdmin(sock, jid);
+      if (!botIsAdmin) {
+        await sendReply(sock, msg, "❌ The bot must be an admin in this group to unpin messages.");
+        return;
+      }
+    } else {
+      if (!isOwner(sender) && !isCreator(sender)) {
+        await sendReply(sock, msg, "❌ Only the bot owner can use this command.");
+        return;
+      }
+    }
+
+    const qCtx = extractQuotedContext(msg);
+    if (!qCtx?.stanzaId) {
       await sendReply(sock, msg,
         `Reply to a pinned message, then send *${CONFIG.PREFIX}unpinmsg* to unpin it.\n\n` +
         `To unpin the whole chat, use *${CONFIG.PREFIX}unpin*`
       );
       return;
     }
-    const pinKey = {
-      remoteJid:   jid,
-      fromMe:      ctx.fromMe    || false,
-      id:          ctx.stanzaId,
-      participant: ctx.participant || undefined,
-    };
-    // [FIX] WhatsApp silently ignores a pin whose key.fromMe does not match the
-    // original message. Derive it from the quoted sender vs the bot account.
-    try {
-      const _botNum = String(sock?.user?.id || "").split(":")[0].split("@")[0].replace(/\D/g, "");
-      const _qNum   = String(ctx.participant || "").split(":")[0].split("@")[0].replace(/\D/g, "");
-      if (_botNum && _qNum) pinKey.fromMe = (_qNum === _botNum || _qNum.endsWith(_botNum) || _botNum.endsWith(_qNum));
-    } catch {}
+
+    const pinKey = buildPinKey(sock, jid, qCtx);
     await react(sock, msg, "⏳");
     try {
-      await sock.sendMessage(jid, {
-        pinInChatMessage: { key: pinKey, type: 2, senderTimestampMs: Date.now() }
-      });
-      await react(sock, msg, "✅");
+      await sock.sendMessage(jid, { pin: pinKey, type: 2 });
+      await react(sock, msg, "📌");
       await sendReply(sock, msg, "📌 *Message unpinned!*");
-    } catch (e) {
+    } catch (err) {
       await react(sock, msg, "❌");
-      await sendReply(sock, msg, `❌ Unpin failed: ${e?.message || e}`);
+      await sendReply(sock, msg, `❌ Unpin failed: ${err?.message || err}`);
     }
   };
 
-  for (const n of ["pintext", "pinmsg", "pinmessage"]) {
-    const ex = commands.get(n) || { desc: "Pin a message — reply to it or .pintext [24h|7d|30d] <text>", category: "WHATSAPP", ownerOnly: true };
-    ex.handler = __miasPinText;
-    commands.set(n, ex);
+  {
+    const ex = commands.get("unpinmsg") || { desc: "Unpin a message (reply to it)", category: "GROUP", adminOnly: true };
+    ex.desc = "Unpin a message (reply to it)";
+    ex.category = "GROUP";
+    ex.adminOnly = true;
+    ex.handler = __miasUnpinMsg;
+    commands.set("unpinmsg", ex);
   }
-  { const ex = commands.get("unpinmsg") || { desc: "Reply to a message then run to unpin it", category: "WHATSAPP", ownerOnly: true }; ex.handler = __miasUnpinMsg; commands.set("unpinmsg", ex); }
 
   // ── ARCHIVE / UNARCHIVE ─────────────────────────────────────────────────
   // Resolve an archive target from the command, without confusing the

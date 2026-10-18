@@ -168,3 +168,60 @@ test("simulated PostgreSQL session sync, restore, and byte-for-byte fidelity", a
   assert.equal(delRes.rowCount, 2);
   assert.equal(storage.size, 0);
 });
+
+test("getStoredSessionsCount deduplicates bare-number and canonical JID aliases", async () => {
+  const storage = new Map();
+  class CountPool {
+    async query(sql) {
+      const compact = String(sql).replace(/\s+/g, " ").trim();
+      if (compact.includes("SELECT DISTINCT session_id FROM mias_session_auth")) {
+        return {
+          rows: [
+            { session_id: "2348123456789@s.whatsapp.net" },
+            { session_id: "2348123456789" },
+            { session_id: "2348999999999@s.whatsapp.net" }
+          ]
+        };
+      }
+      return { rows: [] };
+    }
+  }
+
+  // Override createPool temporarily
+  sessionPersistence.setPoolForTesting(new CountPool());
+  try {
+    const count = await sessionPersistence.getStoredSessionsCount();
+    assert.equal(count, 2); // 2 unique numbers, not 3 rows
+  } finally {
+    sessionPersistence.setPoolForTesting(null);
+  }
+});
+
+test("restoreSessionDirFromDb sanitizes traversal in file_name", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mias-traversal-test-"));
+  const targetDir = path.join(tmpDir, "session");
+
+  class TraversalPool {
+    async query() {
+      return {
+        rows: [
+          { file_name: "../../traversal-file.json", content: '{"safe":true}' },
+          { file_name: "creds.json", content: '{"me":true}' }
+        ]
+      };
+    }
+  }
+
+  sessionPersistence.setPoolForTesting(new TraversalPool());
+  try {
+    const res = await sessionPersistence.restoreSessionDirFromDb("1234567890", targetDir);
+    assert.equal(res.ok, true);
+    assert.equal(fs.existsSync(path.join(targetDir, "creds.json")), true);
+    assert.equal(fs.existsSync(path.join(targetDir, "traversal-file.json")), true);
+    // Crucial: no file created outside targetDir
+    assert.equal(fs.existsSync(path.join(tmpDir, "traversal-file.json")), false);
+  } finally {
+    sessionPersistence.setPoolForTesting(null);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
