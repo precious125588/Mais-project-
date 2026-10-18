@@ -48,6 +48,7 @@ const chalk = require('chalk')
 const { writeExif, imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./allfunc/exif')
 const { isUrl, generateMessageTag, getBuffer, getSizeMedia, fetch } = require('./allfunc/myfunc')
 const ownership = require('./sessionOwnership')
+const { waitForCompanionSync } = require('./mias/lib/companionSyncGrace.cjs')
 
 // Define sleep function directly here to avoid import issues
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -2056,30 +2057,20 @@ async function startpairing(nexusDevNumber, options = {}) {
                 tracker.handedOffAt = Date.now();
 
                 // ── COMPANION SYNC GRACE PERIOD ───────────────────────────
-                // When connection === "open" fires, WhatsApp phone & server
-                // are still exchanging companion encryption keys and stanzas
-                // (takes 3-8 seconds). If we kill the socket immediately,
-                // the phone drops the connection mid-sync and shows "couldn't link"
-                // even though the web UI already saw "open".
-                // Keep the socket alive and let creds.update and companion sync finish completely.
-                // WhatsApp sends companion encryption keys and stanzas over 15-25s.
-                // Premature termination is the direct cause of the phone rejecting
-                // the link with "Couldn't link device" right after the web UI shows "bot activated".
+                // An "open" event can arrive before the phone has finished
+                // exchanging companion keys. Retiring this socket too soon
+                // makes WhatsApp reject the link even though the web UI saw it
+                // open. Wait at least 15 seconds; if history has not arrived,
+                // keep the socket for up to 25 seconds while saving fresh creds.
                 console.log(chalk.cyan(`⏳ Allowing companion sync to settle for ${nexusDevNumber}...`));
-                try { await _safeSaveCreds(); } catch {}
-
-                let syncSettled = false;
-                const onHistory = () => {
-                    syncSettled = true;
-                    console.log(chalk.green(`✓ Companion history received for ${nexusDevNumber}`));
-                };
-                try { nexus.ev.once('messaging-history.set', onHistory); } catch {}
-
-                // Wait up to 5 seconds for companion encryption keys to finish exchanging
-                for (let i = 0; i < 5; i++) {
-                    await sleep(1000);
-                    try { await _safeSaveCreds(); } catch {}
-                }
+                const syncResult = await waitForCompanionSync({
+                    eventEmitter: nexus.ev,
+                    saveCreds: _safeSaveCreds,
+                });
+                console.log(chalk.green(
+                    `✓ Companion sync window finished for ${nexusDevNumber} after ${syncResult.elapsedMs}ms` +
+                    (syncResult.historyReceived ? ' (history received)' : ' (time limit reached)')
+                ));
 
                 // Sync newly paired credentials and all keys to Neon PostgreSQL
                 try {
