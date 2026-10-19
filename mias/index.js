@@ -102,7 +102,7 @@ import {
 } from "./features/tiktok.js";
 import { createStatusEditFlow } from "./lib/statusEditFlow.js";
 import { normalizeInviteCode, approvalPrompt, adminNumberList, parseAdminChoice } from "./features/joinApproval.js";
-import { ensureDiskSpace, getMediaLimitBytes, isNoSpaceError } from "./lib/diskGuard.js";
+import { ensureDiskSpace, getMediaLimitBytes, isNoSpaceError, TIKTOK_DOWNLOAD_MAX_BYTES } from "./lib/diskGuard.js";
 import { installSettingsCommand } from "./features/settingsCommands.js";
 import { installPairCommands } from "./features/pairCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
@@ -22620,7 +22620,10 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       `📥 *Downloading ${ttChoiceLabel}* (${ttMode.id})...\nPlease wait.`
     );
     try {
-      ensureDiskSpace(getMediaLimitBytes());
+      const _ttMediaMaxBytes = (ttMode.kind === "video" || ttMode.kind === "sticker")
+        ? TIKTOK_DOWNLOAD_MAX_BYTES
+        : getMediaLimitBytes();
+      ensureDiskSpace(_ttMediaMaxBytes);
       let media = null;
       if (ttMode.kind === "slider") {
         await updateTtStatus(`🎞️ *Generating TikTok Slider Video*...\nMerging ${ttPick.info.images.length} images (3s each) with audio.`);
@@ -22677,8 +22680,8 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
           const response = await axios.get(candidateUrl, {
             responseType: "arraybuffer",
             timeout: 90000,
-            maxContentLength: getMediaLimitBytes(),
-            maxBodyLength: getMediaLimitBytes(),
+            maxContentLength: _ttMediaMaxBytes,
+            maxBodyLength: _ttMediaMaxBytes,
             headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" },
           });
           const candidate = Buffer.from(response.data || []);
@@ -22696,8 +22699,8 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
             const response = await axios.get(candidateUrl, {
               responseType: "arraybuffer",
               timeout: 90000,
-            maxContentLength: getMediaLimitBytes(),
-            maxBodyLength: getMediaLimitBytes(),
+              maxContentLength: _ttMediaMaxBytes,
+              maxBodyLength: _ttMediaMaxBytes,
               headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" },
             });
             const candidate = Buffer.from(response.data || []);
@@ -24366,8 +24369,9 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
     isVideo = true;
   } else {
     try {
-      ensureDiskSpace(getMediaLimitBytes());
-      _aioResp = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000, maxContentLength: getMediaLimitBytes(), maxBodyLength: getMediaLimitBytes(), headers: { "User-Agent": "Mozilla/5.0" } });
+      const _aioMediaMaxBytes = _isTikTok ? TIKTOK_DOWNLOAD_MAX_BYTES : getMediaLimitBytes();
+      ensureDiskSpace(_aioMediaMaxBytes);
+      _aioResp = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 90000, maxContentLength: _aioMediaMaxBytes, maxBodyLength: _aioMediaMaxBytes, headers: { "User-Agent": "Mozilla/5.0" } });
     } catch (error) {
       const reason = isNoSpaceError(error) ? "The server is out of temporary storage. Old media files must be cleaned before downloading again." : `Download failed: ${error.message}`;
       await editMessage(sock, jid, aioKey, `❌ ${_platformName}\n\n${reason}`);
