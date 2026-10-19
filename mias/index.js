@@ -107,7 +107,7 @@ import { installSettingsCommand } from "./features/settingsCommands.js";
 import { installPairCommands } from "./features/pairCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
 import { runTikTokBulk, formatBulkSummary, bulkModeId } from "./features/ttBulk.js";
-import { prepareTikTokVideo, createTikTokSliderVideo } from "./features/ttVideo.js";
+import { prepareTikTokVideo, createTikTokSliderVideo, TT_VIDEO_ENCODE } from "./features/ttVideo.js";
 import { installPlayCards, installPlayAudio, installPlayPickers, installPlaySearchPicker, installPlayOutputPicker, installPlayWrappers } from "./features/playCommands.js";
 import { installSpotifyCommands } from "./features/spotifyCommands.js";
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22625,6 +22625,8 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         : getMediaLimitBytes();
       ensureDiskSpace(_ttMediaMaxBytes);
       let media = null;
+      let mediaFile = null;
+      let tiktokDiskDelivery = null;
       if (ttMode.kind === "slider") {
         await updateTtStatus(`🎞️ *Generating TikTok Slider Video*...\nMerging ${ttPick.info.images.length} images (3s each) with audio.`);
         media = await createTikTokSliderVideo({ images: ttPick.info.images, audioUrl: ttPick.info.audio, durationPerSlide: 3 });
@@ -22634,6 +22636,9 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         try { const _rmx = await prepareTikTokVideo(media); if (Buffer.isBuffer(_rmx) && _rmx.length >= 2048) media = _rmx; } catch {}
       } else {
       const candidateUrls = [mediaUrl];
+      const streamLargeTikTokVideo = ttMode.kind === "video" && !ttMode.document && !ttMode.videoNote;
+      const diskVideoPipeline = streamLargeTikTokVideo ? require("./lib/mediaPipeline.cjs") : null;
+      tiktokDiskDelivery = streamLargeTikTokVideo ? require("./lib/tiktokDiskDelivery.cjs") : null;
       // A TikWM URL can expire between the preview and the user's choice.
       // Re-resolve the original TikTok URL once instead of leaving a silent
       // picker failure.
@@ -22675,51 +22680,57 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
           } catch {}
         }
       };
-      for (const candidateUrl of candidateUrls) {
-        try {
-          const response = await axios.get(candidateUrl, {
-            responseType: "arraybuffer",
+      const tryDownloadCandidate = async (candidateUrl) => {
+        if (streamLargeTikTokVideo) {
+          const result = await tiktokDiskDelivery.fetchVideoCandidate(candidateUrl, {
+            pipeline: diskVideoPipeline,
+            cap: _ttMediaMaxBytes,
+            maxBufferedBytes: TT_VIDEO_ENCODE.maxInputBytes,
             timeout: 90000,
-            maxContentLength: _ttMediaMaxBytes,
-            maxBodyLength: _ttMediaMaxBytes,
             headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" },
           });
-          const candidate = Buffer.from(response.data || []);
-          const head = candidate.slice(0, 64).toString("utf8").trim().toLowerCase();
-          if (candidate.length >= 2048 && !head.startsWith("<!doctype") && !head.startsWith("<html") && !head.startsWith("{")) {
-            media = candidate;
-            break;
-          }
+          if (!result) return false;
+          media = result.buffer;
+          mediaFile = result.file;
+          return true;
+        }
+        const response = await axios.get(candidateUrl, {
+          responseType: "arraybuffer",
+          timeout: 90000,
+          maxContentLength: _ttMediaMaxBytes,
+          maxBodyLength: _ttMediaMaxBytes,
+          headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" },
+        });
+        const candidate = Buffer.from(response.data || []);
+        const head = candidate.slice(0, 64).toString("utf8").trim().toLowerCase();
+        if (candidate.length < 2048 || head.startsWith("<!doctype") || head.startsWith("<html") || head.startsWith("{")) {
+          return false;
+        }
+        media = candidate;
+        return true;
+      };
+      for (const candidateUrl of candidateUrls) {
+        try {
+          if (await tryDownloadCandidate(candidateUrl)) break;
         } catch {}
       }
-      if (!media) {
+      if (!media && !mediaFile) {
         await refreshSelection();
         for (const candidateUrl of candidateUrls.slice(1)) {
           try {
-            const response = await axios.get(candidateUrl, {
-              responseType: "arraybuffer",
-              timeout: 90000,
-              maxContentLength: _ttMediaMaxBytes,
-              maxBodyLength: _ttMediaMaxBytes,
-              headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" },
-            });
-            const candidate = Buffer.from(response.data || []);
-            const head = candidate.slice(0, 64).toString("utf8").trim().toLowerCase();
-            if (candidate.length >= 2048 && !head.startsWith("<!doctype") && !head.startsWith("<html") && !head.startsWith("{")) {
-              media = candidate;
-              break;
-            }
+            if (await tryDownloadCandidate(candidateUrl)) break;
           } catch {}
         }
       }
-      if (!media) throw new Error("TikTok provider returned no downloadable media");
-      if (media.length < 2048) throw new Error("provider returned an empty media file");
+      if (!media && !mediaFile) throw new Error("TikTok provider returned no downloadable media");
+      if (media && media.length < 2048) throw new Error("provider returned an empty media file");
       }
-      const mediaHead = media.slice(0, 64).toString("utf8").trim().toLowerCase();
-      if (ttMode.kind !== "slider" && (mediaHead.startsWith("<!doctype") || mediaHead.startsWith("<html") || mediaHead.startsWith("{"))) {
+      const mediaHead = media ? media.slice(0, 64).toString("utf8").trim().toLowerCase() : "";
+      if (!mediaFile && ttMode.kind !== "slider" && (mediaHead.startsWith("<!doctype") || mediaHead.startsWith("<html") || mediaHead.startsWith("{"))) {
         throw new Error("TikTok provider returned metadata instead of media");
       }
-      await updateTtStatus(`📤 *Uploading ${ttChoiceLabel}* (${ttMode.id})...\nAlmost done.`);
+      const uploadSize = mediaFile ? ` (${(mediaFile.bytes / (1024 * 1024)).toFixed(1)} MiB)` : "";
+      await updateTtStatus(`📤 *Uploading ${ttChoiceLabel}* (${ttMode.id})${uploadSize}...\n${mediaFile ? "Sending the original MP4 without re-encoding. Large HD files can take a few minutes." : "Sending to WhatsApp; large files may take a few minutes."}`);
       const ttCaption = `🎵 *${ttPick.info.title}${ttMode.kind === "slider" ? " (Slider)" : ""}*\n👤 ${ttPick.info.author}`;
       if (ttMode.kind === "audio") {
         if (ttMode.voiceNote) {
@@ -22750,6 +22761,20 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
           document: _tvd.buf, mimetype: _tvd.mime, fileName: "tiktok_video" + _tvd.ext,
           caption: ttCaption,
         }, { quoted: msg });
+      } else if (mediaFile && ttMode.kind === "video") {
+        // For files above TT_VIDEO_ENCODE.maxInputBytes, the existing video
+        // normalizer returns the input bytes unchanged. Stream that same MP4
+        // from disk instead of retaining a 100+ MiB Buffer during WhatsApp's upload.
+        try {
+          await tiktokDiskDelivery.sendVideoFromDisk(sock, jid, mediaFile.path, ttCaption, msg);
+        } catch (videoError) {
+          console.log("[tiktok] streamed video send failed, using document fallback:", videoError?.message || videoError);
+          await sock.sendMessage(jid, {
+            document: { url: mediaFile.path }, mimetype: "video/mp4", fileName: "tiktok_video.mp4",
+            caption: `${ttCaption}
+📎 Sent as a file because video playback was unavailable.`,
+          }, { quoted: msg });
+        }
       } else {
         // FIX v18.2: 1.7 PTV send throws silently on older Baileys /
         // oversized quoted payloads with NO catch in the previous version.
@@ -22831,6 +22856,10 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         : error.message;
       await updateTtStatus(`❌ *${ttChoiceLabel} failed* (${ttMode.id})\n${reason}\n\nReply with another choice (e.g. *1.1* or *2.1*) — the menu is still active.`);
       await forceReaction(sock, msg, "❌");
+    } finally {
+      if (mediaFile?.cleanup) {
+        try { await mediaFile.cleanup(); } catch {}
+      }
     }
     return;
   }
