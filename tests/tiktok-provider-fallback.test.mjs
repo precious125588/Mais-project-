@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   fetchTikTokInfo,
+  fetchTikTokThumbnail,
   normalizeTikTokMode,
   parseTikTokMode,
   selectTikTokUrl,
@@ -96,9 +97,91 @@ test("provider list has seven routes and invalid TikTok links are rejected befor
   assert.equal(normalizeTikTokMode(".1.3"), "1.3");
 });
 
+test("fallback requests do not hit alternate endpoints on the same provider at once", async () => {
+  const activeByOrigin = new Map();
+  const maxActiveByOrigin = new Map();
+  const fetchImpl = async (url) => {
+    const origin = new URL(url).origin;
+    const active = (activeByOrigin.get(origin) || 0) + 1;
+    activeByOrigin.set(origin, active);
+    maxActiveByOrigin.set(origin, Math.max(maxActiveByOrigin.get(origin) || 0, active));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    activeByOrigin.set(origin, activeByOrigin.get(origin) - 1);
+    return jsonResponse({}, 503);
+  };
+
+  await assert.rejects(fetchTikTokInfo(sampleUrl, fetchImpl), { code: "ALL_PROVIDERS_FAILED" });
+  assert.equal(maxActiveByOrigin.get("https://api.nexray.eu.cc"), 1);
+  assert.equal(maxActiveByOrigin.get("https://apis.davidcyril.name.ng"), 1);
+});
+
+test("TikTok preview picks a fast valid cover from a bounded concurrent set", async () => {
+  const requested = [];
+  const signals = [];
+  const cover = await fetchTikTokThumbnail([
+    "https://cdn.example/stale.jpg",
+    "https://cdn.example/working.jpg",
+    "https://cdn.example/third.jpg",
+    "https://cdn.example/fourth.jpg",
+    "https://cdn.example/never-requested.jpg",
+  ], {
+    async get(url, options) {
+      requested.push(url);
+      signals.push(options.signal);
+      if (url.endsWith("stale.jpg")) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error("stale preview");
+      }
+      if (url.endsWith("working.jpg")) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        return { data: Buffer.alloc(2048, 7) };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return { data: Buffer.alloc(2048, 8) };
+    },
+  });
+
+  assert.ok(Buffer.isBuffer(cover));
+  assert.equal(cover.length, 2048);
+  assert.equal(requested.length, 4);
+  assert.deepEqual(requested.sort(), [
+    "https://cdn.example/fourth.jpg",
+    "https://cdn.example/stale.jpg",
+    "https://cdn.example/third.jpg",
+    "https://cdn.example/working.jpg",
+  ]);
+  assert.ok(signals.every((signal) => signal.aborted));
+});
+
+test("TikTok preview returns without an image when every cover fails", async () => {
+  const cover = await fetchTikTokThumbnail(
+    ["https://cdn.example/bad.jpg"],
+    { async get() { throw new Error("CDN unavailable"); } },
+  );
+  assert.equal(cover, null);
+});
+
+test("TikTok preview has a hard timeout even if the HTTP client never settles", async () => {
+  const started = Date.now();
+  const cover = await fetchTikTokThumbnail(
+    ["https://cdn.example/hanging.jpg"],
+    { async get() { return new Promise(() => {}); } },
+    { timeout: 10 },
+  );
+  assert.equal(cover, null);
+  assert.ok(Date.now() - started < 1000);
+});
+
 test("status edits call the shared resolver rather than retrying TikWM on the same host", () => {
   const source = fs.readFileSync(new URL("../mias/precious-anime-edits.cjs", import.meta.url), "utf8");
   assert.match(source, /import\('\.\/features\/tiktok\.js'\)/);
   assert.match(source, /fetchTikTokInfo\(videoUrl\)/);
   assert.doesNotMatch(source, /tikwm-lite/);
+});
+
+test("the .tt preview uses bounded thumbnails and does not report a progress timer as a provider failure", () => {
+  const source = fs.readFileSync(new URL("../mias/index.js", import.meta.url), "utf8");
+  assert.match(source, /fetchTikTokThumbnail\(_coverCandidates, axios/);
+  assert.doesNotMatch(source, /download provider never answered/);
+  assert.match(source, /TikTok is still processing this request/);
 });

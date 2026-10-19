@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const {
   createTikTokFileName,
   fetchVideoCandidate,
+  isRateLimitError,
   sendDocumentFromDisk,
   sendVideoFromDisk,
 } = require("../mias/lib/tiktokDiskDelivery.cjs");
@@ -286,6 +287,73 @@ test("disk delivery sends Baileys a local file source instead of a video Buffer"
   });
   assert.equal(call[2].quoted, quoted);
   assert.equal(Buffer.isBuffer(call[1].video), false);
+});
+
+test("disk video delivery retries rate-overlimit with the same on-disk source", async () => {
+  const calls = [];
+  const waits = [];
+  const sock = {
+    async sendMessage(...args) {
+      calls.push(args);
+      if (calls.length < 3) throw new Error("rate-overlimit");
+      return { key: { id: "sent-after-retry" } };
+    },
+  };
+
+  const result = await sendVideoFromDisk(
+    sock,
+    "123@s.whatsapp.net",
+    "/tmp/original.mp4",
+    "TikTok caption",
+    { key: { id: "quoted" } },
+    { retryDelaysMs: [1500, 5000], sleep: async (ms) => waits.push(ms) },
+  );
+
+  assert.equal(result.key.id, "sent-after-retry");
+  assert.equal(calls.length, 3);
+  assert.deepEqual(waits, [1500, 5000]);
+  assert.ok(calls.every((call) => call[1].video.url === "/tmp/original.mp4"));
+  assert.ok(calls.every((call) => Buffer.isBuffer(call[1].video) === false));
+  assert.equal(isRateLimitError(Object.assign(new Error("upload rejected"), { code: "rate-overlimit" })), true);
+  assert.equal(isRateLimitError(new Error("connection closed")), false);
+});
+
+test("disk video delivery does not retry non-rate-limit send failures", async () => {
+  let calls = 0;
+  const sock = {
+    async sendMessage() {
+      calls += 1;
+      throw new Error("connection closed");
+    },
+  };
+
+  await assert.rejects(
+    sendVideoFromDisk(
+      sock,
+      "123@s.whatsapp.net",
+      "/tmp/original.mp4",
+      "TikTok caption",
+      null,
+      { retryDelaysMs: [0, 0], sleep: async () => {} },
+    ),
+    /connection closed/,
+  );
+  assert.equal(calls, 1);
+});
+
+test("disk file delivery rejects a send without a WhatsApp message id", async () => {
+  const sock = { async sendMessage() { return undefined; } };
+  await assert.rejects(
+    sendVideoFromDisk(
+      sock,
+      "123@s.whatsapp.net",
+      "/tmp/original.mp4",
+      "TikTok caption",
+      null,
+      { retryDelaysMs: [], sleep: async () => {} },
+    ),
+    { code: "SEND_UNCONFIRMED" },
+  );
 });
 
 test("document filenames preserve the TikTok title and use a safe extension", () => {

@@ -1,6 +1,49 @@
 "use strict";
 
 const fs = require("fs");
+const RATE_LIMIT_RETRY_DELAYS_MS = Object.freeze([1500, 5000]);
+
+function isRateLimitError(error) {
+  const message = [
+    error?.message,
+    error?.code,
+    error?.status,
+    error?.statusCode,
+    error?.output?.statusCode,
+    error?.output?.payload?.tag,
+    error?.data?.error,
+  ].filter((value) => value !== undefined && value !== null).join(" ");
+  return /rate[\s_-]*over[\s_-]*limit|too many requests|(?:http|status|code)[\s:=_-]*429\b/i.test(message);
+}
+
+async function sendWithRateLimitRetry(send, {
+  retryDelaysMs = RATE_LIMIT_RETRY_DELAYS_MS,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await send();
+    } catch (error) {
+      if (!isRateLimitError(error) || attempt >= retryDelaysMs.length) throw error;
+      const delay = Math.max(0, Number(retryDelaysMs[attempt]) || 0);
+      attempt += 1;
+      await sleep(delay);
+    }
+  }
+}
+
+async function sendConfirmedFileMessage(sock, jid, payload, msg, retryOptions) {
+  return sendWithRateLimitRetry(async () => {
+    const result = await sock.sendMessage(jid, payload, { quoted: msg });
+    if (!result?.key?.id) {
+      const error = new Error("WhatsApp did not confirm the file send; delivery is unconfirmed.");
+      error.code = "SEND_UNCONFIRMED";
+      throw error;
+    }
+    return result;
+  }, retryOptions);
+}
 
 function hasMp4Signature(prefix) {
   return Buffer.isBuffer(prefix)
@@ -97,19 +140,23 @@ async function fetchVideoCandidate(url, {
   }
 }
 
-function sendVideoFromDisk(sock, jid, filePath, caption, msg) {
-  return sock.sendMessage(
+function sendVideoFromDisk(sock, jid, filePath, caption, msg, retryOptions) {
+  return sendConfirmedFileMessage(
+    sock,
     jid,
     { video: { url: filePath }, mimetype: "video/mp4", caption },
-    { quoted: msg },
+    msg,
+    retryOptions,
   );
 }
 
-function sendDocumentFromDisk(sock, jid, filePath, fileName, caption, msg) {
-  return sock.sendMessage(
+function sendDocumentFromDisk(sock, jid, filePath, fileName, caption, msg, retryOptions) {
+  return sendConfirmedFileMessage(
+    sock,
     jid,
     { document: { url: filePath }, mimetype: "video/mp4", fileName, caption },
-    { quoted: msg },
+    msg,
+    retryOptions,
   );
 }
 
@@ -117,6 +164,8 @@ module.exports = {
   createTikTokFileName,
   fetchVideoCandidate,
   hasMp4Signature,
+  isRateLimitError,
   sendDocumentFromDisk,
+  sendWithRateLimitRetry,
   sendVideoFromDisk,
 };

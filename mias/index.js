@@ -99,6 +99,7 @@ import {
   buildTikTokPickerSections,
   parseTikTokMode,
   selectTikTokUrl,
+  fetchTikTokThumbnail,
 } from "./features/tiktok.js";
 import { createStatusEditFlow } from "./lib/statusEditFlow.js";
 import { normalizeInviteCode, approvalPrompt, adminNumberList, parseAdminChoice } from "./features/joinApproval.js";
@@ -18963,19 +18964,16 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
         const menuCaption = formatTikTokMenu(info, CONFIG.PREFIX);
         // Prefer a native WhatsApp single-select ("radio") picker. Its row
         // ids are 1.1–2.3, so a tap and a typed reply use the same path.
-        let thumb = null;
         const _coverCandidates = (Array.isArray(info.covers) && info.covers.length)
           ? info.covers
           : (info.thumbnail ? [info.thumbnail] : []);
-        for (const _cover of _coverCandidates) {
-          try {
-            const _buf = Buffer.from((await axios.get(_cover, {
-              responseType: "arraybuffer", timeout: 15000, maxRedirects: 5,
-              headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" },
-            })).data);
-            if (_buf && _buf.length > 1024) { thumb = _buf; break; }
-          } catch {}
-        }
+        // The menu works without an image. Do not serially wait up to 15s for
+        // every cover URL: one stale CDN thumbnail must not look like a hung
+        // TikTok provider request.
+        const thumb = await fetchTikTokThumbnail(_coverCandidates, axios, {
+          maxCandidates: 4,
+          timeout: 5000,
+        });
         let pickerSent = false;
         let sentPickerMsg = null;
         try {
@@ -41527,7 +41525,15 @@ try {
         try { await sendReply(sock, msg, text); } catch {}
       };
       const timer = setTimeout(function () {
-        say("⏳ TikTok is taking too long — the download provider never answered. Send the link again in a moment.");
+        if (settled) return;
+        // This is a progress notice, not a timeout failure: the operation is
+        // still running and may yet complete. Let the handler report its real
+        // result or error when it settles.
+        Promise.resolve(sendReply(
+          sock,
+          msg,
+          "⏳ TikTok is still processing this request. Large files or slow previews can take a few minutes; wait for the completion or failure message.",
+        )).catch(() => {});
       }, 90000);
       try {
         const r = await _inner(sock, msg, args);

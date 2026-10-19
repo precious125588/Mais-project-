@@ -36,6 +36,17 @@ function fallbackProviderRequests(url) {
   ];
 }
 
+function groupProviderRequestsByOrigin(requests) {
+  const groups = new Map();
+  for (const request of requests) {
+    let origin = request.label;
+    try { origin = new URL(request.url).origin; } catch {}
+    if (!groups.has(origin)) groups.set(origin, []);
+    groups.get(origin).push(request);
+  }
+  return [...groups.values()];
+}
+
 const MODES = {
   "1.1": { kind: "video", quality: "sd", document: false, watermark: false },
   "1.2": { kind: "video", quality: "sd", document: true, watermark: false },
@@ -115,6 +126,48 @@ export function parseTikTokMode(value) {
   const id = normalizeTikTokMode(value);
   const mode = MODES[id];
   return mode ? { ...mode, id } : null;
+}
+
+// Fetch only a small, bounded set of preview images in parallel. Thumbnail
+// failure must never hold the TikTok picker open while the command's outer
+// watchdog reports a misleading provider timeout.
+export async function fetchTikTokThumbnail(candidates, axiosImpl, {
+  maxCandidates = 4,
+  timeout = 5000,
+} = {}) {
+  if (typeof axiosImpl?.get !== "function" || !Array.isArray(candidates)) return null;
+  const urls = [...new Set(candidates
+    .filter((value) => typeof value === "string" && /^https?:\/\/\S+$/i.test(value.trim()))
+    .map((value) => value.trim()))]
+    .slice(0, Math.max(1, Math.floor(Number(maxCandidates) || 4)));
+  if (!urls.length) return null;
+
+  const timeoutMs = Number(timeout) > 0 ? Number(timeout) : 5000;
+  const controller = new AbortController();
+  let watchdog;
+  try {
+    const firstValidImage = Promise.any(urls.map(async (url) => {
+      const response = await axiosImpl.get(url, {
+        responseType: "arraybuffer",
+        timeout: timeoutMs,
+        maxRedirects: 5,
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.tiktok.com/" },
+      });
+      const image = Buffer.from(response?.data || []);
+      if (image.length <= 1024) throw new Error("TikTok preview image was empty");
+      return image;
+    }));
+    const hardTimeout = new Promise((resolve) => {
+      watchdog = setTimeout(() => resolve(null), timeoutMs + 250);
+    });
+    return await Promise.race([firstValidImage, hardTimeout]);
+  } catch {
+    return null;
+  } finally {
+    if (watchdog) clearTimeout(watchdog);
+    controller.abort();
+  }
 }
 
 export function formatTikTokMenu(info, prefix = ".") {
@@ -335,21 +388,29 @@ export async function fetchTikTokInfo(url, fetchImpl = fetch) {
   // The previous "tikwm-nohd" retry hit the same TikWM host again, so a
   // provider-level 403 still left the command without an independent fallback.
   // Fan out only after the primary failure and stop once one real media result
-  // arrives; each of the six secondary routes has an 8-second ceiling.
+  // arrives. Run one request per upstream origin at a time: Nexray and
+  // DavidCyril each have alternate routes, but hitting both endpoints together
+  // can trigger provider-side throttling rather than improving availability.
   const controller = new AbortController();
   const fallbackErrors = [];
-  const attempts = fallbackProviderRequests(url).map(async (request) => {
-    try {
-      const info = await _fetchOne(request, fetchImpl, controller.signal);
-      controller.abort();
-      return info;
-    } catch (error) {
-      fallbackErrors.push(`${request.label}: ${conciseProviderError(error)}`);
-      throw error;
+  const providerGroups = groupProviderRequestsByOrigin(fallbackProviderRequests(url));
+  const attempts = providerGroups.map(async (group) => {
+    let lastError;
+    for (const request of group) {
+      try {
+        return await _fetchOne(request, fetchImpl, controller.signal);
+      } catch (error) {
+        lastError = error;
+        fallbackErrors.push(`${request.label}: ${conciseProviderError(error)}`);
+        if (controller.signal.aborted) break;
+      }
     }
+    throw lastError || new Error("TikTok provider routes were cancelled");
   });
   try {
-    return await Promise.any(attempts);
+    const info = await Promise.any(attempts);
+    controller.abort();
+    return info;
   } catch {
     controller.abort();
   }
