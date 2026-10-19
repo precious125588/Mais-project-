@@ -11,6 +11,9 @@ import path from "path";
 
 const MB = 1024 * 1024;
 const DEFAULT_MAX_MEDIA_MB = 64;
+// TikTok HD assets can exceed the general 64 MiB cap; keep this override
+// scoped to TikTok downloads so other platforms retain their existing limit.
+export const TIKTOK_DOWNLOAD_MAX_BYTES = 300 * MB;
 const DEFAULT_MIN_FREE_MB = 128;
 const KNOWN_TEMP_PREFIXES = [
   "mias-video-",
