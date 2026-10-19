@@ -21,14 +21,15 @@ function getPool() {
 }
 
 function getDatabaseUrl() {
-  // Session auth, registry, and bot selections share the same Neon database as
-  // the settings stores. SESSION_DATABASE_URL remains a legacy fallback for
-  // deployments that have not yet configured DATABASE_URL, and a safe fallback
-  // if the pre-start migration could not copy legacy records.
-  if (process.env.SESSION_DATABASE_MIGRATION_FAILED === '1') {
-    return String(process.env.SESSION_DATABASE_URL || process.env.DATABASE_URL || '').trim();
-  }
-  return String(process.env.DATABASE_URL || process.env.SESSION_DATABASE_URL || '').trim();
+  // Session DB is dedicated exclusively to storing sessions (auth files, registry, bot selections).
+  // It reads SESSION_DATABASE_URL (or SESSION_DB_URL / SESSIONS_DATABASE_URL).
+  // It does NOT share DATABASE_URL so settings and sessions remain strictly isolated.
+  return String(
+    process.env.SESSION_DATABASE_URL ||
+    process.env.SESSION_DB_URL ||
+    process.env.SESSIONS_DATABASE_URL ||
+    ""
+  ).trim();
 }
 
 function createPool() {
@@ -614,6 +615,19 @@ async function deleteSessionCompletely(options = {}) {
   };
 }
 
+
+async function clearAllSessionRecords() {
+  const pool = await readyPool();
+  if (!pool) return { ok: false, reason: "db_not_configured" };
+  try {
+    await pool.query("TRUNCATE TABLE mias_session_auth, mias_session_registry, mias_bot_selections CASCADE");
+    _fileDigests.clear();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 module.exports = {
   createPool,
   readyPool,
@@ -629,4 +643,5 @@ module.exports = {
   getStoredSessionsCount,
   deleteSessionCompletely,
   normalizeSessionKeys,
+  clearAllSessionRecords,
 };

@@ -1,44 +1,24 @@
-# Put sessions and settings in one database
+# Dedicated Dual-Database Architecture
 
-The app settings database is selected with `DATABASE_URL`. WhatsApp session
-auth, the session registry, and bot selections now use that same URL whenever it
-is set. `SESSION_DATABASE_URL` remains only as a compatibility fallback and as
-the source for a one-time copy from the old session database.
+MAIS MDX uses two dedicated, isolated databases:
 
-## If sessions already use a separate database
+1. **Settings Database (`DATABASE_URL`)**:
+   Stores all bot state, settings, sudo lists, reminders, warnings, and configurations.
+   It does **not** store session files or authentication secrets. Any legacy session records in `DATABASE_URL` are cleared on startup.
 
-1. In the Railway service Variables, keep `DATABASE_URL` pointed at the
-   existing database used by bot settings.
-2. Temporarily keep `SESSION_DATABASE_URL` pointed at the old session database.
-   Add or change these values only in Railway's secret variable editor; never
-   commit them or paste them into chat.
-3. Before deploying, run a read-only preview:
+2. **Session Database (`SESSION_DATABASE_URL`)**:
+   Exclusively stores WhatsApp session authentication keys, session registry, and active bot selections.
 
-   ```sh
-   npm run sessions:migrate-db
-   ```
+## Railway Configuration
 
-   It reports row counts only. It does not create tables or copy data.
-4. When the counts look right, the Railway start command will copy the rows
-   before starting the app. You can also run the copy manually once:
+Configure two PostgreSQL connection URLs in Railway service Variables:
 
-   ```sh
-   npm run sessions:migrate-db -- --apply
-   ```
+- `DATABASE_URL`: Connection string for the Settings database.
+- `SESSION_DATABASE_URL`: Connection string for the dedicated Session database.
+- `ADMIN_PASSWORD`: Your admin panel password (password-only login, no username required).
 
-   This creates the additive session tables in `DATABASE_URL` and copies auth
-   files, registry rows, and bot selections. Existing destination rows win
-   unless the source row has a newer `updated_at`. Source records are not
-   deleted. Re-running the command is safe.
-5. Verify the web pairing status shows sessions in the shared database, and
-   only then remove the old `SESSION_DATABASE_URL` variable. If the copy fails,
-   startup logs only an error code and temporarily falls back to the legacy
-   session database; no source records are deleted.
+## Status and Monitoring
 
-Do not log out or delete linked WhatsApp sessions as part of this migration.
-The copy preserves their credentials so they do not need to be paired again.
-
-If `SESSION_DATABASE_URL` and `DATABASE_URL` already point at the same database,
-or there is no legacy session URL, no copy is needed. Without `DATABASE_URL`,
-the app retains the legacy session-only fallback; settings will not share that
-database until `DATABASE_URL` is set.
+- **Web Pairing Page (`/`)**: Displays both **Settings DB** and **Session DB** status pills and detail rows in real-time.
+- **Admin Panel (`/admin`)**: Displays both databases in the status bar and the System stats cards.
+- **Admin Actions**: Includes **🧹 Clean All DB** to safely purge session tables and disk state when resetting the environment.

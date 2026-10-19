@@ -221,10 +221,6 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
     </div>
     <div class="login-err" id="loginErr"></div>
     <div class="login-field">
-      <label>Username</label>
-      <input type="text" id="loginUser" placeholder="admin" value="admin"/>
-    </div>
-    <div class="login-field">
       <label>Password</label>
       <input type="password" id="loginPass" placeholder="••••••••"/>
     </div>
@@ -283,7 +279,8 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
     </nav>
     <div class="sb-footer">
       <div class="sb-status"><div class="sb-dot" id="sbDot"></div><span id="sbStatusTxt">Connecting...</span></div>
-      <div class="sb-status" style="margin-top:4px"><div class="sb-dot" id="sbDbDot" style="background:var(--yellow)"></div><span id="sbDbTxt">Neon: Checking...</span></div>
+      <div class="sb-status" style="margin-top:4px"><div class="sb-dot" id="sbSettingsDbDot" style="background:var(--yellow)"></div><span id="sbSettingsDbTxt">Settings DB: Checking...</span></div>
+      <div class="sb-status" style="margin-top:4px"><div class="sb-dot" id="sbSessionDbDot" style="background:var(--yellow)"></div><span id="sbSessionDbTxt">Session DB: Checking...</span></div>
       <div class="sb-credit">Made by <b>JUST X</b></div>
     </div>
   </div>
@@ -444,7 +441,8 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
         <div class="stat-card green"><div class="stat-icon">🧠</div><div class="stat-val" id="sys-rss">—</div><div class="stat-lbl">RSS Memory</div></div>
         <div class="stat-card"><div class="stat-icon">⚡</div><div class="stat-val" id="sys-cpu">—</div><div class="stat-lbl">CPU Load (1m)</div></div>
         <div class="stat-card purple"><div class="stat-icon">🗂</div><div class="stat-val" id="sys-store">—</div><div class="stat-lbl">Storage</div></div>
-        <div class="stat-card green" id="card-db"><div class="stat-icon">🗄️</div><div class="stat-val" id="sys-db" style="font-size:0.95rem;padding-top:4px">—</div><div class="stat-lbl">Neon Database</div></div>
+        <div class="stat-card green" id="card-settings-db"><div class="stat-icon">⚙️</div><div class="stat-val" id="sys-settings-db" style="font-size:0.95rem;padding-top:4px">—</div><div class="stat-lbl">Settings DB</div></div>
+        <div class="stat-card green" id="card-session-db"><div class="stat-icon">🔑</div><div class="stat-val" id="sys-session-db" style="font-size:0.95rem;padding-top:4px">—</div><div class="stat-lbl">Session DB</div></div>
         <div class="stat-card purple" id="card-vol"><div class="stat-icon">📦</div><div class="stat-val" id="sys-vol" style="font-size:0.95rem;padding-top:4px">—</div><div class="stat-lbl">Railway Volume</div></div>
       </div>
       <div class="sys-grid">
@@ -463,6 +461,7 @@ tr:hover td{background:color-mix(in srgb,var(--accent) 4%,transparent)}
           <button type="button" class="btn btn-outline" onclick="doBackup()">💾 Download Backup</button>
           <button type="button" class="btn btn-outline" onclick="reconnectFailed()">↻ Reconnect Failed Bots</button>
           <button type="button" class="btn btn-danger" onclick="clearErrors()">🗑 Clear Error Log</button>
+          <button type="button" class="btn btn-danger" onclick="cleanAllDb()" style="background:#e11d48;border-color:#e11d48;">🧹 Clean All DB</button>
         </div>
       </div>
     </div>
@@ -510,14 +509,13 @@ let token=null;
 const loginScreen=document.getElementById('loginScreen');
 
 async function doLogin(){
-  const u=document.getElementById('loginUser').value.trim();
   const p=document.getElementById('loginPass').value;
   const err=document.getElementById('loginErr');
   const btn=document.getElementById('loginBtn');
   if(!p){err.textContent='Password required.';err.style.display='block';return;}
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>Signing in...';
   try{
-    const r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
     const d=await r.json();
     if(d.ok){token=d.token;localStorage.setItem('mais-token',token);loginScreen.style.display='none';onLoggedIn();}
     else{err.textContent=d.error||'Login failed.';err.style.display='block';}
@@ -806,34 +804,77 @@ async function clearLogs(){
 // ══════════════════════════════════════════════════════
 
 async function checkAdminDb(){
-  const dot = document.getElementById('sbDbDot');
-  const txt = document.getElementById('sbDbTxt');
+  const sDot = document.getElementById('sbSettingsDbDot');
+  const sTxt = document.getElementById('sbSettingsDbTxt');
+  const sessDot = document.getElementById('sbSessionDbDot');
+  const sessTxt = document.getElementById('sbSessionDbTxt');
+  const sysSettingsDb = document.getElementById('sys-settings-db');
+  const sysSessionDb = document.getElementById('sys-session-db');
+  const sysVol = document.getElementById('sys-vol');
+
   try {
     const r = await fetch('/api/database/status', { cache: 'no-store' });
     const d = await r.json();
-    if (dot && txt) {
-      if (d.status === 'connected') {
-        dot.style.background = 'var(--green)';
-        const sCount = typeof d.sessionsInDb === 'number' ? ' • ' + d.sessionsInDb + ' sessions' : '';
-        txt.textContent = 'Neon: Connected (' + (d.database || 'neondb') + sCount + ')';
-      } else if (d.status === 'error') {
-        dot.style.background = 'var(--red)';
-        txt.textContent = 'Neon: Error (' + (d.message || 'failed') + ')';
+    const stg = d.settingsDb || {};
+    const sess = d.sessionDb || {};
+
+    if (sDot && sTxt) {
+      if (stg.attached) {
+        sDot.style.background = 'var(--green)';
+        sTxt.textContent = 'Settings DB: Attached (' + (stg.database || 'neondb') + ')';
+      } else if (stg.status === 'error') {
+        sDot.style.background = 'var(--red)';
+        sTxt.textContent = 'Settings DB: Error';
       } else {
-        dot.style.background = 'var(--yellow)';
-        txt.textContent = 'Neon: Not Attached';
+        sDot.style.background = 'var(--yellow)';
+        sTxt.textContent = 'Settings DB: Not Attached';
       }
     }
-    const sysDb = document.getElementById('sys-db');
-    const sysVol = document.getElementById('sys-vol');
-    if (sysDb) {
-      const sCount = typeof d.sessionsInDb === 'number' ? ' • ' + d.sessionsInDb + ' sess' : '';
-      sysDb.textContent = d.status === 'connected' ? 'Connected (' + (d.database || 'neondb') + sCount + ')' : (d.status === 'error' ? 'Error' : 'Not Attached');
+
+    if (sessDot && sessTxt) {
+      if (sess.attached) {
+        sessDot.style.background = 'var(--green)';
+        const sCount = typeof sess.sessionsInDb === 'number' ? ' • ' + sess.sessionsInDb + ' sess' : '';
+        sessTxt.textContent = 'Session DB: Attached (' + (sess.database || 'neondb') + sCount + ')';
+      } else if (sess.status === 'error') {
+        sessDot.style.background = 'var(--red)';
+        sessTxt.textContent = 'Session DB: Error';
+      } else {
+        sessDot.style.background = 'var(--yellow)';
+        sessTxt.textContent = 'Session DB: Not Attached';
+      }
+    }
+
+    if (sysSettingsDb) {
+      sysSettingsDb.textContent = stg.attached ? 'Attached (' + (stg.database || 'neondb') + ')' : (stg.status === 'error' ? 'Error' : 'Not Attached');
+    }
+    if (sysSessionDb) {
+      const sCount = typeof sess.sessionsInDb === 'number' ? ' • ' + sess.sessionsInDb + ' sess' : '';
+      sysSessionDb.textContent = sess.attached ? 'Attached (' + (sess.database || 'neondb') + sCount + ')' : (sess.status === 'error' ? 'Error' : 'Not Attached');
     }
     if (sysVol) {
       sysVol.textContent = d.volumeMounted ? 'Mounted (/app/nexstore)' : 'Not Mounted';
     }
   } catch {}
+}
+
+async function cleanAllDb(){
+  openModal('🧹', 'Clean All Databases', 'Are you sure you want to clean all databases? This will purge all sessions, database tables, and reset active link state. This action cannot be undone.', async () => {
+    try {
+      const d = await api('/api/admin/database/clean-all', { method: 'POST' });
+      if (d && d.ok) {
+        toast(d.message || 'All databases cleaned successfully', 'ok');
+        setTimeout(() => {
+          checkAdminDb();
+          if (typeof loadUsers === 'function') loadUsers();
+        }, 800);
+      } else {
+        toast(d?.error || 'Failed to clean databases', 'err');
+      }
+    } catch {
+      toast('Network error', 'err');
+    }
+  });
 }
 setInterval(checkAdminDb, 15000);
 setTimeout(checkAdminDb, 500);

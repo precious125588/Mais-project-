@@ -266,11 +266,14 @@ const _sleep = ms => new Promise(r=>setTimeout(r,ms));
 // ── Database & Volume Persistence Status ─────────────────────────────────────
 let _dbStatusCache = {
   checkedAt: 0,
-  attached: false,
-  status: 'not_configured',
-  message: 'DATABASE_URL (or legacy SESSION_DATABASE_URL) is not set',
-  database: null,
+  settingsDb: { attached: false, status: "not_configured", message: "DATABASE_URL is not set", database: null },
+  sessionDb: { attached: false, status: "not_configured", message: "SESSION_DATABASE_URL is not set", database: null, sessionsInDb: 0 },
   volumeMounted: false,
+  attached: false,
+  status: "not_configured",
+  message: "Databases not configured",
+  database: null,
+  sessionsInDb: 0,
 };
 
 async function checkDbStatus(force = false) {
@@ -279,60 +282,120 @@ async function checkDbStatus(force = false) {
     return _dbStatusCache;
   }
 
-  const hasDbUrl = Boolean(require('./mias/sessionPersistence.cjs').getDatabaseUrl());
+  const { Pool } = require("pg");
+  const { normalizePostgresConnectionString } = require("./mias/lib/pgConnection.cjs");
+  const sessionStore = require("./mias/sessionPersistence.cjs");
+
+  const settingsUrl = String(process.env.DATABASE_URL || process.env.SETTINGS_DATABASE_URL || "").trim();
+  const sessionUrl = sessionStore.getDatabaseUrl();
+
   let volumeMounted = false;
   try {
-    volumeMounted = Boolean(_sessionPaths && typeof _sessionPaths.isVolumeMounted === 'function' ? _sessionPaths.isVolumeMounted() : false);
+    volumeMounted = Boolean(_sessionPaths && typeof _sessionPaths.isVolumeMounted === "function" ? _sessionPaths.isVolumeMounted() : false);
   } catch {}
 
-  if (!hasDbUrl) {
-    _dbStatusCache = {
-      checkedAt: now,
-      attached: false,
-      status: 'not_configured',
-      message: 'DATABASE_URL (or legacy SESSION_DATABASE_URL) is not set',
-      database: null,
-      volumeMounted,
-    };
-    return _dbStatusCache;
+  let settingsDb = { attached: false, status: "not_configured", message: "DATABASE_URL is not set", database: null };
+  let sessionDb = { attached: false, status: "not_configured", message: "SESSION_DATABASE_URL is not set", database: null, sessionsInDb: 0 };
+
+  // 1. Settings Database check
+  if (settingsUrl) {
+    let pool;
+    try {
+      pool = new Pool({
+        connectionString: normalizePostgresConnectionString(settingsUrl),
+        max: 1,
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 8000,
+        ssl: { rejectUnauthorized: true },
+        application_name: "mais-status-check-settings",
+      });
+      const res = await pool.query("SELECT 1 as ok, current_database() as db");
+      const row = res.rows[0];
+      settingsDb = {
+        attached: true,
+        status: "connected",
+        message: "Settings database connected",
+        database: row?.db || "neondb",
+      };
+    } catch (err) {
+      const code = String(err?.code || "").toUpperCase() || "CONNECTION_FAILED";
+      settingsDb = {
+        attached: false,
+        status: "error",
+        message: code,
+        database: null,
+      };
+    } finally {
+      if (pool) { try { await pool.end(); } catch {} }
+    }
   }
 
-  try {
-    const sessionStore = require('./mias/sessionPersistence.cjs');
-    const pool = await sessionStore.readyPool();
-    const res = await pool.query('SELECT 1 as ok, current_database() as db');
-    const sessionsInDb = await sessionStore.getStoredSessionsCount({ strict: true });
-    const row = res.rows[0];
-    _dbStatusCache = {
-      checkedAt: now,
-      attached: true,
-      status: 'connected',
-      message: 'Neon Database connected',
-      database: row?.db || 'neondb',
-      sessionsInDb,
-      role: 'sessions',
-      sessionDatabaseMode: process.env.SESSION_DATABASE_MIGRATION_FAILED === '1'
-        ? 'legacy-fallback'
-        : (String(process.env.DATABASE_URL || '').trim() ? 'shared' : 'legacy-session-only'),
-      legacySessionDatabaseConfigured: Boolean(String(process.env.SESSION_DATABASE_URL || '').trim()),
-      volumeMounted,
-    };
-  } catch (err) {
-    const code = String(err?.code || '').toUpperCase() || 'CONNECTION_FAILED';
-    _dbStatusCache = {
-      checkedAt: now,
-      attached: false,
-      status: 'error',
-      message: code,
-      database: null,
-      volumeMounted,
-    };
+  // 2. Session Database check
+  if (sessionUrl) {
+    try {
+      const pool = await sessionStore.readyPool();
+      if (pool) {
+        const res = await pool.query("SELECT 1 as ok, current_database() as db");
+        const sessionsInDb = await sessionStore.getStoredSessionsCount({ strict: true });
+        const row = res.rows[0];
+        sessionDb = {
+          attached: true,
+          status: "connected",
+          message: "Session database connected",
+          database: row?.db || "neondb",
+          sessionsInDb,
+        };
+      } else {
+        sessionDb = {
+          attached: false,
+          status: "error",
+          message: "SESSION_POOL_INIT_FAILED",
+          database: null,
+          sessionsInDb: 0,
+        };
+      }
+    } catch (err) {
+      const code = String(err?.code || "").toUpperCase() || "CONNECTION_FAILED";
+      sessionDb = {
+        attached: false,
+        status: "error",
+        message: code,
+        database: null,
+        sessionsInDb: 0,
+      };
+    }
   }
+
+  const anyAttached = settingsDb.attached || sessionDb.attached;
+  const anyError = settingsDb.status === "error" || sessionDb.status === "error";
+  const overallStatus = anyAttached ? "connected" : (anyError ? "error" : "not_configured");
+
+  let message = "Databases not configured";
+  if (settingsDb.attached && sessionDb.attached) {
+    message = "Settings DB & Session DB connected";
+  } else if (sessionDb.attached) {
+    message = "Session DB connected (Settings DB on local JSON)";
+  } else if (settingsDb.attached) {
+    message = "Settings DB connected (Session DB on local files)";
+  } else if (anyError) {
+    message = "Database connection error";
+  }
+
+  _dbStatusCache = {
+    checkedAt: now,
+    settingsDb,
+    sessionDb,
+    volumeMounted,
+    // Top-level compatibility fields
+    attached: anyAttached,
+    status: overallStatus,
+    message,
+    database: sessionDb.database || settingsDb.database,
+    sessionsInDb: sessionDb.sessionsInDb || 0,
+    role: "isolated",
+  };
   return _dbStatusCache;
 }
-
-// PUBLIC ROUTES
-// ═════════════════════════════════════════════════════════════════════════════
 
 app.get('/api/database/status', async (_, res) => {
   const db = await checkDbStatus();
@@ -809,16 +872,103 @@ app.delete('/api/admin/selections/:number', (req,res) => {
     } catch(e){ res.status(500).json({ok:false,error:e.message}); }
 });
 
-// ── Admin: login / logout ─────────────────────────────────────────────────────
-app.post('/api/admin/login', rateLimit(60000,10), (req,res) => {
-    const {username,password}=req.body;
-    if ((username&&username!==ADMIN_USERNAME)||password!==ADMIN_PASSWORD) {
-        logger.warn('admin',`Failed login from ${req.ip}`);
-        return res.status(401).json({ok:false,error:'Wrong credentials.'});
+// ── Admin: clean all DB ───────────────────────────────────────────────────────
+async function cleanAllDatabases() {
+  const { Pool } = require("pg");
+  const { normalizePostgresConnectionString } = require("./mias/lib/pgConnection.cjs");
+  const sessionStore = require("./mias/sessionPersistence.cjs");
+  const results = { sessionDb: false, settingsDbSessions: false, localSessions: false };
+
+  // 1. Clean Session DB
+  const sessionUrl = sessionStore.getDatabaseUrl();
+  if (sessionUrl) {
+    try {
+      const res = await sessionStore.clearAllSessionRecords();
+      results.sessionDb = res.ok;
+      if (!res.ok) results.sessionDbError = res.error || res.reason;
+    } catch (err) {
+      results.sessionDbError = err.message;
+    }
+  }
+
+  // 2. Clean legacy session tables in Settings DB
+  const settingsUrl = String(process.env.DATABASE_URL || process.env.SETTINGS_DATABASE_URL || "").trim();
+  if (settingsUrl) {
+    let pool;
+    try {
+      pool = new Pool({
+        connectionString: normalizePostgresConnectionString(settingsUrl),
+        max: 1,
+        connectionTimeoutMillis: 5000,
+        ssl: { rejectUnauthorized: true },
+      });
+      const client = await pool.connect();
+      try {
+        for (const table of ["mias_session_auth", "mias_session_registry", "mias_bot_selections"]) {
+          const check = await client.query("SELECT to_regclass($1) AS tbl", [`public.${table}`]);
+          if (check.rows[0]?.tbl) {
+            await client.query(`TRUNCATE TABLE public.${table} CASCADE`);
+          }
+        }
+        results.settingsDbSessions = true;
+      } finally {
+        client.release();
+      }
+    } catch (err) {
+      results.settingsDbError = err.message;
+    } finally {
+      if (pool) { try { await pool.end(); } catch {} }
+    }
+  }
+
+  // 3. Clean local pairing files and in-memory registry
+  try {
+    if (fs.existsSync(PAIRING_DIR)) {
+      const entries = fs.readdirSync(PAIRING_DIR);
+      for (const entry of entries) {
+        const p = path.join(PAIRING_DIR, entry);
+        try {
+          if (fs.lstatSync(p).isDirectory()) {
+            _delDir(p);
+          } else {
+            fs.unlinkSync(p);
+          }
+        } catch {}
+      }
+    }
+    registry.clear();
+    registry.flush();
+    results.localSessions = true;
+  } catch (err) {
+    results.localSessionsError = err.message;
+  }
+
+  _dbStatusCache.checkedAt = 0;
+  return results;
+}
+
+app.post("/api/admin/database/clean-all", async (req, res) => {
+    if (!isAdmin(req)) return res.status(403).json({ ok: false, error: "Unauthorized" });
+    try {
+        const results = await cleanAllDatabases();
+        logger.warn("admin", `Admin cleaned all databases: ${JSON.stringify(results)}`);
+        res.json({ ok: true, message: "All databases and sessions cleaned successfully.", details: results });
+    } catch (err) {
+        logger.error("admin", `Clean all databases failed: ${err.message}`);
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+// ── Admin: login / logout (password only) ──────────────────────────────────────
+app.post("/api/admin/login", rateLimit(60000,10), (req,res) => {
+    const {password}=req.body;
+    if (!password || password !== ADMIN_PASSWORD) {
+        logger.warn("admin",`Failed login from ${req.ip}`);
+        return res.status(401).json({ok:false,error:"Wrong password."});
     }
     const token=genToken();
     adminSessions.set(token,{createdAt:Date.now(),ip:req.ip});
-    logger.log('admin',`Admin login from ${req.ip}`);
+    logger.log("admin",`Admin login from ${req.ip}`);
     return res.json({ok:true,token});
 });
 app.post('/api/admin/logout',(req,res)=>{ const t=req.headers['x-admin-token'];if(t)adminSessions.delete(t);res.json({ok:true}); });
@@ -1086,6 +1236,13 @@ const httpServer = app.listen(PORT, '0.0.0.0', () => {
         } catch(e) { console.error('✗ Pair:', e.message); }
         _ready=true;
         logger.log('system',`Server started port=${PORT} pair=${!!_pair} launcher=${!!_launcher}`);
+        checkDbStatus(true).then(dbStatus => {
+            const stgMsg = dbStatus.settingsDb.attached ? `Attached (${dbStatus.settingsDb.database})` : (dbStatus.settingsDb.status === 'error' ? 'Error' : 'Not Attached');
+            const sessMsg = dbStatus.sessionDb.attached ? `Attached (${dbStatus.sessionDb.database} • ${dbStatus.sessionDb.sessionsInDb || 0} sessions)` : (dbStatus.sessionDb.status === 'error' ? 'Error' : 'Not Attached');
+            console.log(`[DB] Settings Database : ${stgMsg}`);
+            console.log(`[DB] Session Database  : ${sessMsg}`);
+            logger.log('system', `Settings DB: ${stgMsg} | Session DB: ${sessMsg}`);
+        }).catch(() => {});
         console.log('✅ Server READY\n');
         setTimeout(()=>{
             try {

@@ -21,9 +21,11 @@ test("normalizeSessionKeys handles bare digits, JIDs, and directory basenames", 
   assert.equal(c3.jid, "2348123456789@s.whatsapp.net");
 });
 
-test("sessionPersistence methods gracefully degrade when DATABASE_URL is unset", async () => {
+test("sessionPersistence methods gracefully degrade when SESSION_DATABASE_URL is unset", async () => {
   const orig = process.env.DATABASE_URL;
+  const origSess = process.env.SESSION_DATABASE_URL;
   delete process.env.DATABASE_URL;
+  delete process.env.SESSION_DATABASE_URL;
 
   try {
     const saved = await sessionPersistence.saveSessionFile("9999000001", "creds.json", "{}");
@@ -41,6 +43,7 @@ test("sessionPersistence methods gracefully degrade when DATABASE_URL is unset",
     assert.equal(count, 0);
   } finally {
     if (orig) process.env.DATABASE_URL = orig;
+    if (origSess) process.env.SESSION_DATABASE_URL = origSess;
   }
 });
 
@@ -268,16 +271,16 @@ test("restoreSessionDirFromDb sanitizes traversal in file_name", async () => {
 
 
 
-test('session database shares DATABASE_URL and falls back to the legacy session URL', () => {
+test('session database uses SESSION_DATABASE_URL and does not share DATABASE_URL', () => {
   const oldSettings = process.env.DATABASE_URL, oldSession = process.env.SESSION_DATABASE_URL;
   try {
     process.env.DATABASE_URL = 'postgresql://settings.test/neondb';
     process.env.SESSION_DATABASE_URL = 'postgresql://sessions.test/neondb';
-    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.DATABASE_URL);
+    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.SESSION_DATABASE_URL);
     delete process.env.SESSION_DATABASE_URL;
-    assert.equal(sessionPersistence.getDatabaseUrl(), process.env.DATABASE_URL);
-    delete process.env.DATABASE_URL;
+    assert.equal(sessionPersistence.getDatabaseUrl(), '');
     process.env.SESSION_DATABASE_URL = 'postgresql://sessions.test/neondb';
+    delete process.env.DATABASE_URL;
     assert.equal(sessionPersistence.getDatabaseUrl(), process.env.SESSION_DATABASE_URL);
   } finally {
     if (oldSettings === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = oldSettings;
