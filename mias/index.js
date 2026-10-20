@@ -3798,19 +3798,10 @@ END:VCARD`;
                   try { _isAdmin = await isGroupAdmin(sock, _gjid, _author); } catch {}
                 }
                 if (!_isOwnerOrSudo && !_isAdmin) {
-                  const _mType = Object.keys(msg.message || {})[0] || "";
-                  // Expanded media type list — catches all media including view-once, stickers, ephemeral
-                  const _isMediaMsg = [
-                    "imageMessage","videoMessage","documentMessage","audioMessage",
-                    "gifPlayback","documentWithCaptionMessage","stickerMessage",
-                    "viewOnceMessage","viewOnceMessageV2","viewOnceMessageV2Extension",
-                    "ephemeralMessage","ptvMessage",
-                  ].includes(_mType);
-                  // Also catch media nested inside extendedTextMessage (forwarded w/ caption)
-                  const _extQ = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-                  const _isNestedMedia = _extQ && ["imageMessage","videoMessage","documentMessage"].some(k => k in _extQ);
-                  if (_isMediaMsg || _isNestedMedia) {
-                    await applyGuardAction(sock, _gjid, _author, msg.key, _gset.mediaGuard || "delete", "Lock-Media", "Media");
+                  // Media type comes from the real message (view-once, ephemeral and captions unwrapped)
+                  const _mediaLabel = getLockMediaLabel(msg.message);
+                  if (_mediaLabel) {
+                    await applyGuardAction(sock, _gjid, _author, msg.key, _gset.mediaGuard || "delete", "Lock-Media", _mediaLabel, lockMediaNotice(_mediaLabel));
                     return;
                   }
                 }
@@ -7409,7 +7400,27 @@ async function isBotGroupAdmin(sock, gid) {
     return checkMeta(live);
   } catch { return false; }
 }
-async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "") {
+// Lock-media helpers: what kind of media a message carries, and the warning text.
+function getLockMediaLabel(message) {
+  const inner = (typeof __unwrapWaMsg === "function" ? __unwrapWaMsg(message) : message) || {};
+  if (inner.stickerMessage) return "sticker";
+  if (inner.ptvMessage) return "video";
+  if (inner.videoMessage) return inner.videoMessage.gifPlayback ? "GIF" : "video";
+  if (inner.imageMessage) return "image";
+  if (inner.audioMessage) return inner.audioMessage.ptt ? "voice note" : "audio";
+  if (inner.documentMessage || inner.documentWithCaptionMessage) return "document";
+  return "";
+}
+function lockMediaNotice(type) {
+  return (target, done, action) => {
+    let text = `@${String(target).split("@")[0]} media isn't allowed in this group.\nType: ${type}`;
+    if (action === "warn" && done) text += `\nWarning: ${done}`;
+    if (done && done.includes("need bot admin")) text += "\nMake the bot admin to delete or kick.";
+    return text;
+  };
+}
+
+async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "", noticeFn = null) {
   const cleanTarget = resolveLid(target || "");
   const botAdmin = await isBotGroupAdmin(sock, gid);
   const action = String(mode || "delete").toLowerCase();
@@ -7420,6 +7431,7 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
   else if (action === "kick" && botAdmin) { try { await sock.groupParticipantsUpdate(gid, [cleanTarget], "remove"); done = "kicked"; } catch { done = done || "delete done, kick failed"; } }
   else if (action === "tkick" && botAdmin) { try { await sock.groupParticipantsUpdate(gid, [cleanTarget], "remove"); done = "temp-kicked"; setTimeout(() => sock.groupParticipantsUpdate(gid, [cleanTarget], "add").catch(() => {}), parseDurationMs("5m")); } catch { done = done || "delete done, temp-kick failed"; } }
   if (!done) done = action === "delete" ? "message deleted" : action;
+  if (typeof noticeFn === "function") { await sock.sendMessage(gid, { text: noticeFn(cleanTarget, done, action), mentions: [cleanTarget] }).catch(() => {}); return; }
   await sock.sendMessage(gid, { text: `🚫 *${label} triggered*${type ? `\n\n🔎 Type: *${type}*` : ""}\n👤 User: @${cleanTarget.split("@")[0]}\n🛡️ Mode: *${action.toUpperCase()}*\n✅ Action: *${done}*${!botAdmin ? "\n\n⚠️ Make the bot admin to delete/kick automatically." : ""}`, mentions: [cleanTarget] }).catch(() => {});
 }
 
@@ -16763,38 +16775,22 @@ Use ${CONFIG.PREFIX}allowlink to re-enable links.`);
 cmd(["lockmedia","nomedia","medlock","medialocked"], { desc: "Block media in group — images/videos/docs from non-admins", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
   if (!requireGroup(msg)) return;
   const s = getSettings(msg.key.remoteJid);
-  const v        = (args[0] || "").toLowerCase();
-  const modeArg  = (args[1] || args[0] || "").toLowerCase();
-  if (["on","1","enable","true"].includes(v))  s.lockMedia = true;
-  else if (["off","0","disable","false"].includes(v)) s.lockMedia = false;
-  else if (!["delete","warn","kick","tkick"].includes(v)) s.lockMedia = !s.lockMedia;
-  if (["delete","warn","kick","tkick"].includes(modeArg)) s.mediaGuard = modeArg;
-  if (!s.mediaGuard) s.mediaGuard = "delete";
+  const LOCK_ACTIONS = ["delete", "warn", "kick", "tkick"];
+  const words = (args || []).map(a => String(a || "").toLowerCase()).filter(Boolean);
+  const first = words[0] || "";
+  const action = words.find(w => LOCK_ACTIONS.includes(w));
+  if (["off", "0", "disable", "false"].includes(first)) s.lockMedia = false;
+  else if (["on", "1", "enable", "true"].includes(first) || action) s.lockMedia = true;
+  else s.lockMedia = !s.lockMedia;
+  if (action) s.mediaGuard = action;
+  else if (["on", "1", "enable", "true"].includes(first)) s.mediaGuard = "delete";
+  else if (!LOCK_ACTIONS.includes(s.mediaGuard)) s.mediaGuard = "delete";
   saveNow();
-  const status = s.lockMedia ? "✅ ON" : "❌ OFF";
-  const action = (s.mediaGuard).toUpperCase();
-  const lockText =
-`🚫 *Lock Media: ${status}*
-🛡️ Action: *${action}*
-
-When *ON*, any image, video, document or audio sent by non-admins will be *${action}*d.
-Admins and bot owner are always exempt.
-
-*Usage:*
-• ${CONFIG.PREFIX}lockmedia on — enable (action: delete)
-• ${CONFIG.PREFIX}lockmedia on warn — enable, action = warn
-• ${CONFIG.PREFIX}lockmedia on tkick — enable, action = temp-kick
-• ${CONFIG.PREFIX}lockmedia off — disable
-
-Bot must be *admin* to delete/kick.`;
-  try {
-    await sendCTAButtons(sock, msg.key.remoteJid, msg, lockText, [
-      { type: "quick_reply", text: s.lockMedia ? "🔓 Turn OFF" : "🔒 Turn ON",   id: `BTN:${CONFIG.PREFIX}lockmedia ${s.lockMedia ? "off" : "on"}` },
-      { type: "quick_reply", text: "🗑️ Action: Delete",  id: `BTN:${CONFIG.PREFIX}lockmedia on delete` },
-      { type: "quick_reply", text: "⚠️ Action: Warn",    id: `BTN:${CONFIG.PREFIX}lockmedia on warn` },
-      { type: "quick_reply", text: "⏱️ Action: TKick",   id: `BTN:${CONFIG.PREFIX}lockmedia on tkick` },
-    ], `${CONFIG.BOT_NAME} • Lock Media`);
-  } catch { await sendReply(sock, msg, lockText); }
+  const act = String(s.mediaGuard || "delete").toUpperCase();
+  const text = s.lockMedia
+    ? `🔒 Lock Media: ON\nAction: ${act}\nAdmins and bot owner are exempt.`
+    : "🔓 Lock Media: OFF";
+  await sendReply(sock, msg, text);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
