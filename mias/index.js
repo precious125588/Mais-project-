@@ -44237,11 +44237,11 @@ function __miasApplyMaintenance(registry, aliasMap, categories) {
 
   // 2. Duplicate downloader names → hidden aliases of their canonical parent.
   for (const [aliasName, parent] of Object.entries(DUPLICATE_DOWNLOAD_ALIASES)) {
-    if (DISABLED_COMMANDS.has(aliasName)) continue;        // disabled always wins
+    if (DISABLED_COMMANDS.has(aliasName) || DISABLED_COMMANDS.has(parent)) continue; // disabled name or parent always wins
     if (registry.has(aliasName)) continue;                 // never overwrite a real command
     const parentEntry = registry.get(parent);
     if (!parentEntry || typeof parentEntry.handler !== "function") continue;
-    registry.set(aliasName, { ...parentEntry, isAlias: true, canonical: parent });
+    registry.set(aliasName, { ...parentEntry, isAlias: true, hidden: true, canonical: parent });
     aliasMap.set(aliasName, parent);
     report.aliases.push(aliasName + " -> " + parent);
   }
@@ -44253,7 +44253,7 @@ function __miasApplyMaintenance(registry, aliasMap, categories) {
     if (DISABLED_COMMANDS.has(aliasName)) continue;
     const parentEntry = registry.get(parent);
     if (!parentEntry || typeof parentEntry.handler !== "function") { report.skipped.push(aliasName); continue; }
-    registry.set(aliasName, { ...parentEntry, isAlias: true, canonical: parent });
+    registry.set(aliasName, { ...parentEntry, isAlias: true, hidden: true, canonical: parent });
     aliasMap.set(aliasName, parent);
     report.aliases.push(aliasName + " -> " + parent);
   }

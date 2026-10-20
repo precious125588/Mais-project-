@@ -30,10 +30,9 @@ const commands = new Map();
 const aliases = new Map();
 
 // ── 1. REACTION root cause ──────────────────────────────────────────────────
-test("react() honors BOTH chat-level and owner-level autoReact (root cause fixed)", () => {
-  assert.ok(IDX.includes("const _chatS ="), "react() must read per-chat settings (was owner-only → suppression root cause)");
-  assert.ok(IDX.includes("_ownS && _ownS.autoReact === false"), "react() must still honor the owner-level toggle");
-  assert.ok(IDX.includes("(_chatS && _chatS.autoReact === false) || (_ownS && _ownS.autoReact === false)"), "react() must suppress when EITHER toggle is OFF");
+test("react() obeys the dedicated owner cmdReact toggle", () => {
+  assert.ok(IDX.includes("_ownS && _ownS.cmdReact === false"), "command reactions use cmdReact, not message autoReact");
+  assert.ok(!IDX.includes("_chatS && _chatS.autoReact === false"), "chat message autoReact must not suppress command reactions");
 });
 
 test("react() constructs a valid Baileys reaction key and never throws on failure", () => {
@@ -96,12 +95,12 @@ const WANTED = [
   "googledrive-dl","gdrive-dl","gdrive2","douyin-dl","capcut-dl","github-dl",
   "gofile2","gofile-dl","likee-dl","leaktube","mediafire-dl","mega-dl","pinterest-dl",
   "soundcloud-dl","spotify-dl","threads-dl","twit-dl","video-dl",
-  "gcstory","gcstatus","gstatus","debugtail","setcmdaliasv2","welcomedm",
+  "debugtail","setcmdaliasv2","welcomedm",
   "flag3dtext","channelinfo",
 ];
-test("all 26 user-selected commands are in the authoritative DISABLED_COMMANDS set", () => {
+test("the execution-disabled user-selected commands are in the authoritative DISABLED_COMMANDS set", () => {
   for (const n of WANTED) assert.ok(DISABLED.has(n), `disabled set must contain "${n}"`);
-  assert.equal(WANTED.length, 26, "exactly 26 commands requested");
+  assert.equal(WANTED.length, 23, "23 execution-disabled commands; status names are hidden aliases");
 });
 
 test("a disabled alias is still blocked through its canonical (no bypass)", () => {
@@ -115,7 +114,7 @@ test("a disabled alias is still blocked through its canonical (no bypass)", () =
 
 test("hidden aliases gclockmedia and gst stay CALLABLE and resolve to their parents", () => {
   const aliBlock = IDX.split("Object.entries({ gclockmedia: \"lockmedia\", gst: \"groupstatus\", gcstory: \"groupstatus\", gcstatus: \"groupstatus\" })")[1];
-  assert.ok(aliBlock.includes("registry.set(aliasName, { ...parentEntry, isAlias: true, canonical: parent });"), "hidden aliases must reuse the parent handler");
+  assert.ok(aliBlock.includes("registry.set(aliasName, { ...parentEntry, isAlias: true, hidden: true, canonical: parent });"), "hidden aliases must reuse the parent handler and stay out of menus");
   assert.ok(aliBlock.includes("aliasMap.set(aliasName, parent);"), "hidden aliases must resolve to the parent canonical");
   // parents remain active and are NOT in the disabled set
   for (const p of ["lockmedia", "groupstatus"]) assert.ok(!DISABLED.has(p), `parent "${p}" must remain enabled`);

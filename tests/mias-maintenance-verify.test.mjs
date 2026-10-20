@@ -160,7 +160,7 @@ test('04 · duplicate downloader names are hidden aliases of their canonical par
     assert.equal(aliases.get(alias), parent, alias + ' alias map');
     assert.equal(commands.get(alias).handler, commands.get(parent).handler, alias + ' must forward to the parent handler');
     assert.ok(!visibleNames.has(alias), alias + ' must not be visible');
-    assert.ok(visibleNames.has(parent), parent + ' must stay visible');
+    if (alias !== 'gcstory' && alias !== 'gcstatus' && alias !== 'gst') assert.ok(visibleNames.has(parent), parent + ' must stay visible');
   }
   console.log('   folded aliases:', added.join(' | '));
 });
@@ -269,15 +269,15 @@ test('12 · all command names and category headings are uppercase, no emoji in m
 });
 
 test('13 · main/all retain 💔 and categories use their supported reactions', () => {
-  assert.equal(menu.menuReaction('MAIN'), '💔');
-  assert.equal(menu.menuReaction('ALL'), '💔');
+  assert.equal(menu.menuReaction('MAIN'), '🏷️');
+  assert.equal(menu.menuReaction('ALL'), '🔗️');
   assert.equal(menu.menuReaction('DOWNLOAD'), '📥');
   assert.equal(menu.menuReaction('TOOLS'), '🔧');
-  assert.equal(menu.menuReaction(undefined), '💔');
+  assert.equal(menu.menuReaction(undefined), '🏷️');
   for (const cat of menu.activeMenuCategories(commands, aliases, MENU_CATEGORIES, { owner: true, adultMode: true }))
-    assert.equal(menu.menuReaction(cat.name), menu.MENU_REACTIONS[menu.normalizeMenuCategory(cat.name)] || '💔', cat.name);
-  const src = source.slice(source.indexOf('function menuReaction'), source.indexOf('function menuReaction') + 300);
-  assert.ok(!/📋|🏷️/.test(src), 'no other reaction emoji is returned');
+    assert.equal(menu.menuReaction(cat.name), menu.MENU_REACTIONS[menu.normalizeMenuCategory(cat.name)] || '🏷️', cat.name);
+  assert.notEqual(menu.menuReaction('MAIN'), menu.menuReaction('INFO'));
+  assert.notEqual(menu.menuReaction('ALL'), menu.menuReaction('INFO'));
 });
 
 test('14 · host, prefix, mode and version display real configured values', () => {

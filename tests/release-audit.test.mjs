@@ -26,7 +26,7 @@ function registryHarness() {
   const DISABLED_COMMANDS = literal('disabled', /const DISABLED_COMMANDS = (new Set\(\[[\s\S]*?\]\));/);
   const OWNER_SETTINGS_COMMANDS = literal('settings', /const OWNER_SETTINGS_COMMANDS = (new Set\(\[[\s\S]*?\]\));/);
   const RISKY_CMDS = new Set(['shell']);
-  const sandbox = { commands, aliases, DISABLED_COMMANDS, OWNER_SETTINGS_COMMANDS, RISKY_CMDS, Map, Set, String, Boolean };
+  const sandbox = { commands, aliases, DISABLED_COMMANDS, OWNER_SETTINGS_COMMANDS, RISKY_CMDS, Map, Set, String, Boolean, _miasPrivateBlocks: () => false };
   vm.createContext(sandbox);
   vm.runInContext([fn('cmd'), fn('isCommandDisabled'), fn('jointCommandAllowed')].join('\n'), sandbox);
   return { ...sandbox, sandbox };
@@ -56,7 +56,7 @@ test('both exclusion lists hide canonical/alias selections without disabling exe
   assert.equal(h.isCommandDisabled('web2zip'), true);
   assert.equal(h.isCommandDisabled('webtozip'), false);
 });
-test('selected aliases resolve only to their actual canonical; apple display label is explicit', () => {
+test('selected aliases resolve only to their actual canonical; apple display label is explicit', async () => {
   const h = registryHarness();
   h.cmd(['realcompile', 'codecompile'], { category: 'TOOLS' }, () => 1);
   h.cmd(['applemusic'], { category: 'SEARCH' }, () => 2);
@@ -65,7 +65,7 @@ test('selected aliases resolve only to their actual canonical; apple display lab
   assert.deepEqual(menu.menuExclusionReport(h.commands, h.aliases).tools.mappings, [{ selected: 'codecompile', canonical: 'realcompile' }]);
   assert.equal(menu.MENU_DISPLAY_LABELS['apple music'], 'applemusic');
   assert.equal(h.commands.has('apple music'), false);
-  assert.equal(h.commands.get('realcompile').handler(), 1);
+  assert.equal(await h.commands.get('realcompile').handler(), 1);
 });
 test('real Nexray registration keeps tg-sticker visible in TOOLS and handler delivers mocked media', async () => {
   const h = registryHarness(); registerNexray(h);
@@ -98,7 +98,7 @@ test('real time handler runs locally and time is included once in TOOLS', async 
   assert.match(replies[0], /Current Time/); assert.match(replies[0], /UTC:/);
   assert.deepEqual(menu.activeMenuCategories(h.commands, h.aliases, []).map(c => [c.name, [...c.cmds]]), [['TOOLS', ['time']]]);
 });
-test('setaza is not disabled; all disabled canonical names and aliases reject even late registration', () => {
+test('setaza is not disabled; all disabled canonical names and aliases reject even late registration', async () => {
   const h = registryHarness();
   assert.equal(h.DISABLED_COMMANDS.has('setaza'), false);
   h.cmd(['setaza'], { category: 'INFO', ownerOnly: true }, () => 10);
@@ -112,7 +112,7 @@ test('setaza is not disabled; all disabled canonical names and aliases reject ev
     assert.equal(h.commands.get(name)?.disabled, true);
     assert.equal(h.jointCommandAllowed('probe-' + name, h.commands.get('probe-' + name), { owner: true, creator: true }), false);
   }
-  assert.equal(h.commands.get('setaza').handler(), 10);
+  assert.equal(await h.commands.get('setaza').handler(), 10);
   assert.ok(menu.canonicalMenuEntries(h.commands, h.aliases).some(e => e.name === 'setaza'));
 });
 test('chained dispatch denies owner, creator, admin, banned, safe-mode and disabled bypasses', () => {
