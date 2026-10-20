@@ -3776,20 +3776,6 @@ END:VCARD`;
             }
           } catch {}
 
-          // ── Always-on LINK DETECTOR (groups) — reacts 🔗 to ANY posted link so ──
-          //    detection is visible even when the sender is the owner / an admin /
-          //    owner-sent (those legitimately bypass antiLink enforcement). ──
-          try {
-            if ((msg.key.remoteJid || "").endsWith("@g.us") && body) {
-              const _ldSet = getSettings(msg.key.remoteJid);
-              if (!_ldSet || _ldSet.linkDetector !== false) {
-                if (/(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?/i.test(body)) {
-                  await sock.sendMessage(msg.key.remoteJid, { react: { text: "🔗", key: msg.key } }).catch(() => {});
-                }
-              }
-            }
-          } catch {}
-
           // ── v15: ANTI-LINK + ANTI-STICKER enforcement (groups only) ──
           try {
             if ((msg.key.remoteJid || "").endsWith("@g.us") && !msg.key.fromMe) {
