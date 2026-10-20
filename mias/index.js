@@ -2519,7 +2519,17 @@ async function connectToWA(force = false) {
           const callId = call?.id || call?.callId;
           if (!caller || !callId) continue;
           const action = String(ownerSettings.callAction || "block").toLowerCase();
-          let report = `📞 *Call Guard Triggered*\n\n👤 Caller: @${_cleanNum(caller)}\n🛡️ Mode: *${action.toUpperCase()}*`;
+          // Pick the real caller for the report: never the owner's or the bot's own number.
+          // The report shows the caller's name (from their saved/push name) plus number as plain text.
+          const _ownNums = new Set([_cleanNum(ownerJid || ""), _cleanNum(String(sock?.user?.id || "").split(":")[0])]);
+          const _callerPick = [call?.from, call?.chatId, call?.peerJid, call?.participant]
+            .filter(Boolean)
+            .map(x => toStandardJid(resolveLid(x)))
+            .find(j => j && j.endsWith("@s.whatsapp.net") && !_ownNums.has(_cleanNum(j))) || caller;
+          const _callerNum = _cleanNum(_callerPick);
+          const _callerName = String(pushNameCache.get(_callerNum) || "").trim();
+          const _callerLabel = (_callerName && isMeaningfulName(_callerName)) ? `${_callerName} (+${_callerNum})` : `+${_callerNum}`;
+          let report = `📞 *Call Guard Triggered*\n\n👤 Caller: ${_callerLabel}\n🛡️ Mode: *${action.toUpperCase()}*`;
           // v23: tell the CALLER the call was auto-rejected (sent before any block so it lands)
           try {
             const _isVidCall = !!(call?.isVideo || call?.video || /video/i.test(String(call?.type || call?.media || "")));
@@ -2565,7 +2575,7 @@ async function connectToWA(force = false) {
             }
           } catch (e) { report += `\n❌ Action failed: ${e?.message || e}`; }
           report += ``;
-          await sock.sendMessage(ownerJid, { text: report, mentions: [caller] }).catch(() => {});
+          await sock.sendMessage(ownerJid, { text: report }).catch(() => {});
         }
       } catch (e) {
         console.log("[CALL_GUARD]", e?.message || e);
