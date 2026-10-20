@@ -43080,19 +43080,37 @@ cmd(["pdftotext", "pdf2txt", "extractpdf"], { desc: "Extract text from PDF", cat
   }
 });
 
-cmd("add", { desc: "Add member(s) — .add num1,num2,... (hundreds supported)", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
+// Parse add targets: "+234 901 333 4556", "2349068551055", comma/newline separated.
+// Digits of one number may be spaced out; a new number starts at "+" or after 10+ digits.
+function _parseAddNumbers(raw) {
+  const out = [];
+  for (const seg of String(raw || "").split(/[,;\n]+/)) {
+    let cur = "";
+    for (const tok of seg.trim().split(/\s+/)) {
+      if (!tok) continue;
+      if ((tok.startsWith("+") || cur.length >= 10) && cur) { out.push(cur); cur = ""; }
+      cur += tok.replace(/\D/g, "");
+    }
+    if (cur) out.push(cur);
+  }
+  return [...new Set(out)].filter(n => n.length >= 7 && n.length <= 15);
+}
+
+cmd("add", { desc: "Add member(s) — .add +234 901 333 4556, 2349068551055", category: "GROUP", ownerOnly: true }, async (sock, msg, args) => {
   if (!requireGroup(msg)) { await sendReply(sock, msg, "❌ Group only."); return; }
   const gJid = msg.key.remoteJid;
-  const numbers = args.join(" ").split(/[,\s]+/).map(n => n.replace(/\D/g, "")).filter(n => n.length >= 7);
-  if (!numbers.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}add 2349001234567,2348001234567`); return; }
-
-  const statusMsg = await sock.sendMessage(gJid, { text: `➕ *Add Queue*\n\n⬡ Queued ${numbers.length} number(s) in background pipeline…` }, { quoted: msg });
-  const key = statusMsg.key;
+  const numbers = _parseAddNumbers(args.join(" "));
+  if (!numbers.length) {
+    try { await react(sock, msg, "❌"); } catch {}
+    await sendReply(sock, msg, `❌ No valid number found.\nUsage: ${CONFIG.PREFIX}add +234 901 333 4556, 2349068551055`);
+    return;
+  }
+  try { await react(sock, msg, "🌀"); } catch {}
 
   // Offload to background pipeline so the message handler is freed immediately
   globalThis._heavyTaskPipeline.enqueue(async () => {
-    let ok = 0, done = 0;
-    const lines = [];
+    let ok = 0;
+    const failed = [];
     for (const num of numbers) {
       const jid = num + "@s.whatsapp.net";
       let okThis = false, msgNote = "";
@@ -43130,25 +43148,15 @@ cmd("add", { desc: "Add member(s) — .add num1,num2,... (hundreds supported)", 
         }
       }
 
-      done++;
-      if (okThis) { ok++; lines.push(`✅ +${num}`); }
-      else { lines.push(`❌ +${num}: ${msgNote}`); }
-
-      // Update progress every 2 items or on completion
-      if (done % 2 === 0 || done === numbers.length) {
-        try {
-          await editMessage(sock, gJid, key, `➕ *Add Queue (In Progress)*\n\n${lines.slice(-10).join("\n")}\n\n📊 ${done}/${numbers.length} processed (${ok} added)`);
-        } catch {}
-      }
+      if (okThis) ok++;
+      else failed.push(`+${num} (${msgNote})`);
       // Brief pause between requests to prevent aggressive rate limits
       await new Promise(r => setTimeout(r, 1200));
     }
-
-    try {
-      await editMessage(sock, gJid, key, `➕ *Add Complete*\n\n✅ Added: ${ok}\n❌ Failed: ${numbers.length - ok}\n📊 Total: ${numbers.length}\n\n${lines.slice(-12).join("\n")}`);
-    } catch {
-      try { await sendReply(sock, msg, `➕ *Add Complete* — ${ok}/${numbers.length} added successfully.`); } catch {}
-    }
+    try { await react(sock, msg, ok > 0 ? "✅" : "❌"); } catch {}
+    const summary = [`Added ${ok} of ${numbers.length}.`];
+    if (failed.length) summary.push(`Failed: ${failed.join(", ")}`);
+    await sendReply(sock, msg, summary.join("\n")).catch(() => {});
   });
 });
 
