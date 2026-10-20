@@ -1712,7 +1712,7 @@ function defaultSettings() {
     antiMention: false, autoBlock: false, readMsgs: false,
     viewStatus: false, reactStatus: false, statusMention: false, welcomeMsg: false, viewStatusExclude: [],
     statusViewDelay: 0, // seconds to delay before marking each status as viewed (0 = instant)
-    contactReply: false, statusReply: false,  // v5: contact card in DM replies + status-view reply toggle
+    statusReply: false,  // Section 32 Meta AI status-reply badge; independent from other settings
     // ── v38 ─────────────────────────────────────────────────────────────
     // statusVcard  : the "Save my contact:" vCard that used to pop up in a
     //                status viewer's DM is now OPT-IN (default OFF).
@@ -1749,7 +1749,6 @@ function defaultSettings() {
     autoSendStatus: true,  // "send pls"/"share pls" replies to the bot's status
     autoSendAza: true,     // prefixless `aza` auto account-info reply
     autoTag: false,         // auto-hidetag all members on every group message
-    aiTag: false,           // show WhatsApp AI ✦ badge on every bot reply
     // ── richMode ──────────────────────────────────────────────────────
     // Per-chat toggle. Each WhatsApp user/chat decides for themselves
     // whether bot replies use the plain default text system, or the
@@ -1758,6 +1757,7 @@ function defaultSettings() {
     // `.richmode on`.
     richMode: false,
         anonymous: false,
+    lastSeenEnabled: false, lastSeenFrozen: false, lastSeenRecords: {},
   };
 }
 let _settingsDirty = false;
@@ -1783,7 +1783,7 @@ const GUARD_GLOBAL_KEYS = [
   "chatBotMode", "autoReply", "chatbotScope",
   "autoSendStatus", "autoSendAza", "readMsgs", "viewStatus", "reactStatus",
   "blockCalls", "recording", "typing", "alwaysOnline", "anonymous",
-  "autoVoice", "autoSticker", "contactReply", "statusReply", "aiTag",
+  "autoVoice", "autoSticker", "statusReply", "lastSeenEnabled", "lastSeenFrozen", "lastSeenRecords",
   "antiBug", "antiBroadcast", "adultMode", "autoBlock", "autoBlockCountries",
   "language", "buttonsMode",
 ];
@@ -1805,19 +1805,17 @@ function _loadGuardDb(owner) {
   if (_guardNeedsSave) { _guardNeedsSave = false; saveGuardDb(owner); }
 }
 function saveGuardDb(owner) {
-  if (!owner || !_guardLoaded) return;
+  if (!owner || !_guardLoaded) return false;
   try {
-    const snap = {};
-    for (const k of GUARD_GLOBAL_KEYS) if (k in owner) snap[k] = owner[k];
-    snap.__autoreact_off_v1 = true;
-    const json = JSON.stringify(snap, null, 2);
-    if (json === _guardLastJson) return;
-    fs.mkdirSync(DB_DIR, { recursive: true });
-    const tmp = GUARD_DB_FILE + ".tmp";
-    fs.writeFileSync(tmp, json);
-    fs.renameSync(tmp, GUARD_DB_FILE);
-    _guardLastJson = json;
-  } catch (e) { console.error("[guard-db] save failed:", e?.message || e); }
+    const metadata = { __autoreact_off_v1: true };
+    const saved = require("./features/lastSeen.cjs").persistGuardSettingsJson(
+      GUARD_DB_FILE, owner, GUARD_GLOBAL_KEYS, metadata,
+    );
+    if (saved) {
+      try { _guardLastJson = fs.readFileSync(GUARD_DB_FILE, "utf8"); } catch {}
+    }
+    return saved;
+  } catch (e) { console.error("[guard-db] save failed:", e?.message || e); return false; }
 }
 // Raw per-jid record (creates defaults on first use).
 function _baseSettings(jid) {
@@ -1843,6 +1841,18 @@ function _ownerRecord() {
   _loadGuardDb(rec);
   return rec;
 }
+
+async function persistLastSeenState(owner) {
+  if (!owner || !_guardLoaded) return false;
+  // Guard JSON is the established canonical store for bot-wide settings,
+  // including Last Seen. Do not mirror these keys into the separate Neon snapshot.
+  try { return saveGuardDb(owner) !== false; }
+  catch (error) {
+    console.error("[last-seen] settings persistence failed:", error?.message || error);
+    return false;
+  }
+}
+
 function getSettings(jid) {
   const rec = _baseSettings(jid);
   let owner = null;
@@ -2429,6 +2439,14 @@ async function connectToWA(force = false) {
         }
       }
     } catch {}
+
+    // Observe only presence events already delivered by this connection; never subscribe to or poll contacts.
+    try {
+      require("./features/lastSeen.cjs").installLastSeenListener(sock, {
+        getOwnerSettings: () => getSettings(getOwnerJid()),
+        persist: persistLastSeenState,
+      });
+    } catch (e) { console.error("[last-seen] listener install failed:", e?.message || e); }
 
     // Expose contacts and the existing auto-feature toggles to the bot.
     try {
@@ -6060,16 +6078,7 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
     const _owJ2 = getOwnerJid();
     const _owS2 = _owJ2 ? getSettings(_owJ2) : null;
 
-    // ── Settings 31+32 (v35): EMBEDDED Meta-AI status sign + contact card ──
-    // statusReply ON  → blue verified-style "Meta AI · Status" header embedded
-    // contactReply ON → owner contact line embedded in the SAME reply (never a
-    //                   separate message anymore)
-    // both ON         → combined card, exactly like the reference screenshot:
-    //                   title = chatting user's name (styled fonts/emoji kept
-    //                   as-is — WhatsApp renders them natively), body = status
-    //                   line + contact line, thumbnail = the user's DP.
-    // Until the bot has fetched the user's name/DP, the CREATOR-number info is
-    // used as the default; once fetched it switches to the real user info.
+    // Section 32 Meta AI status-reply context is independent of removed options.
     // [v36 STEP 7] Status reply context (blue verified badge + real contact card)
     let _quoteToUse = msg;
     try {
@@ -6087,12 +6096,7 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
       }
     } catch (_v36Err) {}
 
-    // ── Setting 33: AI ✦ Tag — WhatsApp AI badge on every bot reply ──
-    // Injects botMessageInvokePayload into contextInfo which triggers the
-    // native "AI ✦ Edited" badge shown in WhatsApp on bot-generated messages.
-    if (_owS2?.aiTag && jid && !jid.endsWith("@newsletter")) {
-      _extraCtx = { ...(_extraCtx || {}), botMessageInvokePayload: {} };
-    }
+
   } catch {}
 
   const _msgPayload = _extraCtx
@@ -6107,7 +6111,6 @@ const _sendPlainReply = async (sock, msg, text, mentions = []) => {
     try { _sent = await sock.sendMessage(jid, _msgPayload); } catch (e2) { console.error("[REPLY] even plain send failed:", e2.message); }
   }
 
-  // v35: contact card is now EMBEDDED in the reply above (see Settings 31+32 block).
 
   return _sent;
 };
@@ -9270,6 +9273,16 @@ function buildSettingsMenu(jid) {
 ┃ _ᴘʀᴇꜰɪxʟᴇꜱꜱ 'aza' ᴀᴜᴛᴏ ʀᴇᴘʟʏ_
 ╰━━━━━━━━━━━╯
 
+╭━━❖ *𝗟𝗮𝘀𝘁 𝗦𝗲𝗲𝗻* ❖━━╮
+┃ 36.1 ᴇɴᴀʙʟᴇ  ${s.lastSeenEnabled ? "✅" : ""}
+┃ 36.2 ᴅɪꜱᴀʙʟᴇ  ${!s.lastSeenEnabled ? "✅" : ""}
+╰━━━━━━━━━━━╯
+
+╭━━❖ *𝗙𝗿𝗲𝗲𝘇𝗲 𝗟𝗮𝘀𝘁 𝗦𝗲𝗲𝗻* ❖━━╮
+┃ 37.1 ꜰʀᴇᴇᴢᴇ  ${s.lastSeenFrozen ? "✅" : ""}
+┃ 37.2 ᴜɴꜰʀᴇᴇᴢᴇ  ${!s.lastSeenFrozen ? "✅" : ""}
+╰━━━━━━━━━━━╯
+
 ╭━━❮ *Anti ViewOnce* ❯━━╮
 ┃ 39.1 ᴇɴᴀʙʟᴇ  ${s.antiViewOnce ? "✅" : ""}
 ┃ 39.2 ᴅɪsᴀʙʟᴇ  ${!s.antiViewOnce ? "✅" : ""}
@@ -9365,12 +9378,12 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "38.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
   "38.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
   
-  "36.1": s => { s.contactReply = true;  return "{ contactreply on }"; },
-  "36.2": s => { s.contactReply = false; return "{ contactreply off }"; },
+  "36.1": s => { s.lastSeenEnabled = true; return "✅ Last Seen tracking: ON. Only presence events this connection can actually observe are saved."; },
+  "36.2": s => { s.lastSeenEnabled = false; return "❌ Last Seen tracking: OFF. Saved timestamps are retained."; },
   "32.1": s => { s.statusReply = true;  return "{ metabadge on }"; },
   "32.2": s => { s.statusReply = false; return "{ metabadge off }"; },
-  "37.1": s => { s.aiTag = true;  return "{ aitag on }"; },
-  "37.2": s => { s.aiTag = false; return "{ aitag off }"; },
+  "37.1": s => { s.lastSeenFrozen = true; try { s.lastSeenRecords = require("./features/lastSeen.cjs").setFrozen(s.lastSeenRecords, true); } catch {} return s.lastSeenRecords && Object.keys(s.lastSeenRecords).length ? "🧊 Saved Last Seen timestamps are frozen. This does not change WhatsApp presence or server-side Last Seen." : "🧊 Frozen. No saved timestamp exists yet; none will be recorded until unfrozen."; },
+  "37.2": s => { s.lastSeenFrozen = false; try { s.lastSeenRecords = require("./features/lastSeen.cjs").setFrozen(s.lastSeenRecords, false); } catch {} return "✅ Unfrozen. New valid observed presence events may update saved timestamps."; },
   "30.1": s => { s.antiBroadcast = true;  return "{ antibroadcast on }"; },
   "30.2": s => { s.antiBroadcast = false; return "{ antibroadcast off }"; },
   "31.1": s => { s.autoBlockCountries = Array.isArray(s.autoBlockCountries) ? s.autoBlockCountries : ["92","212"]; if (s.autoBlockCountries.includes("92")) { s.autoBlockCountries = s.autoBlockCountries.filter(c => c !== "92"); return "❌ Auto-Block: removed +92 (Pakistan)"; } s.autoBlockCountries.push("92"); return "✅ Auto-Block: added +92 (Pakistan)"; },
@@ -9457,8 +9470,8 @@ async function handleSettingsNumericReply(sock, msg, body) {
       recording: ["16.1", "16.2"], typing: ["17.1", "17.2"], alwaysonline: ["18.1", "18.2"],
       chatbot: ["21.1", "21.2"], ownerreact: ["22.1", "22.2"], adultmode: ["23.1", "23.2"],
       antimention: ["26.1", "26.2"], antibug: ["27.1", "27.2"], forceprivate: ["28.1", "28.2"],
-      statusforwarder: ["38.1", "38.2"], contactreply: ["36.1", "36.2"], statusreply: ["32.1", "32.2"],
-      aitag: ["37.1", "37.2"], antibroadcast: ["30.1", "30.2"], antiviewonce: ["39.1", "39.2"], antivo: ["39.1", "39.2"], antiviewoncemode: ["40.1", "40.2"], vomode: ["40.1", "40.2"],
+      statusforwarder: ["38.1", "38.2"], lastseen: ["36.1", "36.2"], freezelastseen: ["37.1", "37.2"], statusreply: ["32.1", "32.2"],
+      antibroadcast: ["30.1", "30.2"], antiviewonce: ["39.1", "39.2"], antivo: ["39.1", "39.2"], antiviewoncemode: ["40.1", "40.2"], vomode: ["40.1", "40.2"],
     };
     const _btnPropMap = {
       blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReactMsgs", cmdreact: "cmdReact", autoblock: "autoBlock",
@@ -9466,7 +9479,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       autovoice: "autoVoice", autosticker: "autoSticker", autoreply: "autoReply", recording: "recording",
       typing: "typing", alwaysonline: "alwaysOnline", chatbot: "chatBotMode", ownerreact: "ownerReact",
       adultmode: "adultMode", antimention: "antiMention", antibug: "antiBug", forceprivate: "forcePrivate",
-      statusforwarder: "statusForwarder", contactreply: "contactReply", statusreply: "statusReply", aitag: "aiTag", antibroadcast: "antiBroadcast", antiviewonce: "antiViewOnce", antivo: "antiViewOnce",
+      statusforwarder: "statusForwarder", lastseen: "lastSeenEnabled", freezelastseen: "lastSeenFrozen", statusreply: "statusReply", antibroadcast: "antiBroadcast", antiviewonce: "antiViewOnce", antivo: "antiViewOnce",
     };
     const _bsetPair = _btnPairMap[_bsetKey];
     if (_bsetPair) {
@@ -9600,7 +9613,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       };
       const _qText = _q ? _collectQ(_q).filter(Boolean).join(" ") : "";
       const _normQ = (_qText || "").normalize("NFKD");
-      const _isSettingsPanel = /settings|⚙️|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Auto Voice|Auto Sticker|Auto Reply|Recording|Typing|Always Online|Chatbot|Adult Mode|Anti Mention|Anti Bug|Force Private|Status Reply|AI Tag|Anti Broadcast|\b\d{1,2}\.[1-4]\b/i.test(_qText)
+      const _isSettingsPanel = /settings|⚙️|CONFIG|Block Calls|Link Guard|Bad Word|Anti Delete|Auto React|Auto Block|Read Msgs|View Status|Welcome|Auto Voice|Auto Sticker|Auto Reply|Recording|Typing|Always Online|Chatbot|Adult Mode|Anti Mention|Anti Bug|Force Private|Status Reply|Last Seen|Freeze Last Seen|Anti Broadcast|\b\d{1,2}\.[1-4]\b/i.test(_qText)
         || /settings|config|block calls|link guard|bad word|anti delete|auto react|auto block|read msgs|view status|welcome|auto voice|auto sticker|auto reply|always online|chatbot|adult mode|anti mention|anti bug|force private|status reply|ai tag|anti broadcast|\b\d{1,2}\.[1-4]\b/i.test(_normQ);
       const _hasSession = !!(jid && settingsSession.get(jid));
       const _pickerPending = typeof __miasHasPendingPicker === "function" && __miasHasPendingPicker(jid);
@@ -41323,11 +41336,24 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       return false;
     }
     try {
+      const ownerJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+      const ownerSettings = getSettings(ownerJ);
+      const previousLastSeen = choice.startsWith("36.") || choice.startsWith("37.")
+        ? { lastSeenEnabled: ownerSettings.lastSeenEnabled, lastSeenFrozen: ownerSettings.lastSeenFrozen, lastSeenRecords: ownerSettings.lastSeenRecords }
+        : null;
       const out = fn(getSettings(jid));
-      try {
-        const ownerJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-        if (ownerJ && ownerJ !== jid) fn(getSettings(ownerJ));
-      } catch {}
+      try { if (ownerJ && ownerJ !== jid) fn(ownerSettings); } catch {}
+      if (previousLastSeen) {
+        let persisted = false;
+        try { persisted = await persistLastSeenState(ownerSettings); } catch {}
+        if (!persisted) {
+          ownerSettings.lastSeenEnabled = previousLastSeen.lastSeenEnabled;
+          ownerSettings.lastSeenFrozen = previousLastSeen.lastSeenFrozen;
+          ownerSettings.lastSeenRecords = previousLastSeen.lastSeenRecords;
+          await sendReply(sock, msg, "❌ Last Seen setting was not saved. The previous persisted state is unchanged.");
+          return true;
+        }
+      }
       try {
         settingsSession.set(jid, {
           ...(activeSession && typeof activeSession === "object" ? activeSession : {}),

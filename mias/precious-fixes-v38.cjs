@@ -9,8 +9,8 @@
         owner turns it on (.setting 38.1). Nothing is deleted — the code path
         stays, it is just opt-in.
       · One-time migration (persisted, marker `v38VcardOff`) forces
-        statusReply / contactReply OFF for the owner profile so existing
-        installs stop popping the card, while both toggles stay available.
+        statusVcard OFF for existing installations while preserving Section 32
+        Meta AI Status Reply. The removed Contact Reply setting is retired.
 
    2) GROUP PROTECTIONS IN PRIVATE MODE
       · New setting `protectAlways` (default ON, .setting 39.1/39.2).
@@ -145,8 +145,6 @@ function migrateVcardOff() {
   let touched = 0;
   // owner profile = the one the status-viewer hook reads
   ownerS.statusVcard = false;
-  if (ownerS.statusReply)  { ownerS.statusReply = false;  touched++; }
-  if (ownerS.contactReply) { ownerS.contactReply = false; touched++; }
   ownerS.v38VcardOff = true;
   // every chat that had it on gets the new key, value OFF
   try {
@@ -157,7 +155,7 @@ function migrateVcardOff() {
     }
   } catch (_) {}
   saveNow();
-  log('vCard auto-popup switched OFF (statusVcard=false, statusReply/contactReply reset) — ' +
+  log('vCard auto-popup switched OFF (statusVcard=false, Meta AI Status Reply preserved; retired Contact Reply ignored) — ' +
       touched + ' toggle(s) changed. The vCard setting has been removed from the settings menu.');
   return true;
 }

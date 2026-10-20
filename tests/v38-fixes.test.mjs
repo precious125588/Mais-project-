@@ -82,7 +82,7 @@ ok('v38 pin uses the shape the installed Baileys implements',
 console.log('\n[7] v38 module behaviour');
 const store = new Map();
 const fakeSettings = (jid) => {
-  if (!store.has(jid)) store.set(jid, { statusReply: true, contactReply: true });
+  if (!store.has(jid)) store.set(jid, { statusReply: true, contactReply: false });
   return store.get(jid);
 };
 let saved = 0;
@@ -104,7 +104,7 @@ const install = require(V38);
 const res = install();
 ok('install() ran', !!res && typeof res === 'object');
 const owner = fakeSettings('2348012345678@s.whatsapp.net');
-ok('migration turned statusReply OFF', owner.statusReply === false);
+ok('migration preserves Meta AI Status Reply', owner.statusReply === true);
 ok('migration turned contactReply OFF', owner.contactReply === false);
 ok('migration set statusVcard false', owner.statusVcard === false);
 ok('migration is idempotent (marker set)', owner.v38VcardOff === true);

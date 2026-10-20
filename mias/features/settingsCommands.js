@@ -48,8 +48,6 @@ cmd(["setting", "settings", "config"], { desc: "Open bot settings", category: "S
       title: "🏷️ Verified Badges & Context",
       rows: [
         { id: "32.1", title: `Status Reply (Meta AI) [${s.statusReply ? "ON" : "OFF"}]`, description: "Meta AI verified blue badge on replies" },
-        { id: "31.1", title: `Contact Reply [${s.contactReply ? "ON" : "OFF"}]`, description: "Embedded vCard contact card on replies" },
-        { id: "33.1", title: `AI Tag [${s.aiTag ? "ON" : "OFF"}]`, description: "Native AI Edited badge on bot replies" },
       ]
     },
     {

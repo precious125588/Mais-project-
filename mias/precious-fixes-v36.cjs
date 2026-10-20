@@ -270,7 +270,7 @@ module.exports = function installV36(ctx) {
   globalThis.__V36_STATUS_REPLY_CTX = async function (sock, msg) {
     const owJ = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || "";
     const owS = (typeof getSettings === "function" ? getSettings(owJ) : null) || {};
-    if (!owS.statusReply && !owS.contactReply) return null;
+    if (!owS.statusReply) return null;
 
     const owNum = String(owJ || CONFIG.OWNER_NUMBER || "").split("@")[0].split(":")[0].replace(/\D/g, "");
     let ownerName = CONFIG.BOT_NAME || "MAIS";
@@ -325,17 +325,7 @@ module.exports = function installV36(ctx) {
       ctx.botMessageInvokePayload = {};
     }
 
-    if (owS.contactReply && !ctx.externalAdReply) {
-      ctx.externalAdReply = {
-        title: ownerName,
-        body: "✓ Verified",
-        mediaType: 1,
-        thumbnailUrl: dpUrl || undefined,
-        sourceUrl: "https://wa.me/" + owNum,
-        showAdAttribution: false,
-        renderLargerThumbnail: false,
-      };
-    }
+
 
     return { ctx, fakeQuoted, contactQuoted: null };
   };

@@ -644,7 +644,7 @@ module.exports = function installV37(ctx) {
       const owJ = (typeof getOwnerJid === 'function' ? getOwnerJid() : '')
         || ((CONFIG?.OWNER_NUMBER || '').replace(/[^0-9]/g, '') + '@s.whatsapp.net');
       const owS = (typeof getSettings === 'function' ? getSettings(owJ) : null) || {};
-      if (!owS.statusReply && !owS.contactReply) return null;
+      if (!owS.statusReply) return null;
       // Fetch bot DP ONCE (or fall back to a tiny embedded jpeg).
       if (!_botDpCache) _botDpCache = await _buildBotDp(targetSock);
 
