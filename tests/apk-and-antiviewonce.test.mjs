@@ -35,7 +35,7 @@ test('Anti-ViewOnce: handleSettingsNumericReply button maps include antiviewonce
 });
 
 test('Anti-ViewOnce: handleViewOnce function exists and implements unwrap and delivery', () => {
-  assert.match(idxSrc, /async function handleViewOnce\(sock,\s*msg\)\s*\{/);
+  assert.match(idxSrc, /async function handleViewOnce\(sock,\s*msg,\s*voPayload = null\)\s*\{/);
   assert.match(idxSrc, /msg\.__voHandled\s*=\s*true/);
   assert.match(idxSrc, /downloadStoredMediaBuffer/);
   assert.match(idxSrc, /isChatMode\s*\?\s*remoteJid\s*:\s*ownerJid/);
