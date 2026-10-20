@@ -386,7 +386,8 @@ try {
       const now = Date.now();
       _exitTimes = _exitTimes.filter((t) => now - t < 60000);
       _exitTimes.push(now);
-      if ((code === 75 || code === 78) && _exitTimes.length <= 3) {
+      if ((code === 75 || code === 78) && _exitTimes.length <= 3
+          && !(code === 75 && globalThis.__miasAllowRestartExit)) {
         console.error('[exit-guard] suppressed exit(' + code + ') — attempt ' + _exitTimes.length + '/3 in the last minute');
         return;
       }
@@ -7168,7 +7169,7 @@ function rememberMessage(msg) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// v15: AUTO CACHE CLEANER — runs every 2 minutes to keep RAM low and
+// v15: AUTO CACHE CLEANER — runs every 5 minutes to keep RAM low and
 // reply latency snappy on small panels (Pterodactyl 256–512MB, Heroku,
 // Termux, low-spec VPS). Clears transient/in-memory caches but PRESERVES:
 //   • pushNameCache   (push names — needed for nice mentions, persisted to disk)
@@ -7176,9 +7177,9 @@ function rememberMessage(msg) {
 //   • _msgRetryStore  (decryption retry counters — clearing breaks msgs)
 //   • _lidToJidMap    (LID resolution map — re-fetching is expensive)
 //   • _ownerLidJid / _botJid (owner identity)
-// Tunable via CACHE_CLEAN_MIN env var (default 2).
+// Clears transient caches only; account sessions and persistent settings are untouched.
 // ─────────────────────────────────────────────────────────────────────
-const CACHE_CLEAN_MS = Math.max(1, parseInt(process.env.CACHE_CLEAN_MIN || "1", 10)) * 60 * 1000;
+const CACHE_CLEAN_MS = 5 * 60 * 1000;
 function autoCleanCaches() {
   try {
     const before = {
@@ -7430,7 +7431,6 @@ async function applyGuardAction(sock, gid, target, msgKey, mode, label, type = "
   else if (action === "kick" && botAdmin) { try { await sock.groupParticipantsUpdate(gid, [cleanTarget], "remove"); done = "kicked"; } catch { done = done || "delete done, kick failed"; } }
   else if (action === "tkick" && botAdmin) { try { await sock.groupParticipantsUpdate(gid, [cleanTarget], "remove"); done = "temp-kicked"; setTimeout(() => sock.groupParticipantsUpdate(gid, [cleanTarget], "add").catch(() => {}), parseDurationMs("5m")); } catch { done = done || "delete done, temp-kick failed"; } }
   if (!done) done = action === "delete" ? "message deleted" : action;
-  if (label === "Anti-Link") return; // silent enforce: no "Anti-Link triggered" spam card
   await sock.sendMessage(gid, { text: `🚫 *${label} triggered*${type ? `\n\n🔎 Type: *${type}*` : ""}\n👤 User: @${cleanTarget.split("@")[0]}\n🛡️ Mode: *${action.toUpperCase()}*\n✅ Action: *${done}*${!botAdmin ? "\n\n⚠️ Make the bot admin to delete/kick automatically." : ""}`, mentions: [cleanTarget] }).catch(() => {});
 }
 
@@ -9288,9 +9288,9 @@ _Reply *0* to close settings_`;
 const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "1.1": s => { s.blockCalls = true; return "✅ Block Calls: ENABLED"; },
   "1.2": s => { s.blockCalls = false; return "❌ Block Calls: DISABLED"; },
-  "2.1": s => { s.linkGuard = "delete"; return "{ antilink on }"; },
-  "2.2": s => { s.linkGuard = "kick"; return "{ antilink kick }"; },
-  "2.3": s => { s.linkGuard = "warn"; return "{ antilink off }"; },
+  "2.1": s => { s.antiLink = true; s.linkGuard = "delete"; return "✅ Anti-Link: ON — links are deleted"; },
+  "2.2": s => { s.antiLink = true; s.linkGuard = "kick"; return "✅ Anti-Link: ON — link sender is removed"; },
+  "2.3": s => { s.antiLink = true; s.linkGuard = "warn"; return "✅ Anti-Link: ON — link sender is warned"; },
   "3.1": s => { s.badWordGuard = "delete"; return "✅ Bad Word Guard: DELETE"; },
   "3.2": s => { s.badWordGuard = "kick"; return "✅ Bad Word Guard: KICK"; },
   "3.3": s => { s.badWordGuard = "warn"; return "✅ Bad Word Guard: WARN"; },
@@ -17076,25 +17076,41 @@ installSetsudoCommand({
   t += `\n_Sudo users can run all owner commands._`;
   await sendReply(sock, msg, t);
 });
-cmd("restart", { desc: "Restart bot — saves data first", category: "OWNER", ownerOnly: true }, async (sock, msg) => {
-  const up = typeof fmtUptime === "function" ? fmtUptime(process.uptime()) : `${Math.floor(process.uptime()/60)}m`;
-  await react(sock, msg, "🔄");
-  await sendReply(sock, msg,
-`🔄 *MIAS MDX — Restarting Bot*
-━━━━━━━━━━━━━━━━━━━━
-
-⏱️ *Session Uptime:* ${up}
-⌨️ *Commands Loaded:* ${getPrimaryCommandCount()}
-💾 *Saving data...*
-
-🟡 Bot will be back online in a few seconds.`);
-  try { if (typeof saveNow === "function") saveNow(); } catch {}
+cmd("restart", { desc: "Restart this bot session — saves data first", category: "OWNER", ownerOnly: true }, async (sock, msg) => {
+  if (globalThis.__miasRestartPending) return;
+  globalThis.__miasRestartPending = true;
+  try {
+    await sendReply(sock, msg, "RESTARTING......");
+  } catch (e) {
+    console.error("[restart] Could not send acknowledgement:", e?.message || e);
+  }
+  try {
+    if (typeof saveGuardDb === "function" && typeof _ownerRecord === "function") {
+      saveGuardDb(_ownerRecord());
+    }
+    if (typeof globalThis.__saveNowImmediate === "function") {
+      await globalThis.__saveNowImmediate();
+    } else if (typeof _flushAllStoresSync === "function") {
+      _flushAllStoresSync();
+    } else if (typeof saveNow === "function") {
+      saveNow();
+    }
+    if (typeof flushPersistence === "function") {
+      const flushed = await flushPersistence();
+      if (flushed === false) console.error("[restart] Persistence flush reported failure.");
+    }
+  } catch (e) {
+    console.error("[restart] Persistence flush failed:", e?.message || e);
+  }
   try {
     const _nf = path.join(AUTH_DIR, ".last_alive_notice.json");
     fs.writeFileSync(_nf, JSON.stringify({ manualRestart: true, requestedAt: Date.now() }), "utf8");
   } catch {}
-  // EXIT CODE 75 signals mais_launcher to restart only THIS user bot
-  setTimeout(() => process.exit(75), 2500);
+  // Exit 75 is handled by mais_launcher per account; it never restarts siblings.
+  setTimeout(() => {
+    globalThis.__miasAllowRestartExit = true;
+    process.exit(75);
+  }, 2500);
 });
 cmd(["setprefix", "prefix"], { desc: "Change bot prefix — use 'null' or 'none' for no prefix", category: "CONFIG", ownerOnly: true }, async (sock, msg, args) => {
   if (!args[0]) {
@@ -39310,8 +39326,8 @@ globalThis.__MiasBlocklist = __MiasBlocklist;
         }
       } catch {}
 
-      // Last resort: show the actual phone number, never a vague placeholder.
-      return number ? `+${number}` : "Unknown contact";
+      // Never expose a raw number or LID when no contact name is available.
+      return "Unknown contact";
     }
 
     const __v22Block = async (sock, msg, args = []) => {
@@ -39387,7 +39403,10 @@ globalThis.__MiasBlocklist = __MiasBlocklist;
         return;
       }
       const list = await BL.fetchBlocklist(sock, { force: true });
-      if (!list) { await sendReply(sock, msg, "❌ This build can't read the WhatsApp blocklist."); return; }
+      if (!list) {
+        await sendReply(sock, msg, "❌ I couldn't safely resolve the WhatsApp blocklist entries. Sync contacts and try again; I won't show an unresolved list as empty.");
+        return;
+      }
       const arr = [...list];
       if (!arr.length) {
         await sendReply(sock, msg, "✅ Your blocklist is empty.");
@@ -39395,7 +39414,8 @@ globalThis.__MiasBlocklist = __MiasBlocklist;
       }
       const named = await Promise.all(arr.map(async (n) => ({
         jid: `${n}@s.whatsapp.net`,
-        name: await __v22DisplayName(sock, msg, `${n}@s.whatsapp.net`),
+        name: (typeof BL.getBlocklistDisplayName === "function" && BL.getBlocklistDisplayName(n))
+          || await __v22DisplayName(sock, msg, `${n}@s.whatsapp.net`),
       })));
       await sendReply(
         sock,
@@ -41220,10 +41240,11 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
     }
 
     let sessLive = false;
+    let activeSession = null;
     try {
-      const se = settingsSession.get(jid);
-      const ts = typeof se === "number" ? se : (se?.ts || se?.time || 0);
-      sessLive = !!se && (Date.now() - ts < 30 * 60 * 1000);
+      activeSession = settingsSession.get(jid);
+      const ts = typeof activeSession === "number" ? activeSession : (activeSession?.ts || activeSession?.time || 0);
+      sessLive = !!activeSession && (Date.now() - ts < 30 * 60 * 1000);
     } catch {}
 
     let quotedIsSettings = false;
@@ -41253,6 +41274,25 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
 
     if (!choice) return false;
     if (!quotedIsSettings && !sessLive) return false;
+    const sender = typeof getSender === "function"
+      ? getSender(msg)
+      : (msg?.key?.participant || msg?.key?.remoteJid || "");
+    const normalizeSender = (value) => String(resolveLid(value) || value || "")
+      .toLowerCase().replace(/:\d+(?=@)/g, "");
+    const sessionSender = activeSession && typeof activeSession === "object" ? activeSession.sender : "";
+    if (sessLive && sessionSender && normalizeSender(sessionSender) !== normalizeSender(sender)) {
+      return false;
+    }
+    if (!sessionSender && (sessLive || quotedIsSettings)) {
+      let authorized = !!msg?.key?.fromMe
+        || (typeof isOwner === "function" && isOwner(sender))
+        || (typeof isCreator === "function" && isCreator(sender))
+        || (typeof isSudo === "function" && isSudo(sender));
+      if (!authorized && String(jid || "").endsWith("@g.us") && typeof isGroupAdmin === "function") {
+        try { authorized = await isGroupAdmin(sock, jid, sender); } catch {}
+      }
+      if (!authorized) return false;
+    }
 
     if (choice === "0") {
       try { settingsSession.delete(jid); } catch {}
@@ -41288,7 +41328,13 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
         const ownerJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
         if (ownerJ && ownerJ !== jid) fn(getSettings(ownerJ));
       } catch {}
-      try { settingsSession.set(jid, { ts: Date.now() }); } catch {}
+      try {
+        settingsSession.set(jid, {
+          ...(activeSession && typeof activeSession === "object" ? activeSession : {}),
+          sender: sessionSender || sender,
+          ts: Date.now(),
+        });
+      } catch {}
       try { saveNow && saveNow(); } catch {}
       const replyText = typeof out === "string" ? out : "✅ Setting updated.";
       await sendReply(sock, msg, `${replyText}\n\n_Reply another option, or *0* to close._`);

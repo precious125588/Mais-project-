@@ -274,18 +274,87 @@ async function resolveLidToPhone(sock, lidJid) {
 // ── blocklist cache ─────────────────────────────────────────────────────────
 const CACHE_TTL_MS = 30_000;
 const VERIFY_DELAYS_MS = [350, 750, 1500];
-const cache = { jids: new Set(), at: 0, supported: true };
+const cache = { jids: new Set(), names: new Map(), at: 0, supported: true };
 const pending = new Map();
 const PENDING_TTL_MS = 60_000;
 
+function blocklistEntries(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") return value.trim() ? [value] : [];
+  if (!value || typeof value !== "object") return null;
+  if (value instanceof Map) {
+    return [...value.entries()].map(([key, entry]) => (
+      entry && typeof entry === "object"
+        ? { ...entry, jid: entry.jid || key }
+        : key
+    ));
+  }
+  for (const key of ["blocklist", "entries", "items", "jids"]) {
+    if (Array.isArray(value[key])) return value[key];
+  }
+  if (value.jid || value.id || value.pn || value.phone || value.phoneNumber || value.userJid) {
+    return [value];
+  }
+  if (typeof value[Symbol.iterator] === "function") return [...value];
+  return null;
+}
+
+function blocklistCandidates(entry) {
+  if (typeof entry === "string" || typeof entry === "number") return [String(entry).trim()];
+  if (!entry || typeof entry !== "object") return [];
+  return [
+    entry.pn,
+    entry.phoneNumber,
+    entry.phone,
+    entry.jid,
+    entry.id,
+    entry.userJid,
+    entry.user,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+function blocklistNumber(entry) {
+  for (const candidate of blocklistCandidates(entry)) {
+    // An unresolved LID is not a phone number; never display or cache its digits.
+    if (candidate.toLowerCase().endsWith("@lid")) continue;
+    const jid = normalizeUserJid(candidate);
+    if (jid) return normalizeNumber(jid);
+  }
+  return "";
+}
+
+async function resolvedBlocklistNumber(sock, entry) {
+  const direct = blocklistNumber(entry);
+  if (direct) return direct;
+  for (const candidate of blocklistCandidates(entry)) {
+    if (!candidate.toLowerCase().endsWith("@lid")) continue;
+    const mapped = await resolveLidToPhone(sock, candidate);
+    const jid = normalizeUserJid(mapped);
+    if (jid) return normalizeNumber(jid);
+  }
+  return "";
+}
+
+function blocklistDisplayName(entry) {
+  if (!entry || typeof entry !== "object") return "";
+  return [
+    entry.notify,
+    entry.name,
+    entry.pushName,
+    entry.displayName,
+    entry.verifiedName,
+  ].map(cleanContactName).find(Boolean) || "";
+}
+
 export function _resetCacheForTests() {
   cache.jids = new Set();
+  cache.names = new Map();
   cache.at = 0;
   cache.supported = true;
   pending.clear();
 }
 
-/** Fetch the account blocklist (normalized numbers). Returns null if unsupported. */
+/** Fetch the account blocklist (normalized numbers). Returns null if unreadable. */
 export async function fetchBlocklist(sock, { force = false } = {}) {
   if (!force && cache.at && Date.now() - cache.at < CACHE_TTL_MS) {
     return new Set(cache.jids);
@@ -295,16 +364,32 @@ export async function fetchBlocklist(sock, { force = false } = {}) {
     return null;
   }
   try {
-    const list = (await sock.fetchBlocklist()) || [];
+    const entries = blocklistEntries(await sock.fetchBlocklist());
+    if (!entries) {
+      cache.supported = false;
+      return null;
+    }
     const set = new Set();
-    for (const j of list) {
-      const mapped = String(j).toLowerCase().endsWith("@lid")
-        ? await resolveLidToPhone(sock, j)
-        : j;
-      const n = normalizeNumber(mapped);
-      if (n) set.add(n);
+    const names = new Map();
+    let unresolved = false;
+    for (const entry of entries) {
+      const n = await resolvedBlocklistNumber(sock, entry);
+      if (!n) {
+        unresolved = true;
+        continue;
+      }
+      set.add(n);
+      const name = blocklistDisplayName(entry);
+      if (name) names.set(n, name);
+    }
+    // Do not report an unreadable/non-empty server list as "empty" or silently
+    // return a partial set when a blocked identity could not be resolved.
+    if (entries.length && (unresolved || !set.size)) {
+      cache.supported = false;
+      return null;
     }
     cache.jids = set;
+    cache.names = names;
     cache.at = Date.now();
     cache.supported = true;
     return new Set(set);
@@ -312,6 +397,12 @@ export async function fetchBlocklist(sock, { force = false } = {}) {
     cache.supported = false;
     return null;
   }
+}
+
+/** Return a safe display name reported with the blocklist entry, if available. */
+export function getBlocklistDisplayName(number) {
+  const name = cache.names.get(normalizeNumber(number));
+  return name || "";
 }
 
 /** Synchronous best-effort check against the cached blocklist. */
@@ -329,7 +420,7 @@ function delay(ms) {
 }
 
 function applyLocal(num, action) {
-  const n = normalizeNumber(num);
+  const n = typeof num === "object" ? blocklistNumber(num) : normalizeNumber(num);
   if (!n) return;
   if (action === "block") cache.jids.add(n);
   else cache.jids.delete(n);
@@ -342,15 +433,25 @@ export function attachBlocklistEvents(sock) {
   try {
     sock.ev.on("blocklist.set", ({ blocklist } = {}) => {
       const set = new Set();
-      for (const j of blocklist || []) {
-        const n = normalizeNumber(j);
+      const names = new Map();
+      for (const entry of blocklistEntries(blocklist) || []) {
+        const n = blocklistNumber(entry);
         if (n) set.add(n);
+        const name = blocklistDisplayName(entry);
+        if (n && name) names.set(n, name);
       }
       cache.jids = set;
+      cache.names = names;
       cache.at = Date.now();
     });
     sock.ev.on("blocklist.update", ({ blocklist, type } = {}) => {
-      for (const j of blocklist || []) applyLocal(j, type === "add" ? "block" : "unblock");
+      for (const entry of blocklistEntries(blocklist) || []) {
+        applyLocal(entry, type === "add" ? "block" : "unblock");
+        const n = blocklistNumber(entry);
+        const name = blocklistDisplayName(entry);
+        if (n && type === "add" && name) cache.names.set(n, name);
+        else if (n && type !== "add") cache.names.delete(n);
+      }
       cache.at = Date.now();
     });
   } catch {}
@@ -436,6 +537,7 @@ export default {
   resolveBlockTarget,
   findContactByName,
   fetchBlocklist,
+  getBlocklistDisplayName,
   isBlockedNumber,
   isBlockedJid,
   attachBlocklistEvents,

@@ -221,3 +221,37 @@ test("LID-keyed contacts resolve by their phone mapping and name", () => {
     "2349068551055@s.whatsapp.net",
   );
 });
+
+test("manual WhatsApp blocklist object entries resolve to phone JIDs and safe names", async () => {
+  BL._resetCacheForTests();
+  const sock = makeSock();
+  sock.fetchBlocklist = async () => ({
+    blocklist: [
+      {
+        id: "77665544@lid",
+        pn: "2349068551055@s.whatsapp.net",
+        notify: "Ada Okafor",
+      },
+      {
+        jid: "2348012345678@s.whatsapp.net",
+        displayName: "Bola Ade",
+      },
+    ],
+  });
+
+  const list = await BL.fetchBlocklist(sock, { force: true });
+  assert.deepEqual([...list].sort(), ["2348012345678", "2349068551055"]);
+  assert.equal(BL.getBlocklistDisplayName("2349068551055"), "Ada Okafor");
+  assert.equal(BL.getBlocklistDisplayName("2348012345678"), "Bola Ade");
+});
+
+test("an unresolved LID is not mistaken for a phone number or an empty blocklist", async () => {
+  BL._resetCacheForTests();
+  const sock = makeSock();
+  sock.fetchBlocklist = async () => ["77665544@lid"];
+  sock.onWhatsApp = async () => [];
+
+  const list = await BL.fetchBlocklist(sock, { force: true });
+  assert.equal(list, null, "unreadable entries must not be presented as an empty list");
+  assert.equal(BL.isBlockedNumber("77665544"), false, "raw LID digits must never enter the phone cache");
+});
