@@ -39418,26 +39418,35 @@ globalThis.__MiasBlocklist = __MiasBlocklist;
         await sendReply(sock, msg, "❌ Only the bot owner can use this command.");
         return;
       }
-      const list = await BL.fetchBlocklist(sock, { force: true });
-      if (!list) {
+      const detail = await BL.fetchBlocklistDetailed(sock);
+      if (!detail) {
         await sendReply(sock, msg, "❌ I couldn't safely resolve the WhatsApp blocklist entries. Sync contacts and try again; I won't show an unresolved list as empty.");
         return;
       }
-      const arr = [...list];
-      if (!arr.length) {
+      const arr = [...detail.numbers];
+      const pending = detail.unresolved;
+      const pendingNote = pending
+        ? `\n\n⚠️ ${pending} blocked ${pending === 1 ? "entry has" : "entries have"} no phone number yet. Sync contacts, then run ${CONFIG.PREFIX}blocklist again.`
+        : "";
+      if (!arr.length && !pending) {
         await sendReply(sock, msg, "✅ Your blocklist is empty.");
+        return;
+      }
+      if (!arr.length) {
+        await sendReply(sock, msg, `⚠️ No blocked numbers can be shown yet.${pendingNote}`);
         return;
       }
       const named = await Promise.all(arr.map(async (n) => ({
         jid: `${n}@s.whatsapp.net`,
-        name: (typeof BL.getBlocklistDisplayName === "function" && BL.getBlocklistDisplayName(n))
+        name: (detail.names.get(n))
+          || (typeof BL.getBlocklistDisplayName === "function" && BL.getBlocklistDisplayName(n))
           || await __v22DisplayName(sock, msg, `${n}@s.whatsapp.net`),
       })));
       await sendReply(
         sock,
         msg,
         `🚫 *Blocked contacts (${arr.length})*\n\n` +
-          named.map((item, i) => `${i + 1}. *${item.name}*`).join("\n"),
+          named.map((item, i) => `${i + 1}. *${item.name}*`).join("\n") + pendingNote,
         named.map((item) => item.jid),
       );
     };
