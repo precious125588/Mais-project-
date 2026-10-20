@@ -38693,7 +38693,11 @@ for (const n of ["play2"]) { if (commands.has("play")) { commands.set(n, { ...co
       if (!m) return "";
       return m.conversation || m.extendedTextMessage?.text
           || m.imageMessage?.caption || m.videoMessage?.caption
-          || m.documentMessage?.caption || "";
+          || m.documentMessage?.caption
+          || m.interactiveMessage?.body?.text
+          || m.buttonsMessage?.contentText
+          || m.templateMessage?.hydratedTemplate?.hydratedContentText
+          || "";
     };
     const _v23Download = async (raw, kind) => {
       try {
@@ -38809,11 +38813,35 @@ for (const n of ["play2"]) { if (commands.has("play")) { commands.set(n, { ...co
 
         // ── Text-only status ──────────────────────────────────────────────────
         if (!qInner) {
-          const finalText = text || quotedText;
-          await sock.sendMessage("status@broadcast", {
-            text: finalText,
-            contextInfo: { isGroupStatus: true, mentionedJid: [] },
-          }, statusOpts);
+          const finalText = String(text || quotedText || "").trim();
+          if (!finalText) throw new Error("There is no text to post. Reply to a text message or type the text after the command.");
+          // Group text statuses must be relayed as groupStatusMessageV2 with a coloured
+          // background; a plain sendMessage text posts an ordinary status instead.
+          let _gstTextOk = false;
+          try {
+            await sock.relayMessage("status@broadcast", {
+              groupStatusMessageV2: {
+                message: {
+                  extendedTextMessage: {
+                    text: finalText,
+                    backgroundArgb: 0xFF000000,
+                    textArgb: 0xFFFFFFFF,
+                    font: 1,
+                    contextInfo: { mentionedJid: [], isGroupStatus: true },
+                  },
+                },
+              },
+            }, { messageId: statusOpts.messageId, statusJidList: memberJids });
+            _gstTextOk = true;
+          } catch (_gstTxtErr) {
+            console.error("[gst] group text relay failed, using fallback:", _gstTxtErr?.message || _gstTxtErr);
+          }
+          if (!_gstTextOk) {
+            await sock.sendMessage("status@broadcast", {
+              text: finalText,
+              contextInfo: { isGroupStatus: true, mentionedJid: [] },
+            }, statusOpts);
+          }
           posted = true;
         } else {
           // ── Media status ────────────────────────────────────────────────────
