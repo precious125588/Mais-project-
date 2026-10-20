@@ -103,7 +103,7 @@ import {
 } from "./features/tiktok.js";
 import { createStatusEditFlow } from "./lib/statusEditFlow.js";
 import { normalizeInviteCode, approvalPrompt, adminNumberList, parseAdminChoice } from "./features/joinApproval.js";
-import { ensureDiskSpace, getMediaLimitBytes, isNoSpaceError, TIKTOK_DOWNLOAD_MAX_BYTES } from "./lib/diskGuard.js";
+import { ensureDiskSpace, getMediaLimitBytes, isNoSpaceError, TIKTOK_DOWNLOAD_MAX_BYTES, TIKTOK_DOCUMENT_MAX_BYTES } from "./lib/diskGuard.js";
 import { installSettingsCommand } from "./features/settingsCommands.js";
 import { installPairCommands } from "./features/pairCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
@@ -22634,9 +22634,11 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       `📥 *Downloading ${ttChoiceLabel}* (${ttMode.id})...\nPlease wait.`
     );
     try {
-      const _ttMediaMaxBytes = (ttMode.kind === "video" || ttMode.kind === "sticker")
-        ? TIKTOK_DOWNLOAD_MAX_BYTES
-        : getMediaLimitBytes();
+      const _ttMediaMaxBytes = (ttMode.kind === "video" && ttMode.document)
+        ? TIKTOK_DOCUMENT_MAX_BYTES
+        : (ttMode.kind === "video" || ttMode.kind === "sticker")
+          ? TIKTOK_DOWNLOAD_MAX_BYTES
+          : getMediaLimitBytes();
       ensureDiskSpace(_ttMediaMaxBytes);
       let media = null;
       let mediaFile = null;
@@ -41943,7 +41945,7 @@ Please wait.`);
       : null;
     try {
       if (ttMode.kind === "video" && !ttMode.videoNote) {
-        const maxBytes = TIKTOK_DOWNLOAD_MAX_BYTES;
+        const maxBytes = ttMode.document ? TIKTOK_DOCUMENT_MAX_BYTES : TIKTOK_DOWNLOAD_MAX_BYTES;
         ensureDiskSpace(maxBytes);
         const result = await tiktokDiskDelivery.fetchVideoCandidate(mediaUrl, {
           pipeline: PIPE,

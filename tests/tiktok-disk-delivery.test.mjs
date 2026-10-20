@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import vm from "node:vm";
+import { TIKTOK_DOCUMENT_MAX_BYTES } from "../mias/lib/diskGuard.js";
 
 const require = createRequire(import.meta.url);
 const {
@@ -39,6 +40,7 @@ function makeV32Handler({ failUpload = false, downloadBytes, actualFileBytes = 4
   const { dir, filePath } = makeMp4File(actualFileBytes);
   const sourceBytes = actualFileBytes <= 1024 * 1024 ? fs.readFileSync(filePath) : null;
   const downloadOptions = [];
+  const diskReservations = [];
   let cleanupCalls = 0;
   const statusReplies = [];
   const pipeline = {
@@ -58,8 +60,9 @@ function makeV32Handler({ failUpload = false, downloadBytes, actualFileBytes = 4
   const sandbox = {
     PIPE: pipeline,
     TIKTOK_DOWNLOAD_MAX_BYTES: 300 * 1024 * 1024,
+    TIKTOK_DOCUMENT_MAX_BYTES,
     TT_VIDEO_ENCODE: { maxInputBytes: 1024 },
-    ensureDiskSpace() {},
+    ensureDiskSpace(bytes) { diskReservations.push(bytes); },
     selectTikTokUrl: () => "https://cdn.example/hd.mp4",
     forceReaction: async () => {},
     sendReply: async (_sock, _msg, text) => {
@@ -101,6 +104,7 @@ function makeV32Handler({ failUpload = false, downloadBytes, actualFileBytes = 4
     dir,
     filePath,
     downloadOptions,
+    diskReservations,
     get cleanupCalls() { return cleanupCalls; },
     sentMessages,
     sourceBytes,
@@ -430,7 +434,7 @@ test("live v32 TikTok HD document delivery streams from disk with the original t
     const document = harness.sentMessages.find(message => message.payload.document);
     assert.deepEqual(document.payload.document, { url: harness.filePath });
     assert.equal(document.payload.fileName, "Original TikTok title.mp4");
-    assert.equal(harness.downloadOptions[0].cap, 300 * 1024 * 1024);
+    assert.equal(harness.downloadOptions[0].cap, TIKTOK_DOCUMENT_MAX_BYTES);
     assert.equal(harness.cleanupCalls, 1);
     assert.equal(fs.existsSync(harness.filePath), false);
   } finally {
@@ -472,8 +476,8 @@ test("oversized HD video fails before upload and points to the separate document
   }
 });
 
-test("500 MiB HD document choice streams the original file from disk", async () => {
-  const size = 500 * 1024 * 1024;
+test("1 GiB HD document choice stays within its cap and streams the original file from disk", async () => {
+  const size = TIKTOK_DOCUMENT_MAX_BYTES;
   const harness = makeV32Handler({ downloadBytes: size, actualFileBytes: size });
   try {
     await harness.run({ id: "1.4", kind: "video", quality: "hd", document: true });
@@ -482,6 +486,8 @@ test("500 MiB HD document choice streams the original file from disk", async () 
     assert.deepEqual(document.payload.document, { url: harness.filePath });
     assert.equal(document.payload.fileName, "Original TikTok title.mp4");
     assert.equal(harness.sentMessages.some(message => message.payload.video), false);
+    assert.equal(harness.downloadOptions[0].cap, TIKTOK_DOCUMENT_MAX_BYTES);
+    assert.equal(harness.diskReservations[0], TIKTOK_DOCUMENT_MAX_BYTES);
     assert.equal(harness.cleanupCalls, 1);
     assert.equal(fs.existsSync(harness.filePath), false);
   } finally {

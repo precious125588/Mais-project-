@@ -14,6 +14,9 @@ const DEFAULT_MAX_MEDIA_MB = 64;
 // TikTok HD assets can exceed the general 64 MiB cap; keep this override
 // scoped to TikTok downloads so other platforms retain their existing limit.
 export const TIKTOK_DOWNLOAD_MAX_BYTES = 300 * MB;
+// Explicit TikTok video-document choices get a separate 1 GiB ceiling.
+// This does not raise the inline-video limit or other platforms' media caps.
+export const TIKTOK_DOCUMENT_MAX_BYTES = 1024 * MB;
 const DEFAULT_MIN_FREE_MB = 128;
 const KNOWN_TEMP_PREFIXES = [
   "mias-video-",
