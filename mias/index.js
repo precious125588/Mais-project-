@@ -3047,6 +3047,16 @@ async function connectToWA(force = false) {
             }
           } catch {}
 
+          // ── Anti-ViewOnce capture ─────────────────────────────────────────────
+          // normalizeMessage() below strips the viewOnce envelope, so the payload
+          // must be read from the raw message here. Capture is fire-and-forget so
+          // command latency is unaffected, and it runs before the private-mode filter
+          // so view-once media is still captured while the bot is silenced for others.
+          try {
+            const __voPayload = __extractViewOncePayload(msg.message);
+            if (__voPayload) handleViewOnce(sock, msg, __voPayload).catch(() => {});
+          } catch {}
+
           try { normalizeMessage(msg); } catch {}
 
           // ── ViewOnce Cache for reaction-based silent saving ──
@@ -3108,9 +3118,9 @@ async function connectToWA(force = false) {
           }
           // Unwrap envelope wrappers (ephemeral / viewOnce / edited / docCaption)
           if (msg.message.ephemeralMessage?.message) msg.message = msg.message.ephemeralMessage.message;
-          if (msg.message.viewOnceMessage?.message) { try { await handleViewOnce(sock, msg); } catch {} msg.message = msg.message.viewOnceMessage.message; }
-          if (msg.message.viewOnceMessageV2?.message) { try { await handleViewOnce(sock, msg); } catch {} msg.message = msg.message.viewOnceMessageV2.message; }
-          if (msg.message.viewOnceMessageV2Extension?.message) { try { await handleViewOnce(sock, msg); } catch {} msg.message = msg.message.viewOnceMessageV2Extension.message; }
+          if (msg.message.viewOnceMessage?.message) msg.message = msg.message.viewOnceMessage.message;
+          if (msg.message.viewOnceMessageV2?.message) msg.message = msg.message.viewOnceMessageV2.message;
+          if (msg.message.viewOnceMessageV2Extension?.message) msg.message = msg.message.viewOnceMessageV2Extension.message;
           if (msg.message.documentWithCaptionMessage?.message) msg.message = msg.message.documentWithCaptionMessage.message;
           if (msg.message.editedMessage?.message) msg.message = msg.message.editedMessage.message;
 
@@ -7034,9 +7044,41 @@ async function downloadStoredMediaBuffer(mediaNode, type) {
 }
 
 // ── Anti-ViewOnce (Stealth / Chat Reveal) Handler ──────────────────────
-async function handleViewOnce(sock, msg) {
+// Find the view-once payload (the object holding imageMessage / videoMessage / audioMessage)
+// inside a raw incoming message. Returns null for anything that is not view-once media.
+const __VO_MEDIA_KEYS = ["imageMessage", "videoMessage", "audioMessage"];
+function __extractViewOncePayload(message, depth = 0) {
+  if (!message || typeof message !== "object" || depth > 6) return null;
+  for (const key of ["viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension"]) {
+    const inner = message[key]?.message;
+    if (inner && typeof inner === "object") {
+      if (__VO_MEDIA_KEYS.some((k) => inner[k])) return inner;
+      const deeper = __extractViewOncePayload(inner, depth + 1);
+      if (deeper) return deeper;
+    }
+  }
+  for (const key of ["ephemeralMessage", "documentWithCaptionMessage", "editedMessage", "deviceSentMessage"]) {
+    const inner = message[key]?.message;
+    if (inner) {
+      const deeper = __extractViewOncePayload(inner, depth + 1);
+      if (deeper) return deeper;
+    }
+  }
+  // Some clients mark the media node itself as view-once.
+  for (const k of __VO_MEDIA_KEYS) {
+    if (message[k]?.viewOnce === true) return { [k]: message[k] };
+  }
+  return null;
+}
+// Remember ids of view-once messages the bot itself sends so they are never re-captured.
+async function __voTrackSend(pending) {
+  const sent = await pending;
+  try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(sent?.key?.id); } catch {}
+  return sent;
+}
+async function handleViewOnce(sock, msg, voPayload = null) {
   try {
-    if (!msg || !msg.message || msg.__voHandled) return;
+    if (!msg || (!msg.message && !voPayload) || msg.__voHandled) return;
     if (msg.key && msg.key.fromMe && (globalThis.__miasBotViewOnceIds || new Set()).has(msg.key.id)) return;
 
     const remoteJid = msg.key?.remoteJid || "";
@@ -7047,10 +7089,18 @@ async function handleViewOnce(sock, msg) {
     const isEnabled = !!(sOwner?.antiViewOnce || sChat?.antiViewOnce);
     if (!isEnabled) return;
 
+    // Same message id twice (redelivery) must not capture or send twice.
+    const _voMsgId = msg.key?.id || "";
+    globalThis.__voCapturedIds ||= new Set();
+    if (_voMsgId) {
+      if (globalThis.__voCapturedIds.has(_voMsgId)) return;
+      globalThis.__voCapturedIds.add(_voMsgId);
+      if (globalThis.__voCapturedIds.size > 3000) globalThis.__voCapturedIds.clear();
+    }
     msg.__voHandled = true;
 
     // Unwrap to find the viewOnce payload
-    let vo = msg.message;
+    let vo = voPayload || msg.message;
     for (let i = 0; i < 5; i++) {
       const inner = vo?.viewOnceMessage?.message
         || vo?.viewOnceMessageV2?.message
@@ -7144,6 +7194,10 @@ async function handleViewOnce(sock, msg) {
     }
   } catch (err) {
     console.error("[Anti-ViewOnce Error]", err?.message || err);
+    try {
+      const _ownerJidErr = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
+      await sock.sendMessage(_ownerJidErr, { text: `⚠️ Anti-ViewOnce couldn't capture that view-once media.\nReason: ${String(err?.message || err).slice(0, 200)}` });
+    } catch {}
   }
 }
 function rememberMessage(msg) {
@@ -40431,7 +40485,7 @@ try {
         const thumb = await _p2ThumbBuf(meta).catch(function () { return null; });
         const payload = { video: _vj.buf, mimetype: "video/mp4", fileName: safe + ".mp4" };
         if (thumb) payload.jpegThumbnail = thumb;
-        await sock.sendMessage(jid, payload, { quoted: replyMsg });
+        await __voTrackSend(sock.sendMessage(jid, payload, { quoted: replyMsg }));
       } else {
         await sock.sendMessage(jid, { document: _vj.buf, mimetype: _vj.mime, fileName: safe + _vj.ext }, { quoted: replyMsg });
       }
@@ -40445,9 +40499,9 @@ try {
         const thumb = await _p2ThumbBuf(meta).catch(function () { return null; });
         const payload = { video: _vj5.buf, mimetype: "video/mp4", fileName: safe + ".mp4", viewOnce: true };
         if (thumb) payload.jpegThumbnail = thumb;
-        await sock.sendMessage(jid, payload, { quoted: replyMsg });
+        await __voTrackSend(sock.sendMessage(jid, payload, { quoted: replyMsg }));
       } else {
-        await sock.sendMessage(jid, { document: _vj5.buf, mimetype: _vj5.mime, fileName: safe + _vj5.ext, viewOnce: true }, { quoted: replyMsg });
+        await __voTrackSend(sock.sendMessage(jid, { document: _vj5.buf, mimetype: _vj5.mime, fileName: safe + _vj5.ext, viewOnce: true }, { quoted: replyMsg }));
       }
       return;
     }
@@ -40457,10 +40511,10 @@ try {
     if (n === 6) {
       const ogg6 = (await _p2ToPtt(abuf)) || (await _mfToOggOpus(abuf));
       if (ogg6 && _mfSniff(ogg6).kind === "ogg") {
-        await sock.sendMessage(jid, { audio: ogg6, mimetype: "audio/ogg; codecs=opus", ptt: true, viewOnce: true }, { quoted: replyMsg });
+        await __voTrackSend(sock.sendMessage(jid, { audio: ogg6, mimetype: "audio/ogg; codecs=opus", ptt: true, viewOnce: true }, { quoted: replyMsg }));
       } else {
         const _avj6 = await _mfPrepareAudio(abuf);
-        await sock.sendMessage(jid, { audio: _avj6.buf, mimetype: _avj6.mime, ptt: false, fileName: safe + _avj6.ext, viewOnce: true }, { quoted: replyMsg });
+        await __voTrackSend(sock.sendMessage(jid, { audio: _avj6.buf, mimetype: _avj6.mime, ptt: false, fileName: safe + _avj6.ext, viewOnce: true }, { quoted: replyMsg }));
       }
       return;
     }
