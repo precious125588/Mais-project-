@@ -20761,13 +20761,24 @@ cmd(["tovv"], {
     }
   }
 
+  // A bare image/video sent with ".tovv" as its caption also works (no reply needed).
+  let _tvFromDirect = false;
   if (!quoted) {
+    const _tvDirect = __findMediaInMsg(msg.message);
+    if (_tvDirect && (_tvDirect.kind === "image" || _tvDirect.kind === "video")) {
+      quoted = { [_tvDirect.kind + "Message"]: _tvDirect.media };
+      _tvFromDirect = true;
+    }
+  }
+  if (!quoted) {
+    await react(sock, msg, "❌");
     await sendReply(sock, msg, `❌ Reply to an *image* or *video* with ${CONFIG.PREFIX}tovv to send it as a view-once.`);
     return;
   }
   const img = quoted.imageMessage;
   const vid = quoted.videoMessage;
   if (!img && !vid) {
+    await react(sock, msg, "❌");
     await sendReply(sock, msg, `❌ Only *image* or *video* messages can be turned into view-once.`);
     return;
   }
@@ -20782,7 +20793,7 @@ cmd(["tovv"], {
     } catch (_dlErr) {
       console.log("[tovv] downloadContentFromMessage error:", _dlErr?.message);
     }
-    const cap = (args.join(" ") || node.caption || "").trim();
+    const cap = (args.join(" ") || (_tvFromDirect ? "" : node.caption) || "").trim();
     const jid = msg.key.remoteJid;
 
     let relayed = false;
