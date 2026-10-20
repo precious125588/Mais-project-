@@ -20699,6 +20699,13 @@ cmd(["tovv"], {
   else if (quoted?.viewOnceMessageV2?.message) quoted = quoted.viewOnceMessageV2.message;
   else if (quoted?.viewOnceMessageV2Extension?.message) quoted = quoted.viewOnceMessageV2Extension.message;
   else if (quoted?.ephemeralMessage?.message)  quoted = quoted.ephemeralMessage.message;
+  // Also look inside button / interactive / template wrappers (bot cards, menus).
+  {
+    const _tvFound = __findMediaInMsg(quoted);
+    if (_tvFound && (_tvFound.kind === "image" || _tvFound.kind === "video")) {
+      quoted = { [_tvFound.kind + "Message"]: _tvFound.media };
+    }
+  }
 
   if (!quoted) {
     await sendReply(sock, msg, `❌ Reply to an *image* or *video* with ${CONFIG.PREFIX}tovv to send it as a view-once.`);
@@ -33518,12 +33525,8 @@ const __miasGst = async (sock, msg, args) => {
                || msg.message?.documentMessage?.contextInfo
                || null;
       const qStanza = ctx?.quotedMessage || null;
-      const qInner = qStanza?.imageMessage    ? { kind: "image",    raw: qStanza.imageMessage }
-                   : qStanza?.videoMessage    ? { kind: "video",    raw: qStanza.videoMessage }
-                   : qStanza?.audioMessage    ? { kind: "audio",    raw: qStanza.audioMessage }
-                   : qStanza?.stickerMessage  ? { kind: "sticker",  raw: qStanza.stickerMessage }
-                   : qStanza?.documentMessage ? { kind: "document", raw: qStanza.documentMessage }
-                   : null;
+      const _gstFound = __findMediaInMsg(qStanza);
+      const qInner = _gstFound ? { kind: _gstFound.kind, raw: _gstFound.media } : null;
 
       if (!qInner && !text) {
         return reply(`📢 *Group Status*\n\nReply to media or write text.\nExample: *${CONFIG.PREFIX}gst Hello world!*`);
@@ -42593,14 +42596,42 @@ globalThis._passportCard = async function _passportCard(ppBuf, label, title, sub
 
 // ── convert dispatcher (the whole convert menu silently did nothing) ─────────
 // Uses the native fetch/download helpers already defined above in this file.
+// Find the media inside a quoted message, including wrappers the bot cards and
+// view-once / template messages use: buttons, interactive headers, templates.
+const __MEDIA_KEYS = ["imageMessage", "videoMessage", "audioMessage", "stickerMessage", "documentMessage"];
+function __findMediaInMsg(m, depth = 0) {
+  if (!m || typeof m !== "object" || depth > 8) return null;
+  for (const key of __MEDIA_KEYS) {
+    if (m[key]) return { kind: key.replace("Message", ""), media: m[key] };
+  }
+  for (const key of ["viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension", "ephemeralMessage", "documentWithCaptionMessage", "editedMessage", "deviceSentMessage"]) {
+    if (m[key]?.message) {
+      const r = __findMediaInMsg(m[key].message, depth + 1);
+      if (r) return r;
+    }
+  }
+  for (const key of ["buttonsMessage", "interactiveMessage", "templateMessage", "highlyStructuredMessage", "listMessage"]) {
+    if (m[key]) {
+      const r = __findMediaInMsg(m[key], depth + 1);
+      if (r) return r;
+    }
+  }
+  for (const key of ["header", "hydratedTemplate", "hydratedFourRowTemplate", "fourRowTemplate"]) {
+    if (m[key] && typeof m[key] === "object") {
+      const r = __findMediaInMsg(m[key], depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+globalThis.__findMediaInMsg = __findMediaInMsg;
+
 const _cmfGrabMedia = async (sock, msg) => {
   const q = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-  let node = q || msg.message;
-  node = __unwrapWaMsg(node) || node;
-  const img = node?.imageMessage, vid = node?.videoMessage, aud = node?.audioMessage, stk = node?.stickerMessage, doc = node?.documentMessage;
-  const kind = img ? "image" : vid ? "video" : aud ? "audio" : stk ? "sticker" : doc ? "document" : null;
-  if (!kind) return { kind: null, buf: null };
-  const mediaObj = node[kind + "Message"] || (kind === "image" ? img : kind === "video" ? vid : kind === "audio" ? aud : kind === "sticker" ? stk : doc);
+  const found = __findMediaInMsg(q || msg.message);
+  if (!found) return { kind: null, buf: null };
+  const kind = found.kind;
+  const mediaObj = found.media;
   try {
     const stream = await downloadContentFromMessage(mediaObj, kind === "document" ? "document" : kind);
     let chunks = [];
