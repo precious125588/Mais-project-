@@ -22882,7 +22882,18 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       const reason = isNoSpaceError(error)
         ? "The server is low on temporary storage. Try again after cleanup or use SD video/audio."
         : error.message;
-      await finishTtStatus(`❌ *${ttChoiceLabel} failed* (${ttMode.id})\n${reason}\n\nReply with another choice (e.g. *1.1* or *2.1*) — the menu is still active.`);
+      // Send each identical failure once per chat per minute so a repeating
+      // error cannot flood the chat. The ❌ reaction is still set every time.
+      const _ttErrMap = (globalThis.__ttErrDedupe ||= new Map());
+      const _ttErrKey = `${jid}|${ttMode.id}|${reason}`;
+      const _ttErrNow = Date.now();
+      for (const [k, t] of _ttErrMap) { if (_ttErrNow - t > 60000) _ttErrMap.delete(k); }
+      if (!_ttErrMap.has(_ttErrKey)) {
+        _ttErrMap.set(_ttErrKey, _ttErrNow);
+        await finishTtStatus(`❌ *${ttChoiceLabel} failed* (${ttMode.id})\n${reason}\n\nReply with another choice (e.g. *1.1* or *2.1*) — the menu is still active.`);
+      } else if (ttStatusMessage?.key) {
+        await sock.sendMessage(jid, { delete: ttStatusMessage.key }).catch(() => {});
+      }
       await forceReaction(sock, msg, "❌");
     } finally {
       if (mediaFile?.cleanup) {
