@@ -8,6 +8,7 @@ import vm from "node:vm";
 
 const require = createRequire(import.meta.url);
 const {
+  assertWhatsAppVideoSize,
   createTikTokFileName,
   fetchVideoCandidate,
   isRateLimitError,
@@ -34,9 +35,9 @@ function makeMp4File(size = 4096) {
   return { dir, filePath };
 }
 
-function makeV32Handler({ failUpload = false } = {}) {
-  const { dir, filePath } = makeMp4File();
-  const sourceBytes = fs.readFileSync(filePath);
+function makeV32Handler({ failUpload = false, downloadBytes, actualFileBytes = 4096 } = {}) {
+  const { dir, filePath } = makeMp4File(actualFileBytes);
+  const sourceBytes = actualFileBytes <= 1024 * 1024 ? fs.readFileSync(filePath) : null;
   const downloadOptions = [];
   let cleanupCalls = 0;
   const statusReplies = [];
@@ -46,7 +47,7 @@ function makeV32Handler({ failUpload = false } = {}) {
       downloadOptions.push(options);
       return {
         path: filePath,
-        bytes: sourceBytes.length,
+        bytes: downloadBytes ?? fs.statSync(filePath).size,
         async cleanup() {
           cleanupCalls += 1;
           await fs.promises.rm(filePath, { force: true });
@@ -61,7 +62,10 @@ function makeV32Handler({ failUpload = false } = {}) {
     ensureDiskSpace() {},
     selectTikTokUrl: () => "https://cdn.example/hd.mp4",
     forceReaction: async () => {},
-    sendReply: async (_sock, _msg, text) => { statusReplies.push(text); },
+    sendReply: async (_sock, _msg, text) => {
+      statusReplies.push(text);
+      return { key: { id: `status-${statusReplies.length}` } };
+    },
     editMessage: async () => {},
     require: id => requireMias(id),
     console: { error() {} },
@@ -74,7 +78,15 @@ function makeV32Handler({ failUpload = false } = {}) {
       sentMessages.push({ jid, payload, options });
       const filePathToSend = payload.document?.url || payload.video?.url;
       if (filePathToSend) {
-        assert.deepEqual(fs.readFileSync(filePathToSend), sourceBytes);
+        assert.equal(fs.statSync(filePathToSend).size, actualFileBytes);
+        if (sourceBytes) {
+          assert.deepEqual(fs.readFileSync(filePathToSend), sourceBytes);
+        } else {
+          const fd = fs.openSync(filePathToSend, "r");
+          const prefix = Buffer.alloc(12);
+          try { fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
+          assert.equal(prefix.subarray(4, 8).toString("ascii"), "ftyp");
+        }
       }
       if (failUpload && (payload.video || payload.document)) {
         throw new Error("simulated upload failure");
@@ -356,6 +368,16 @@ test("disk file delivery rejects a send without a WhatsApp message id", async ()
   );
 });
 
+test("WhatsApp video size guard explains the separate document choice without sending it", () => {
+  assert.doesNotThrow(() => assertWhatsAppVideoSize(64_000_000));
+  assert.throws(
+    () => assertWhatsAppVideoSize(243.4 * 1024 * 1024),
+    error => error.code === "WHATSAPP_VIDEO_TOO_LARGE"
+      && /1\.4 HD Document/.test(error.message)
+      && /Nothing was sent as a video/.test(error.message),
+  );
+});
+
 test("document filenames preserve the TikTok title and use a safe extension", () => {
   assert.equal(
     createTikTokFileName("Original video title", ".mp4"),
@@ -423,9 +445,45 @@ test("live v32 TikTok HD video delivery cleans up after upload failure", async (
 
     const video = harness.sentMessages.find(message => message.payload.video);
     assert.deepEqual(video.payload.video, { url: harness.filePath });
+    assert.equal(harness.sentMessages.some(message => message.payload.document), false, "video failures must not auto-switch to documents");
     assert.equal(harness.cleanupCalls, 1);
     assert.equal(fs.existsSync(harness.filePath), false);
-    assert.ok(harness.statusReplies.some(text => String(text).includes("simulated upload failure")));
+    assert.ok(harness.sentMessages.some(message => String(message.payload.text || "").includes("simulated upload failure")));
+  } finally {
+    fs.rmSync(harness.dir, { recursive: true, force: true });
+  }
+});
+
+test("oversized HD video fails before upload and points to the separate document choice", async () => {
+  const oversizedBytes = Math.round(243.4 * 1024 * 1024);
+  const harness = makeV32Handler({ downloadBytes: oversizedBytes, actualFileBytes: oversizedBytes });
+  try {
+    await harness.run({ id: "1.3", kind: "video", quality: "hd" });
+
+    assert.equal(harness.sentMessages.some(message => message.payload.video || message.payload.document), false);
+    const finalStatus = harness.sentMessages.find(message => /WHATSAPP_VIDEO_TOO_LARGE|64 MB/.test(String(message.payload.text || "")));
+    assert.ok(finalStatus, "the active status should explain the platform limit");
+    assert.match(finalStatus.payload.text, /1\.4 HD Document/);
+    assert.equal(harness.cleanupCalls, 1);
+    assert.equal(fs.existsSync(harness.filePath), false);
+    assert.equal(harness.statusReplies.length, 1, "one initial status only");
+  } finally {
+    fs.rmSync(harness.dir, { recursive: true, force: true });
+  }
+});
+
+test("500 MiB HD document choice streams the original file from disk", async () => {
+  const size = 500 * 1024 * 1024;
+  const harness = makeV32Handler({ downloadBytes: size, actualFileBytes: size });
+  try {
+    await harness.run({ id: "1.4", kind: "video", quality: "hd", document: true });
+
+    const document = harness.sentMessages.find(message => message.payload.document);
+    assert.deepEqual(document.payload.document, { url: harness.filePath });
+    assert.equal(document.payload.fileName, "Original TikTok title.mp4");
+    assert.equal(harness.sentMessages.some(message => message.payload.video), false);
+    assert.equal(harness.cleanupCalls, 1);
+    assert.equal(fs.existsSync(harness.filePath), false);
   } finally {
     fs.rmSync(harness.dir, { recursive: true, force: true });
   }

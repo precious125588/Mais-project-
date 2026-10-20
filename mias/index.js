@@ -22604,14 +22604,30 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         ? `${ttMode.quality === "hd" ? "HD" : "SD"} animated sticker`
         : `${ttMode.quality === "hd" ? "HD" : "SD"} video${ttMode.document ? " document" : ""}${ttMode.watermark ? " with watermark" : ""}${ttMode.videoNote ? " note" : ""}`;
     let ttStatusMessage = null;
+    let ttStatusStarted = false;
     const updateTtStatus = async (text) => {
       if (ttStatusMessage?.key) {
-        await editMessage(sock, jid, ttStatusMessage.key, text);
-      } else {
-        ttStatusMessage = await sendReply(sock, msg, text);
+        try {
+          await sock.sendMessage(jid, { text, edit: ttStatusMessage.key });
+          return true;
+        } catch {
+          return false;
+        }
       }
+      if (ttStatusStarted) return false;
+      ttStatusStarted = true;
+      ttStatusMessage = await sendReply(sock, msg, text);
+      return !!ttStatusMessage?.key;
+    };
+    const finishTtStatus = async (text) => {
+      if (await updateTtStatus(text)) return;
+      if (ttStatusMessage?.key) {
+        await sock.sendMessage(jid, { delete: ttStatusMessage.key }).catch(() => {});
+      }
+      await sendReply(sock, msg, text).catch(() => {});
     };
     await forceReaction(sock, msg, "⬇️");
+    ttStatusStarted = true;
     ttStatusMessage = await sendReply(
       sock,
       msg,
@@ -22727,6 +22743,9 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       if (!mediaFile && ttMode.kind !== "slider" && (mediaHead.startsWith("<!doctype") || mediaHead.startsWith("<html") || mediaHead.startsWith("{"))) {
         throw new Error("TikTok provider returned metadata instead of media");
       }
+      if (ttMode.kind === "video" && !ttMode.document && !ttMode.videoNote) {
+        tiktokDiskDelivery.assertWhatsAppVideoSize(mediaFile?.bytes ?? media?.length ?? 0);
+      }
       const uploadSize = mediaFile ? ` (${(mediaFile.bytes / (1024 * 1024)).toFixed(1)} MiB)` : "";
       await updateTtStatus(`📤 *Uploading ${ttChoiceLabel}* (${ttMode.id})${uploadSize}...\n${mediaFile ? "Sending the original MP4 without re-encoding. Large HD files can take a few minutes." : "Sending to WhatsApp; large files may take a few minutes."}`);
       const ttCaption = `🎵 *${ttPick.info.title}${ttMode.kind === "slider" ? " (Slider)" : ""}*\n👤 ${ttPick.info.author}`;
@@ -22776,18 +22795,7 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         // For files above TT_VIDEO_ENCODE.maxInputBytes, the existing video
         // normalizer returns the input bytes unchanged. Stream that same MP4
         // from disk instead of retaining a 100+ MiB Buffer during WhatsApp's upload.
-        try {
-          await tiktokDiskDelivery.sendVideoFromDisk(sock, jid, mediaFile.path, ttCaption, msg);
-        } catch (videoError) {
-          console.log("[tiktok] streamed video send failed, using document fallback:", videoError?.message || videoError);
-          await sock.sendMessage(jid, {
-            document: { url: mediaFile.path },
-            mimetype: "video/mp4",
-            fileName: tiktokDiskDelivery.createTikTokFileName(ttPick.info.title, ".mp4"),
-            caption: `${ttCaption}
-📎 Sent as a file because video playback was unavailable.`,
-          }, { quoted: msg });
-        }
+        await tiktokDiskDelivery.sendVideoFromDisk(sock, jid, mediaFile.path, ttCaption, msg);
       } else {
         // FIX v18.2: 1.7 PTV send throws silently on older Baileys /
         // oversized quoted payloads with NO catch in the previous version.
@@ -22832,28 +22840,8 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
         }
         if (ttMode.kind === "video" && !ttMode.videoNote) {
           const _tvv = await _mfPrepareVideo(media);
-          if (_tvv.ok) {
-            try {
-              await sock.sendMessage(jid, { video: _tvv.buf, mimetype: "video/mp4", caption: ttCaption }, { quoted: msg });
-            } catch (videoError) {
-              console.log("[tiktok] video send failed, using document fallback:", videoError?.message || videoError);
-              await sock.sendMessage(jid, {
-                document: _tvv.buf,
-                mimetype: "video/mp4",
-                fileName: tiktokDiskDelivery.createTikTokFileName(ttPick.info.title, ".mp4"),
-                caption: `${ttCaption}
-📎 Sent as a file because video playback was unavailable.`,
-              }, { quoted: msg });
-            }
-          } else {
-            await sock.sendMessage(jid, {
-              document: _tvv.buf,
-              mimetype: _tvv.mime,
-              fileName: tiktokDiskDelivery.createTikTokFileName(ttPick.info.title, _tvv.ext),
-              caption: `${ttCaption}
-📎 ${_tvv.note}`,
-            }, { quoted: msg });
-          }
+          if (!_tvv.ok) throw new Error(_tvv.note || "Video could not be prepared; no document was sent.");
+          await sock.sendMessage(jid, { video: _tvv.buf, mimetype: "video/mp4", caption: ttCaption }, { quoted: msg });
         }
       }
       __ttForgetSelection(jid);
@@ -22863,7 +22851,7 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       if (ttMode.kind === "slider" && (!Buffer.isBuffer(media) || media.length < 1024)) {
         throw new Error("Slider video could not be built (empty media). Reply 4.1 to retry — the menu is still active.");
       }
-      await updateTtStatus(`✅ *Here is your ${ttChoiceLabel}* (${ttMode.id}).`);
+      await finishTtStatus(`✅ *Here is your ${ttChoiceLabel}* (${ttMode.id}).`);
       await forceReaction(sock, msg, "✅");
     } catch (error) {
       // Keep the menu alive so the user can reply with another number instead
@@ -22871,7 +22859,7 @@ cmd(["pick", "p"], { desc: "Pick randomly from options (A|B|C) OR download adult
       const reason = isNoSpaceError(error)
         ? "The server is low on temporary storage. Try again after cleanup or use SD video/audio."
         : error.message;
-      await updateTtStatus(`❌ *${ttChoiceLabel} failed* (${ttMode.id})\n${reason}\n\nReply with another choice (e.g. *1.1* or *2.1*) — the menu is still active.`);
+      await finishTtStatus(`❌ *${ttChoiceLabel} failed* (${ttMode.id})\n${reason}\n\nReply with another choice (e.g. *1.1* or *2.1*) — the menu is still active.`);
       await forceReaction(sock, msg, "❌");
     } finally {
       if (mediaFile?.cleanup) {
@@ -41977,11 +41965,18 @@ Please wait.`);
         throw new Error(`TikTok returned a file that is not a playable ${ttMode.kind === "audio" ? "audio" : "MP4 video"} (${buf.length} bytes). Nothing was sent.`);
       }
 
+      if (ttMode.kind === "video" && !ttMode.document && !ttMode.videoNote) {
+        tiktokDiskDelivery.assertWhatsAppVideoSize(mediaFile?.bytes ?? buf?.length ?? 0);
+      }
+
       if (statusMsg?.key) {
         const statusSuffix = mediaFile
           ? ` (${(mediaFile.bytes / (1024 * 1024)).toFixed(1)} MiB)\nSending the original MP4 without re-encoding. Large uploads can take a few minutes.`
           : "...";
-        await editMessage(sock, jid, statusMsg.key, `📤 *Uploading ${ttChoiceLabel}* (${ttMode.id})${statusSuffix}`).catch(() => {});
+        await sock.sendMessage(jid, {
+          text: `📤 *Uploading ${ttChoiceLabel}* (${ttMode.id})${statusSuffix}`,
+          edit: statusMsg.key,
+        }).catch(() => {});
       }
 
       const ttCaption = `🎵 *${ttPick.info.title || "TikTok"}*\n👤 ${ttPick.info.author || "TikTok Creator"}`;
@@ -42034,18 +42029,7 @@ Please wait.`);
           }
         }
       } else if (mediaFile) {
-        try {
-          await tiktokDiskDelivery.sendVideoFromDisk(sock, jid, mediaFile.path, ttCaption, msg);
-        } catch (_videoSendError) {
-          await tiktokDiskDelivery.sendDocumentFromDisk(
-            sock,
-            jid,
-            mediaFile.path,
-            tiktokDiskDelivery.createTikTokFileName(ttPick.info.title, ".mp4"),
-            `${ttCaption}\n📎 Sent as a file because video playback was unavailable.`,
-            msg,
-          );
-        }
+        await tiktokDiskDelivery.sendVideoFromDisk(sock, jid, mediaFile.path, ttCaption, msg);
       } else {
         await sock.sendMessage(jid, { video: buf, mimetype: "video/mp4", caption: ttCaption }, { quoted: msg });
       }
@@ -42057,7 +42041,19 @@ Please wait.`);
       return true;
     } catch (err) {
       console.error("[v32:tt-download]", err?.message || err);
-      await sendReply(sock, msg, `❌ Download failed: ${err?.message || err}`);
+      const failureText = `❌ Download failed: ${err?.message || err}`;
+      let failureEdited = false;
+      if (statusMsg?.key) {
+        try {
+          await sock.sendMessage(jid, { text: failureText, edit: statusMsg.key });
+          failureEdited = true;
+        } catch {}
+      }
+      if (!failureEdited) {
+        if (statusMsg?.key) await sock.sendMessage(jid, { delete: statusMsg.key }).catch(() => {});
+        await sendReply(sock, msg, failureText).catch(() => {});
+      }
+      await forceReaction(sock, msg, "❌").catch(() => {});
       return true;
     } finally {
       if (downloaded && typeof downloaded.cleanup === "function") downloaded.cleanup();

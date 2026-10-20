@@ -2,6 +2,19 @@
 
 const fs = require("fs");
 const RATE_LIMIT_RETRY_DELAYS_MS = Object.freeze([1500, 5000]);
+const WHATSAPP_VIDEO_MAX_BYTES = 64_000_000;
+
+function assertWhatsAppVideoSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size <= WHATSAPP_VIDEO_MAX_BYTES) return;
+
+  const sizeMiB = (size / (1024 * 1024)).toFixed(1);
+  const error = new Error(
+    `This MP4 is ${sizeMiB} MiB. WhatsApp video messages are limited to 64 MB on slower connections (up to 100 MB on faster connections). Nothing was sent as a video. Choose 1.4 HD Document to send the same original MP4 as a document (up to 2 GB).`,
+  );
+  error.code = "WHATSAPP_VIDEO_TOO_LARGE";
+  throw error;
+}
 
 function isRateLimitError(error) {
   const message = [
@@ -161,6 +174,7 @@ function sendDocumentFromDisk(sock, jid, filePath, fileName, caption, msg, retry
 }
 
 module.exports = {
+  assertWhatsAppVideoSize,
   createTikTokFileName,
   fetchVideoCandidate,
   hasMp4Signature,
@@ -168,4 +182,5 @@ module.exports = {
   sendDocumentFromDisk,
   sendWithRateLimitRetry,
   sendVideoFromDisk,
+  WHATSAPP_VIDEO_MAX_BYTES,
 };
