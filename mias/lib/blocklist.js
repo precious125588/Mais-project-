@@ -399,6 +399,32 @@ export async function fetchBlocklist(sock, { force = false } = {}) {
   }
 }
 
+/**
+ * Detailed blocklist read for display. Unlike fetchBlocklist, it keeps every
+ * entry whose phone number is known and only counts the ones that still need
+ * a contact sync. Returns null only when the server list itself is unreadable.
+ */
+export async function fetchBlocklistDetailed(sock) {
+  if (typeof sock?.fetchBlocklist !== "function") return null;
+  try {
+    const entries = blocklistEntries(await sock.fetchBlocklist());
+    if (!entries) return null;
+    const numbers = new Set();
+    const names = new Map();
+    let unresolved = 0;
+    for (const entry of entries) {
+      const n = await resolvedBlocklistNumber(sock, entry);
+      if (!n) { unresolved++; continue; }
+      numbers.add(n);
+      const name = blocklistDisplayName(entry);
+      if (name) names.set(n, name);
+    }
+    return { numbers, names, unresolved, total: entries.length };
+  } catch {
+    return null;
+  }
+}
+
 /** Return a safe display name reported with the blocklist entry, if available. */
 export function getBlocklistDisplayName(number) {
   const name = cache.names.get(normalizeNumber(number));
