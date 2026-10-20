@@ -38787,8 +38787,8 @@ for (const n of ["play2"]) { if (commands.has("play")) { commands.set(n, { ...co
           let groupName = "this group";
           try { groupName = await _gstGroupName(sock, chat); } catch {}
           const _lbl = qInner ? (_GST_KIND_LABELS[qInner.kind] || { emoji: "📄", label: "File" }) : null;
-          const _what = _lbl ? `${_lbl.emoji} *${_lbl.label} uploaded to ${groupName || "group"}*` : `📝 *Text uploaded to ${groupName || "group"}*`;
-          await sendReply(sock, msg, `${_what}\n✅ Sent to *${memberJids.length}* group members.`);
+          const _what = _lbl ? `*${_lbl.label} uploaded to ${groupName || "group"}*` : `*Text uploaded to ${groupName || "group"}*`;
+          await sendReply(sock, msg, `${_what}\nSent to *${memberJids.length}* group members.`);
         }
       } catch (e) {
         clearTimeout(_watchdog);
@@ -40663,7 +40663,7 @@ try {
 
       // Confirmed post → always resolve the reaction AND confirm in text.
       try { await react(sock, msg, "✅"); } catch (e) {}
-      await sendReply(sock, msg, "✅ Status uploaded").catch(function () {});
+      await sendReply(sock, msg, "Status uploaded").catch(function () {});
     } catch (e) {
       try { await react(sock, msg, "❌"); } catch (e2) {}
       await sendReply(sock, msg, "❌ GST failed: " + ((e && e.message) || e)).catch(function () {});
@@ -42597,13 +42597,23 @@ cmd(["sticker", "s"], { desc: "Image/video → sticker", category: "MEDIA" }, as
   catch (e) { await sendReply(sock, msg, `❌ Sticker failed: ${e?.message || e}`); }
 });
 cmd(["toimg", "toimage"], { desc: "Sticker → image", category: "MEDIA" }, async (sock, msg) => {
+  const jid = msg.key.remoteJid;
+  try { await react(sock, msg, "🌀"); } catch {}
   const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
-  if (!buf || kind !== "sticker") { await sendReply(sock, msg, `🖼️ Reply to a *sticker* with ${CONFIG.PREFIX}toimg`); return; }
+  if (!buf || kind !== "sticker") {
+    try { await react(sock, msg, "❌"); } catch {}
+    await sendReply(sock, msg, `❌ Reply to a *sticker* with ${CONFIG.PREFIX}toimg to turn it into an image.`);
+    return;
+  }
   try {
     let out = buf;
-    if (String((await _cmfGrabMedia(sock, msg)).kind) === "sticker") { try { out = await _cmfFfmpeg(buf, "webp", "png", ["-frames:v", "1"]); } catch {} }
-    await sock.sendMessage(msg.key.remoteJid, { image: out }, { quoted: msg });
-  } catch (e) { await sendReply(sock, msg, `❌ toimg failed: ${e?.message || e}`); }
+    try { out = await _cmfFfmpeg(buf, "webp", "png", ["-frames:v", "1"]); } catch {}
+    await sock.sendMessage(jid, { image: out }, { quoted: msg });
+    try { await react(sock, msg, "✅"); } catch {}
+  } catch (e) {
+    try { await react(sock, msg, "❌"); } catch {}
+    await sendReply(sock, msg, `❌ toimg failed: ${e?.message || e}`);
+  }
 });
 cmd(["tomp3", "toaudio"], { desc: "Video/audio → MP3", category: "MEDIA" }, async (sock, msg) => {
   const { kind, buf } = await _cmfGrabMedia(sock, msg).catch(() => ({ kind: null, buf: null }));
