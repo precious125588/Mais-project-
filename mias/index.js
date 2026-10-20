@@ -2520,7 +2520,7 @@ async function connectToWA(force = false) {
           if (!caller || !callId) continue;
           const action = String(ownerSettings.callAction || "block").toLowerCase();
           // Pick the real caller for the report: never the owner's or the bot's own number.
-          // The report shows the caller's name (from their saved/push name) plus number as plain text.
+          // The report shows only the caller's name as plain text (number only when no name is known).
           const _ownNums = new Set([_cleanNum(ownerJid || ""), _cleanNum(String(sock?.user?.id || "").split(":")[0])]);
           const _callerPick = [call?.from, call?.chatId, call?.peerJid, call?.participant]
             .filter(Boolean)
@@ -2528,7 +2528,7 @@ async function connectToWA(force = false) {
             .find(j => j && j.endsWith("@s.whatsapp.net") && !_ownNums.has(_cleanNum(j))) || caller;
           const _callerNum = _cleanNum(_callerPick);
           const _callerName = String(pushNameCache.get(_callerNum) || "").trim();
-          const _callerLabel = (_callerName && isMeaningfulName(_callerName)) ? `${_callerName} (+${_callerNum})` : `+${_callerNum}`;
+          const _callerLabel = (_callerName && isMeaningfulName(_callerName)) ? _callerName : `+${_callerNum}`;
           let report = `📞 *Call Guard Triggered*\n\n👤 Caller: ${_callerLabel}\n🛡️ Mode: *${action.toUpperCase()}*`;
           // v23: tell the CALLER the call was auto-rejected (sent before any block so it lands)
           try {
