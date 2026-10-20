@@ -42614,188 +42614,223 @@ cmd(["tomp3", "toaudio"], { desc: "Video/audio → MP3", category: "MEDIA" }, as
   } catch (e) { await sendReply(sock, msg, `❌ tomp3 failed: ${e?.message || e}`); }
 });
 cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/DOC/sticker to normal MP4", category: "MEDIA" }, async (sock, msg) => {
-  try { await react(sock, msg, "🌀"); } catch {}
-
-  const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  let node = ctx?.quotedMessage || msg.message;
-  if (typeof __unwrapWaMsg === "function") node = __unwrapWaMsg(node) || node;
-
-  // Deep unwrapping of common wrapper envelopes (view once, ephemeral, edits, etc.)
-  let _curNode = node;
-  for (let _i = 0; _i < 6 && _curNode; _i++) {
-    const _next = _curNode.ephemeralMessage?.message
-      || _curNode.viewOnceMessage?.message
-      || _curNode.viewOnceMessageV2?.message
-      || _curNode.viewOnceMessageV2Extension?.message
-      || _curNode.documentWithCaptionMessage?.message
-      || _curNode.editedMessage?.message?.protocolMessage?.editedMessage
-      || _curNode.editedMessage?.message;
-    if (!_next) break;
-    _curNode = _next;
-  }
-  node = _curNode || node;
-
-  const ptv = node?.ptvMessage;
-  const vid = node?.videoMessage;
-  const doc = node?.documentMessage;
-  const stk = node?.stickerMessage;
-  const img = node?.imageMessage;
-  const aud = node?.audioMessage;
-
-  const mediaObj = ptv || vid || doc || stk || img || aud;
-  if (!mediaObj) {
-    try { await react(sock, msg, "❌"); } catch {}
-    return;
-  }
-
-  // Determine media download stream types with fallback
-  let streamTypes = [];
-  if (ptv) streamTypes = ["ptv", "video", "document"];
-  else if (vid) streamTypes = ["video", "document"];
-  else if (doc) {
-    const mime = String(doc.mimetype || "").toLowerCase();
-    const fn = String(doc.fileName || "").toLowerCase();
-    if (mime.includes("video") || fn.endsWith(".mp4") || fn.endsWith(".mkv") || fn.endsWith(".mov") || fn.endsWith(".avi") || fn.endsWith(".webm")) {
-      streamTypes = ["document", "video"];
+  const jid = msg.key.remoteJid;
+  const TOMP4_DEADLINE_MS = 4 * 60 * 1000;
+  const WA_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
+  const WA_DOC_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+  let finished = false;
+  let deadline = null;
+  // Single place that ends the job: ❌ + one clear message on failure, ✅ on success.
+  const finish = async (errorText) => {
+    if (finished) return false;
+    finished = true;
+    clearTimeout(deadline);
+    if (errorText) {
+      try { await react(sock, msg, "❌"); } catch {}
+      try { await sendReply(sock, msg, `❌ ${errorText}`); } catch {}
     } else {
-      streamTypes = ["document", "video", "audio"];
+      try { await react(sock, msg, "✅"); } catch {}
     }
-  } else if (stk) streamTypes = ["sticker", "image"];
-  else if (img) streamTypes = ["image", "document"];
-  else if (aud) streamTypes = ["audio", "document"];
-  else streamTypes = ["document", "video"];
+    return true;
+  };
+  try { await react(sock, msg, "🌀"); } catch {}
+  deadline = setTimeout(() => { finish("Conversion took longer than 4 minutes, so I stopped. Try a shorter or smaller file."); }, TOMP4_DEADLINE_MS);
 
-  let buf = null;
-  for (const st of streamTypes) {
-    try {
-      const stream = await downloadContentFromMessage(mediaObj, st);
-      let chunks = [];
-      let stallTimer;
-      const stallReset = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { stream.destroy?.(new Error("stalled")); } catch {} }, 45000); };
-      stallReset();
-      try {
-        for await (const c of stream) { stallReset(); chunks.push(c); }
-      } finally { clearTimeout(stallTimer); }
-      const res = Buffer.concat(chunks);
-      if (res && res.length > 0) {
-        buf = res;
-        break;
+  try {
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    let node = ctx?.quotedMessage || msg.message;
+    if (typeof __unwrapWaMsg === "function") node = __unwrapWaMsg(node) || node;
+
+    // Deep unwrapping of common wrapper envelopes (view once, ephemeral, edits, etc.)
+    let _curNode = node;
+    for (let _i = 0; _i < 6 && _curNode; _i++) {
+      const _next = _curNode.ephemeralMessage?.message
+        || _curNode.viewOnceMessage?.message
+        || _curNode.viewOnceMessageV2?.message
+        || _curNode.viewOnceMessageV2Extension?.message
+        || _curNode.documentWithCaptionMessage?.message
+        || _curNode.editedMessage?.message?.protocolMessage?.editedMessage
+        || _curNode.editedMessage?.message;
+      if (!_next) break;
+      _curNode = _next;
+    }
+    node = _curNode || node;
+
+    const ptv = node?.ptvMessage;
+    const vid = node?.videoMessage;
+    const doc = node?.documentMessage;
+    const stk = node?.stickerMessage;
+    const img = node?.imageMessage;
+    const aud = node?.audioMessage;
+
+    const mediaObj = ptv || vid || doc || stk || img || aud;
+    if (!mediaObj) {
+      await finish(`Reply to a video, document, sticker, image or audio with ${CONFIG.PREFIX}tomp4.`);
+      return;
+    }
+
+    // Determine media download stream types with fallback
+    let streamTypes = [];
+    if (ptv) streamTypes = ["ptv", "video", "document"];
+    else if (vid) streamTypes = ["video", "document"];
+    else if (doc) {
+      const mime = String(doc.mimetype || "").toLowerCase();
+      const fn = String(doc.fileName || "").toLowerCase();
+      if (mime.includes("video") || fn.endsWith(".mp4") || fn.endsWith(".mkv") || fn.endsWith(".mov") || fn.endsWith(".avi") || fn.endsWith(".webm")) {
+        streamTypes = ["document", "video"];
+      } else {
+        streamTypes = ["document", "video", "audio"];
       }
-    } catch (eDl) {
-      // try next stream type
+    } else if (stk) streamTypes = ["sticker", "image"];
+    else if (img) streamTypes = ["image", "document"];
+    else if (aud) streamTypes = ["audio", "document"];
+    else streamTypes = ["document", "video"];
+
+    let buf = null;
+    for (const st of streamTypes) {
+      try {
+        const stream = await downloadContentFromMessage(mediaObj, st);
+        let chunks = [];
+        let stallTimer;
+        const stallReset = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { stream.destroy?.(new Error("stalled")); } catch {} }, 45000); };
+        stallReset();
+        try {
+          for await (const c of stream) { stallReset(); chunks.push(c); }
+        } finally { clearTimeout(stallTimer); }
+        const res = Buffer.concat(chunks);
+        if (res && res.length > 0) {
+          buf = res;
+          break;
+        }
+      } catch (eDl) {
+        // try next stream type
+      }
     }
-  }
 
-  if (!buf || !buf.length) {
-    try { await react(sock, msg, "❌"); } catch {}
-    return;
-  }
-
-  const cp = require("child_process");
-  const os = require("os");
-  const path = require("path");
-  const fs = require("fs");
-  const _id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
-
-  // Find ffmpeg binary (ffmpeg-static or system ffmpeg)
-  let ffBin = "ffmpeg";
-  try {
-    const ffStatic = require("ffmpeg-static");
-    if (ffStatic && typeof ffStatic === "string" && fs.existsSync(ffStatic)) {
-      ffBin = ffStatic;
+    if (!buf || !buf.length) {
+      await finish("Couldn't download that media from WhatsApp. Ask for it to be sent again and retry.");
+      return;
     }
-  } catch {}
 
-  let inExt = "bin";
-  if (ptv || vid) inExt = "mp4";
-  else if (stk) inExt = "webp";
-  else if (img) inExt = "jpg";
-  else if (aud) inExt = "ogg";
-  else if (doc) {
-    const fn = String(doc.fileName || "").toLowerCase();
-    const m = fn.match(/\.([a-z0-9]+)$/);
-    if (m) inExt = m[1];
-    else if (doc.mimetype?.includes("webm")) inExt = "webm";
-    else if (doc.mimetype?.includes("matroska") || doc.mimetype?.includes("mkv")) inExt = "mkv";
-    else if (doc.mimetype?.includes("quicktime")) inExt = "mov";
-    else inExt = "mp4";
-  }
+    const cp = require("child_process");
+    const os = require("os");
+    const path = require("path");
+    const fs = require("fs");
+    const _id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
 
-  const inPath = path.join(os.tmpdir(), `tomp4_in_${_id}.${inExt}`);
-  const outPath = path.join(os.tmpdir(), `tomp4_out_${_id}.mp4`);
+    // Find ffmpeg binary (ffmpeg-static or system ffmpeg)
+    let ffBin = "ffmpeg";
+    try {
+      const ffStatic = require("ffmpeg-static");
+      if (ffStatic && typeof ffStatic === "string" && fs.existsSync(ffStatic)) {
+        ffBin = ffStatic;
+      }
+    } catch {}
 
-  try {
-    fs.writeFileSync(inPath, buf);
+    let inExt = "bin";
+    if (ptv || vid) inExt = "mp4";
+    else if (stk) inExt = "webp";
+    else if (img) inExt = "jpg";
+    else if (aud) inExt = "ogg";
+    else if (doc) {
+      const fn = String(doc.fileName || "").toLowerCase();
+      const m = fn.match(/\.([a-z0-9]+)$/);
+      if (m) inExt = m[1];
+      else if (doc.mimetype?.includes("webm")) inExt = "webm";
+      else if (doc.mimetype?.includes("matroska") || doc.mimetype?.includes("mkv")) inExt = "mkv";
+      else if (doc.mimetype?.includes("quicktime")) inExt = "mov";
+      else inExt = "mp4";
+    }
+
+    const inPath = path.join(os.tmpdir(), `tomp4_in_${_id}.${inExt}`);
+    const outPath = path.join(os.tmpdir(), `tomp4_out_${_id}.mp4`);
 
     const execFF = (args) => new Promise((resolve, reject) => {
-      cp.execFile(ffBin, args, { timeout: 300000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
+      cp.execFile(ffBin, args, { timeout: 240000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) { err.stderr = stderr; reject(err); }
         else resolve(stdout);
       });
     });
+    // Reads the stream layout ffmpeg prints for the input (no output file needed).
+    const probe = (file) => new Promise((resolve) => {
+      cp.execFile(ffBin, ["-hide_banner", "-i", file], { timeout: 30000, maxBuffer: 16 * 1024 * 1024 }, (_err, stdout, stderr) => {
+        const text = `${stderr || ""}\n${stdout || ""}`;
+        const v = text.match(/Stream #\d+:\d+[^\n]*?: Video: ([a-z0-9_]+)([^\n]*)/i);
+        const a = text.match(/Stream #\d+:\d+[^\n]*?: Audio: ([a-z0-9_]+)/i);
+        resolve({ videoCodec: v ? v[1].toLowerCase() : "", videoInfo: v ? v[2] : "", audioCodec: a ? a[1].toLowerCase() : "" });
+      });
+    });
+
+    let lastErr = "";
+    const tryFF = async (args) => {
+      try { await execFF(args); return true; }
+      catch (e) {
+        if (e?.code === "ENOENT") throw e;
+        lastErr = String(e?.stderr || e?.message || "").trim().split("\n").filter(Boolean).pop() || "";
+        return false;
+      }
+    };
 
     let converted = false;
     try {
+      fs.writeFileSync(inPath, buf);
+      const scaleEven = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
       if (stk) {
-        try {
-          await execFF(["-y", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
-          converted = true;
-        } catch {
-          await execFF(["-y", "-loop", "1", "-t", "3", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", outPath]);
-          converted = true;
-        }
+        converted = (await tryFF(["-y", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", `${scaleEven},fps=15`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", outPath]))
+          || (await tryFF(["-y", "-loop", "1", "-t", "3", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", scaleEven, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", outPath]));
       } else if (img) {
-        await execFF(["-y", "-loop", "1", "-t", "5", "-i", inPath, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
-        converted = true;
+        converted = await tryFF(["-y", "-loop", "1", "-t", "5", "-i", inPath, "-vf", scaleEven, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "18", outPath]);
       } else if (aud) {
-        await execFF(["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", inPath, "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p", "-shortest", "-movflags", "+faststart", outPath]);
-        converted = true;
+        converted = await tryFF(["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", inPath, "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p", "-shortest", "-movflags", "+faststart", outPath]);
       } else {
-        // Document video or normal video: try high quality re-encode with audio copy/transcode
-        try {
-          await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
-          converted = true;
-        } catch (eWithAudio) {
-          try {
-            await execFF(["-y", "-i", inPath, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-an", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "23", outPath]);
-            converted = true;
-          } catch (eNoAudio) {
-            // Stream copy fallback
-            try {
-              await execFF(["-y", "-i", inPath, "-c", "copy", "-movflags", "+faststart", outPath]);
-              converted = true;
-            } catch (eCopy) {}
-          }
+        // Video or document video. If the video is already H.264 (yuv420p), remux it: same picture quality, no re-encode, so it finishes almost instantly.
+        const info = await probe(inPath);
+        const videoRemuxable = info.videoCodec === "h264" && /yuv420p/.test(info.videoInfo) && !/10(le|be)/.test(info.videoInfo);
+        if (videoRemuxable) {
+          const audioArgs = !info.audioCodec ? ["-an"] : info.audioCodec === "aac" ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"];
+          converted = await tryFF(["-y", "-i", inPath, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", ...audioArgs, "-movflags", "+faststart", outPath]);
+        }
+        // Otherwise re-encode at high quality (CRF 18 is visually near-lossless).
+        if (!converted) {
+          converted = await tryFF(["-y", "-i", inPath, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-vf", scaleEven, "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", outPath]);
+        }
+        if (!converted) {
+          converted = await tryFF(["-y", "-i", inPath, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-vf", scaleEven, "-an", "-movflags", "+faststart", outPath]);
         }
       }
-    } catch (eAllFF) {
-      console.error("[tomp4] ffmpeg execution error:", eAllFF?.message || eAllFF);
+
+      let outBuf = null;
+      if (converted && fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+        outBuf = fs.readFileSync(outPath);
+      } else if (inExt === "mp4") {
+        // The input is already an MP4 and ffmpeg could not touch it: send it unchanged.
+        outBuf = buf;
+      }
+
+      if (!outBuf || !outBuf.length) {
+        const hint = lastErr ? ` (${lastErr.slice(0, 160)})` : "";
+        await finish(`Conversion failed. The file may be corrupted or in a format I can't read${hint}.`);
+        return;
+      }
+      if (finished) return; // the deadline already reported a failure, so don't send late
+      if (outBuf.length > WA_DOC_MAX_BYTES) {
+        await finish("The converted video is over 2 GB, which is WhatsApp's document limit.");
+        return;
+      }
+      if (outBuf.length > WA_VIDEO_MAX_BYTES) {
+        await sock.sendMessage(jid, { document: outBuf, mimetype: "video/mp4", fileName: "converted.mp4", caption: "Over 64 MB, so I sent it as a document. Quality is unchanged." }, { quoted: msg });
+      } else {
+        await sock.sendMessage(jid, { video: outBuf, mimetype: "video/mp4" }, { quoted: msg });
+      }
+      await finish(null);
+    } finally {
+      try { fs.unlinkSync(inPath); } catch {}
+      try { fs.unlinkSync(outPath); } catch {}
     }
-
-    let outBuf = null;
-    if (converted && fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
-      outBuf = fs.readFileSync(outPath);
-    } else if (inExt === "mp4" || doc?.mimetype?.includes("video")) {
-      // If ffmpeg failed but input is already an mp4/video document, send the raw buffer as video
-      outBuf = buf;
-    }
-
-    if (!outBuf || !outBuf.length) {
-      throw new Error("No output video generated");
-    }
-
-    await sock.sendMessage(msg.key.remoteJid, {
-      video: outBuf,
-      mimetype: "video/mp4"
-    }, { quoted: msg });
-
-    try { await react(sock, msg, "✅"); } catch {}
   } catch (e) {
-    console.error("[tomp4] final error:", e?.message || e);
-    try { await react(sock, msg, "❌"); } catch {}
-  } finally {
-    try { fs.unlinkSync(inPath); } catch {}
-    try { fs.unlinkSync(outPath); } catch {}
+    console.error("[tomp4] error:", e?.message || e);
+    const missingFfmpeg = e?.code === "ENOENT";
+    await finish(missingFfmpeg ? "ffmpeg isn't installed on the server, so I can't convert videos right now." : "Something went wrong while converting. Try again in a moment.");
   }
 });
 cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }, async (sock, msg) => {
