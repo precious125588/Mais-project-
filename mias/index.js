@@ -7037,7 +7037,7 @@ async function downloadStoredMediaBuffer(mediaNode, type) {
 async function handleViewOnce(sock, msg) {
   try {
     if (!msg || !msg.message || msg.__voHandled) return;
-    if (msg.key && msg.key.fromMe) return;
+    if (msg.key && msg.key.fromMe && (globalThis.__miasBotViewOnceIds || new Set()).has(msg.key.id)) return;
 
     const remoteJid = msg.key?.remoteJid || "";
     const ownerJid = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
@@ -7099,16 +7099,19 @@ async function handleViewOnce(sock, msg) {
     let mediaType = "";
     if (img) {
       mediaType = "image";
-      buf = await downloadStoredMediaBuffer(img, "image");
+      buf = await downloadStoredMediaBuffer(img, "image").catch((e) => { console.log("[antivo] image download failed:", e?.message || e); return null; });
     } else if (vid) {
       mediaType = "video";
-      buf = await downloadStoredMediaBuffer(vid, "video");
+      buf = await downloadStoredMediaBuffer(vid, "video").catch((e) => { console.log("[antivo] video download failed:", e?.message || e); return null; });
     } else if (aud) {
       mediaType = "audio";
-      buf = await downloadStoredMediaBuffer(aud, "audio");
+      buf = await downloadStoredMediaBuffer(aud, "audio").catch((e) => { console.log("[antivo] audio download failed:", e?.message || e); return null; });
     }
 
-    if (!buf || !buf.length) return;
+    if (!buf || !buf.length) {
+      await sock.sendMessage(ownerJid, { text: `⚠️ Anti-ViewOnce couldn't capture the ${mediaType} from ${pushName} in ${chatTitle}. WhatsApp didn't return the media.` }).catch(() => {});
+      return;
+    }
 
     const mentions = sender ? [sender] : [];
 
@@ -20731,6 +20734,7 @@ cmd(["tovv"], {
           : { videoMessage: { ...vid, viewOnce: true } };
         const _wamB = await generateWAMessageFromContent(jid, { viewOnceMessageV2: { message: _rawB } }, {});
         await sock.relayMessage(jid, _wamB.message, { messageId: _wamB.key.id });
+        try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(_wamB.key.id); } catch {}
         relayed = true;
       } catch (_eB) { console.log("[tovv] immediate raw key relay failed:", _eB?.message); }
     }
@@ -20765,6 +20769,7 @@ cmd(["tovv"], {
         const content = { viewOnceMessageV2: { message: innerMsg } };
         const wam = await generateWAMessageFromContent(jid, content, {});
         await sock.relayMessage(jid, wam.message, { messageId: wam.key.id });
+        try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(wam.key.id); } catch {}
         relayed = true;
       } catch (eGen) {
         console.log("[tovv] generateWAMessageContent path failed, falling back:", eGen?.message || eGen);
@@ -20796,6 +20801,7 @@ cmd(["tovv"], {
           const content = { viewOnceMessageV2: { message: innerMsg } };
           const wam = await generateWAMessageFromContent(jid, content, {});
           await sock.relayMessage(jid, wam.message, { messageId: wam.key.id });
+        try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(wam.key.id); } catch {}
           relayed = true;
         } catch (eEnv) {
           console.log("[tovv] prepareWAMessageMedia path failed:", eEnv?.message || eEnv);
@@ -20809,7 +20815,8 @@ cmd(["tovv"], {
         const _payA = img
           ? { image: buf, caption: cap, viewOnce: true }
           : { video: buf, caption: cap, viewOnce: true, mimetype: node.mimetype || "video/mp4" };
-        await sock.sendMessage(jid, _payA);
+        const _sentA = await sock.sendMessage(jid, _payA);
+        try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(_sentA?.key?.id); } catch {}
         relayed = true;
       } catch (_eA) { console.log("[tovv] LAST RESORT A failed:", _eA?.message); }
     }
@@ -20821,6 +20828,7 @@ cmd(["tovv"], {
           : { videoMessage: { ...vid, viewOnce: true } };
         const _wamB = await generateWAMessageFromContent(jid, { viewOnceMessageV2: { message: _rawB } }, {});
         await sock.relayMessage(jid, _wamB.message, { messageId: _wamB.key.id });
+        try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(_wamB.key.id); } catch {}
         relayed = true;
       } catch (_eB) { console.log("[tovv] LAST RESORT B (raw key relay) failed:", _eB?.message); }
     }
@@ -23813,6 +23821,7 @@ try {
         };
         const wam = await generateWAMessageFromContent(jid, { viewOnceMessage: { message: content } }, { quoted, userJid: sock.user?.id });
         await sock.relayMessage(jid, wam.message, { messageId: wam.key.id });
+        try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(wam.key.id); } catch {}
         return wam;
       } catch (e) {
         console.log("[BTN_PIC] fallback:", e?.message);
@@ -23864,6 +23873,7 @@ try {
         };
         const wam = await generateWAMessageFromContent(jid, { viewOnceMessage: { message: content } }, { quoted, userJid: sock.user?.id });
         await sock.relayMessage(jid, wam.message, { messageId: wam.key.id });
+        try { (globalThis.__miasBotViewOnceIds ||= new Set()).add(wam.key.id); } catch {}
         return wam;
       } catch (e) {
         console.log("[LIST_PIC] fallback:", e?.message);
