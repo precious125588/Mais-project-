@@ -600,23 +600,35 @@ globalThis.__miasResizeProfilePic = __miasResizeProfilePic;
 // global updateProfilePicture shim so nothing ever re-crops/re-encodes it.
 // ─────────────────────────────────────────────────────────────────────────────
 async function __miasFullDpBuffer(buf) {
-  // Primary: sharp (best quality: 4:4:4 chroma, mozjpeg)
+  // Keep the complete image visible inside a square canvas. WhatsApp expects
+  // a square profile picture; a blurred, cover-cropped background fills the
+  // remaining space without cropping the foreground image.
   try {
     const sharp = require("sharp");
     const meta = await sharp(buf).rotate().metadata();
-    const side = Math.max(meta.width || 0, meta.height || 0, 1080);
-    // Levanter-style: the picture itself covers the whole square — no blurred side bars
-    return await sharp(buf).rotate()
+    const side = Math.min(1080, Math.max(meta.width || 0, meta.height || 0, 720));
+    const background = await sharp(buf).rotate()
       .resize(side, side, { fit: "cover", position: "centre" })
-      .jpeg({ quality: 95, chromaSubsampling: "4:4:4", mozjpeg: true }).toBuffer();
+      .blur(28)
+      .jpeg({ quality: 72 }).toBuffer();
+    const foreground = await sharp(buf).rotate()
+      .resize(side, side, { fit: "inside", withoutEnlargement: true })
+      .png().toBuffer();
+    return await sharp(background)
+      .composite([{ input: foreground, gravity: "centre" }])
+      .jpeg({ quality: 92, chromaSubsampling: "4:4:4", mozjpeg: true }).toBuffer();
   } catch {}
-  // Fallback: jimp (pure JS, always available)
+  // Fallback: Jimp with the same square-canvas treatment.
   try {
     const Jimp = require("jimp");
     const j = await Jimp.read(buf);
-    const side = Math.max(j.getWidth(), j.getHeight(), 720);
-    const fullJ = j.clone().cover(side, side);
-    return await fullJ.quality(95).getBufferAsync(Jimp.MIME_JPEG);
+    const side = Math.min(1080, Math.max(j.getWidth(), j.getHeight(), 720));
+    const background = j.clone().cover(side, side).blur(24);
+    const foreground = j.clone().scaleToFit(side, side);
+    const x = Math.floor((side - foreground.getWidth()) / 2);
+    const y = Math.floor((side - foreground.getHeight()) / 2);
+    background.composite(foreground, x, y);
+    return await background.quality(90).getBufferAsync(Jimp.MIME_JPEG);
   } catch {}
   // Last resort: never hand WhatsApp the raw upload — force plain JPEG
   try {
@@ -31904,26 +31916,61 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
   // ── helper: read a buffer from msg / quoted / url ───────────────────────
   async function __miasReadImageBuf(sock, msg, args) {
     const _dlStream = async (mediaNode, type) => {
-      const stream = await downloadContentFromMessage(mediaNode, type);
-      let chunks = [];
-      await Promise.race([
-        (async () => { for await (const c of stream) chunks.push(c); })(),
-        new Promise((_, rj) => setTimeout(() => rj(new Error("Image download timed out")), 25000))
-      ]);
-      return Buffer.concat(chunks);
+      let timer;
+      try {
+        const timeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Image download timed out")), 25000);
+          timer.unref?.();
+        });
+        const stream = await Promise.race([
+          Promise.resolve().then(() => downloadContentFromMessage(mediaNode, type)),
+          timeout,
+        ]);
+        const chunks = [];
+        await Promise.race([
+          (async () => { for await (const c of stream) chunks.push(c); })(),
+          timeout,
+        ]);
+        return Buffer.concat(chunks);
+      } finally {
+        clearTimeout(timer);
+      }
     };
 
-    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    const ctx = getContextInfo(msg) || msg.message?.extendedTextMessage?.contextInfo;
     const quoted = ctx?.quotedMessage;
-    const qNode = __unwrapWaMsg(quoted) || quoted;
-    const quotedImg = qNode?.imageMessage || (qNode?.documentMessage && String(qNode.documentMessage.mimetype || "").startsWith("image/") ? qNode.documentMessage : null);
-    const mNode = __unwrapWaMsg(msg.message) || msg.message;
-    const directImg = mNode?.imageMessage || (mNode?.documentMessage && String(mNode.documentMessage.mimetype || "").startsWith("image/") ? mNode.documentMessage : null);
+    // Unwrap ordinary WhatsApp transport wrappers, but deliberately do not
+    // unwrap view-once envelopes here.
+    const unwrapOrdinary = (node) => {
+      let current = node;
+      for (let i = 0; current && i < 12; i++) {
+        if (current.deviceSentMessage?.message) current = current.deviceSentMessage.message;
+        else if (current.ephemeralMessage?.message) current = current.ephemeralMessage.message;
+        else if (current.documentWithCaptionMessage?.message) current = current.documentWithCaptionMessage.message;
+        else if (current.editedMessage?.message) current = current.editedMessage.message;
+        else break;
+      }
+      return current;
+    };
+    const qNode = unwrapOrdinary(quoted);
+    const qDocument = qNode?.documentMessage;
+    const quotedMedia = qNode?.imageMessage
+      ? { node: qNode.imageMessage, type: "image" }
+      : (qDocument && String(qDocument.mimetype || "").toLowerCase().startsWith("image/")
+        ? { node: qDocument, type: "document" }
+        : null);
+    const mNode = unwrapOrdinary(msg.message);
+    const mDocument = mNode?.documentMessage;
+    const directMedia = mNode?.imageMessage
+      ? { node: mNode.imageMessage, type: "image" }
+      : (mDocument && String(mDocument.mimetype || "").toLowerCase().startsWith("image/")
+        ? { node: mDocument, type: "document" }
+        : null);
     let buf = null;
-    if (quotedImg) {
-      buf = await _dlStream(quotedImg, quotedImg.mimetype?.includes("document") ? "document" : "image").catch(() => null);
-    } else if (directImg) {
-      buf = await _dlStream(directImg, directImg.mimetype?.includes("document") ? "document" : "image").catch(() => null);
+    if (quotedMedia) {
+      buf = await _dlStream(quotedMedia.node, quotedMedia.type).catch(() => null);
+    } else if (directMedia) {
+      buf = await _dlStream(directMedia.node, directMedia.type).catch(() => null);
     } else if (args?.[0] && /^https?:\/\//i.test(args[0])) {
       const targetUrl = args[0].trim();
       const r = await _axios.get(targetUrl, {
@@ -31999,27 +32046,33 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
   const __miasFullDpHandler = async (sock, msg, args) => {
     // HARD GUARD: fulldp changes the BOT's own profile picture, so it is
     // owner-only — not even sudo/creator users may run it.
+    let authorized = false;
     try {
       const _fdSender = getSender(msg);
-      if (!(msg.key.fromMe || isOwner(_fdSender))) {
-        await sendReply(sock, msg, "🔒 *Owner only.* Only the bot owner can change the full profile picture.");
-        return;
-      }
+      authorized = Boolean(msg.key?.fromMe || isOwner(_fdSender));
     } catch {}
+    if (!authorized) {
+      try { await react(sock, msg, "❌"); } catch {}
+      await sendReply(sock, msg, "🔒 *Owner only.* Only the bot owner can change the full profile picture.");
+      return;
+    }
     try { await react(sock, msg, "🌀"); } catch {}
     try {
       const buf = await __miasReadImageBuf(sock, msg, args);
       if (!buf || buf.length < 200) {
-        await sendReply(sock, msg, "Usage: *" + CONFIG.PREFIX + "fulldp <image_url>*\nOr reply to an image with *" + CONFIG.PREFIX + "fulldp*\n\n_Sets the full picture using direct Sharp inside-fit — no cropping, original aspect ratio preserved._");
+        try { await react(sock, msg, "❌"); } catch {}
+        await sendReply(sock, msg, "Usage: *" + CONFIG.PREFIX + "fulldp <image_url>*\nOr reply to a normal image with *" + CONFIG.PREFIX + "fulldp*\n\n_The full image stays visible on a square profile picture._");
         return;
       }
 
-      // Exact Sharp-only logic from full-dp-uploader (No Jimp)
+      const squareImage = await __miasFullDpBuffer(buf);
+      if (!Buffer.isBuffer(squareImage) || squareImage.length < 200) {
+        throw new Error("Could not prepare the image as a square profile picture.");
+      }
       const sharp = require("sharp");
       async function generateProfilePicture(buffer, size = 720) {
-        const j = sharp(buffer);
         return {
-          img: await j.resize(size, size, { fit: "inside" })
+          img: await sharp(buffer).resize(size, size, { fit: "cover" })
             .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
             .toBuffer()
         };
@@ -32029,8 +32082,11 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
       let lastErr = null;
       for (const size of [720, 640, 500]) {
         try {
-          const { img } = await generateProfilePicture(buf, size);
-          await sock.query({
+          const { img } = await generateProfilePicture(squareImage, size);
+          let timer;
+          try {
+            await Promise.race([
+              Promise.resolve().then(() => sock.query({
             tag: "iq",
             attrs: {
               to: "@s.whatsapp.net",
@@ -32042,11 +32098,20 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
               attrs: { type: "image" },
               content: img
             }]
-          });
+              })),
+              new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error("Profile picture upload timed out after 20 seconds.")), 20000);
+                timer.unref?.();
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
           success = true;
           break;
         } catch (e) {
           lastErr = e;
+          if (/timed out/i.test(String(e?.message || e))) break;
         }
       }
 
