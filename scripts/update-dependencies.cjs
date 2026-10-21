@@ -93,7 +93,7 @@ async function pickTarget(name, currentSpec, major) {
     if (!v) continue;
     if (new Date(t).getTime() > cutoff) continue;          // too new for the release-age rule
     if (!major && !inCaret(v, floor)) continue;             // stay in range
-    if (major && floor && v[0] < floor[0]) continue;
+    if (major && floor && cmpVersion(v, floor) < 0) continue;
     if (!best || cmpVersion(v, best.v) > 0) best = { v, ver };
   }
   return best ? { version: best.ver } : { error: 'no version passes the age rule' };
@@ -240,6 +240,8 @@ function runTests() {
     pass: (out.match(/^# pass (\d+)/m) || [])[1],
     fail: (out.match(/^# fail (\d+)/m) || [])[1],
     newFailures: failed.filter((f) => !known.has(f)),
+    runnerError: r.error ? r.error.message : null,
+    missingSummary: !/^# tests \d+$/m.test(out),
   };
 }
 
@@ -317,6 +319,10 @@ async function main() {
     if (t.skipped) log('tests skipped (--no-test)');
     else {
       log(`tests: ${t.pass} pass, ${t.fail} fail (of ${t.total})`);
+      if (t.runnerError || t.missingSummary) {
+        log(`test runner did not complete cleanly${t.runnerError ? `: ${t.runnerError}` : ' (missing TAP summary)'}`);
+        anyFailed = true;
+      }
       if (t.newFailures.length) {
         log('NEW test failures (not listed in dependency-policy.json knownTestFailures):\n  - ' + t.newFailures.join('\n  - '));
         anyFailed = true;
