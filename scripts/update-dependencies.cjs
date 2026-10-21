@@ -1,21 +1,24 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Dependency updater for the bot workspaces (root and mias/).
+ * Fast dependency & engine updater for the bot workspaces (root and mias/).
  *
  *   node scripts/update-dependencies.cjs                      dry run: shows what would change
- *   node scripts/update-dependencies.cjs --apply              updates package.json, reinstalls, verifies, tests
+ *   node scripts/update-dependencies.cjs --apply              updates package.json, engines, reinstalls, verifies, tests
  *   node scripts/update-dependencies.cjs --apply --major      also crosses major versions (holds still apply)
  *   node scripts/update-dependencies.cjs --apply --dir mias   one workspace only
  *   node scripts/update-dependencies.cjs --apply --no-test    skip the test suite
  *
  * Rules:
+ *  - High-performance asynchronous npm registry lookups via direct HTTP fetch (resolves in seconds).
  *  - Only versions published at least `minAgeHours` ago are chosen (dependency-policy.json).
  *  - Without --major a dependency stays inside its current caret range (^1.2.3 -> 1.x, ^0.35.3 -> 0.35.x).
  *  - Packages in `hold` stay on their current major.
- *  - After --apply: install with legacy-peer-deps (same flag as the Dockerfile), check sharp and the
- *    sticker engine, syntax-check the entry files, re-apply the Baileys patch, run the test suite.
- *    Any failure restores package.json and the lockfile from a snapshot.
+ *  - Keeps engines (Node >=22.12.0) updated and aligned across all workspaces.
+ *  - Refreshes Baileys (@whiskeysockets/baileys -> @itsliaaa/baileys@latest) and re-patches.
+ *  - Verifies clean sharp installation (no nested copies under wa-sticker-formatter).
+ *  - Verifies WEBP sticker generation, entry point syntax, and executes the full test suite.
+ *  - Any failure restores package.json and the lockfile from a snapshot.
  */
 const fs = require('fs');
 const path = require('path');
@@ -32,6 +35,7 @@ const ONLY = dirArg >= 0 ? args[dirArg + 1] : null;
 const policy = JSON.parse(fs.readFileSync(path.join(__dirname, 'dependency-policy.json'), 'utf8'));
 const MIN_AGE_MS = (policy.minAgeHours ?? 24) * 3600 * 1000;
 const WORKSPACES = ['.', 'mias'].filter((d) => !ONLY || d === ONLY);
+const TARGET_NODE_ENGINE = '>=22.12.0';
 
 const log = (...a) => console.log('[deps]', ...a);
 const run = (cmd, argv, cwd, opts = {}) =>
@@ -53,15 +57,33 @@ function inCaret(v, floor) {
   return cmpVersion(v, floor) >= 0;
 }
 
-// npm view <name> time --json -> { "<version>": "<publish time>", ... }
-function publishTimes(name) {
+const _publishTimesCache = new Map();
+async function publishTimes(name) {
+  if (_publishTimesCache.has(name)) return _publishTimesCache.get(name);
+  try {
+    const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`, {
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const times = data.time || {};
+      _publishTimesCache.set(name, times);
+      return times;
+    }
+  } catch {}
+
   const r = run('npm', ['view', name, 'time', '--json'], ROOT, { quiet: true });
   if (r.status !== 0) return null;
-  try { return JSON.parse(r.stdout); } catch { return null; }
+  try {
+    const times = JSON.parse(r.stdout);
+    _publishTimesCache.set(name, times);
+    return times;
+  } catch { return null; }
 }
 
-function pickTarget(name, currentSpec, major) {
-  const times = publishTimes(name);
+async function pickTarget(name, currentSpec, major) {
+  const times = await publishTimes(name);
   if (!times) return { error: 'registry lookup failed' };
   const floor = specFloor(currentSpec);
   const cutoff = Date.now() - MIN_AGE_MS;
@@ -77,24 +99,57 @@ function pickTarget(name, currentSpec, major) {
   return best ? { version: best.ver } : { error: 'no version passes the age rule' };
 }
 
-function planWorkspace(dir) {
+async function planWorkspace(dir) {
   const pkgPath = path.join(ROOT, dir, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   const plan = [];
+
+  // Check engines
+  const currentEngine = pkg.engines?.node || '';
+  if (currentEngine !== TARGET_NODE_ENGINE) {
+    plan.push({
+      name: 'engines.node',
+      section: 'engines',
+      spec: currentEngine,
+      next: TARGET_NODE_ENGINE,
+      changed: true,
+      skip: null,
+      isEngine: true
+    });
+  } else {
+    plan.push({
+      name: 'engines.node',
+      section: 'engines',
+      spec: currentEngine,
+      changed: false,
+      skip: 'already current',
+      isEngine: true
+    });
+  }
+
   for (const section of ['dependencies', 'devDependencies']) {
     for (const [name, spec] of Object.entries(pkg[section] || {})) {
-      if (/^(file:|link:|git|https?:)/.test(spec)) { plan.push({ name, section, spec, skip: 'local or git source' }); continue; }
+      if (/^(file:|link:|git|https?:)/.test(spec)) {
+        plan.push({ name, section, spec, skip: 'local or git source' });
+        continue;
+      }
       if (spec.startsWith('npm:')) {
         const target = spec.slice(4);
         const base = target.lastIndexOf('@') > 0 ? target.slice(0, target.lastIndexOf('@')) : target;
-        const t = pickTarget(base, '', true);
+        const t = await pickTarget(base, '', true);
         plan.push({ name, section, spec, alias: base, aliasTarget: t, skip: 'alias (refreshed by npm install)' });
         continue;
       }
-      if (policy.hold && policy.hold[name] && !MAJOR) { plan.push({ name, section, spec, skip: `held: ${policy.hold[name]}` }); continue; }
+      if (policy.hold && policy.hold[name] && !MAJOR) {
+        plan.push({ name, section, spec, skip: `held: ${policy.hold[name]}` });
+        continue;
+      }
       const major = MAJOR && !(policy.hold && policy.hold[name]);
-      const t = pickTarget(name, spec, major);
-      if (t.error) { plan.push({ name, section, spec, skip: t.error }); continue; }
+      const t = await pickTarget(name, spec, major);
+      if (t.error) {
+        plan.push({ name, section, spec, skip: t.error });
+        continue;
+      }
       const cur = specFloor(spec);
       const next = t.version;
       const same = cur && cmpVersion(cur, parseVersion(next)) === 0;
@@ -119,8 +174,6 @@ function restore(dir, snap) {
   }
 }
 
-// Aliased packages (for example @whiskeysockets/baileys -> @itsliaaa/baileys@latest) keep their
-// lock entry until npm update refreshes them. Refresh only when the dist-tag is old enough.
 function install(dir) {
   return run('npm', ['install', '--legacy-peer-deps', '--no-audit', '--no-fund', '--maxsockets', '4'], path.join(ROOT, dir));
 }
@@ -131,7 +184,7 @@ function verify(dir) {
   const nm = path.join(cwd, 'node_modules');
   if (!fs.existsSync(nm)) return ['node_modules missing after install'];
 
-  // sharp loads and the sticker engine still produces a WEBP.
+  // 1. sharp loads and wa-sticker-formatter produces a valid WEBP
   if (fs.existsSync(path.join(nm, 'sharp'))) {
     const check = `
       const sharp = require('sharp');
@@ -150,12 +203,12 @@ function verify(dir) {
     else log(`${dir}: ${r.stdout.trim()}`);
   }
 
-  // A nested old sharp is what made installs hang (sharp 0.30 downloads binaries at install time).
+  // 2. Ensure NO nested sharp under wa-sticker-formatter (prevent hanging / dual binaries)
   if (fs.existsSync(path.join(nm, 'wa-sticker-formatter', 'node_modules', 'sharp'))) {
     problems.push('a nested sharp copy is installed under wa-sticker-formatter (the override did not apply)');
   }
 
-  // Syntax of the entry points.
+  // 3. Syntax of entry points
   const entry = dir === 'mias'
     ? ['index.js', 'lib/engines/utilityEngine.cjs', 'lib/engines/fileDetection.cjs', 'lib/engines/queueEngine.cjs', 'lib/engines/linkPreview.cjs']
     : ['server.js', 'pair.js', 'bot.js'];
@@ -166,7 +219,7 @@ function verify(dir) {
     if (r.status !== 0) problems.push(`syntax ${f}: ${(r.stderr || '').split('\n').slice(0, 3).join(' ')}`);
   }
 
-  // The Baileys patch must still apply (it is idempotent).
+  // 4. Baileys patch check
   if (dir === 'mias') {
     const r = run(process.execPath, [path.join(ROOT, 'scripts/patch-baileys.cjs')], ROOT, { quiet: true });
     if (r.status !== 0) problems.push('patch-baileys.cjs failed');
@@ -191,62 +244,90 @@ function runTests() {
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
-log(APPLY ? 'APPLY mode' : 'DRY RUN (add --apply to write changes)', MAJOR ? '(major versions allowed)' : '(caret ranges only)');
-let anyFailed = false;
-const summary = [];
+async function main() {
+  log(APPLY ? 'APPLY mode' : 'DRY RUN (add --apply to write changes)', MAJOR ? '(major versions allowed)' : '(caret ranges only)');
+  let anyFailed = false;
+  const summary = [];
 
-for (const dir of WORKSPACES) {
-  const { pkgPath, pkg, plan } = planWorkspace(dir);
-  log(`\n== workspace: ${dir}`);
-  for (const p of plan) {
-    if (p.alias) { console.log(`  ${p.name.padEnd(30)} alias, latest publishable: ${p.aliasTarget.version || p.aliasTarget.error}`); continue; }
-    if (!p.changed) { if (p.skip && p.skip !== 'already current') console.log(`  ${p.name.padEnd(30)} ${p.spec.padEnd(20)} ${p.skip}`); continue; }
-    console.log(`  ${p.name.padEnd(30)} ${p.spec.padEnd(20)} -> ${p.next}`);
-  }
-  if (!APPLY) continue;
+  for (const dir of WORKSPACES) {
+    const { pkgPath, pkg, plan } = await planWorkspace(dir);
+    log(`\n== workspace: ${dir}`);
+    for (const p of plan) {
+      if (p.alias) {
+        console.log(`  ${p.name.padEnd(30)} alias, latest publishable: ${p.aliasTarget.version || p.aliasTarget.error}`);
+        continue;
+      }
+      if (!p.changed) {
+        if (p.skip && p.skip !== 'already current') console.log(`  ${p.name.padEnd(30)} ${(p.spec || '').padEnd(20)} ${p.skip}`);
+        continue;
+      }
+      console.log(`  ${p.name.padEnd(30)} ${(p.spec || '').padEnd(20)} -> ${p.next}`);
+    }
+    if (!APPLY) continue;
 
-  const snap = snapshot(dir);
-  let changed = 0;
-  for (const p of plan) {
-    if (!p.changed) continue;
-    pkg[p.section][p.name] = p.next;
-    changed++;
-  }
-  if (changed) fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
-  for (const p of plan) {
-    if (!p.alias) continue;
-    const latest = run('npm', ['view', p.alias, 'dist-tags.latest', '--json'], ROOT, { quiet: true });
-    const ver = latest.status === 0 ? JSON.parse(latest.stdout || '""') : null;
-    const times = ver ? publishTimes(p.alias) : null;
-    const ageOk = times && ver && new Date(times[ver]).getTime() <= Date.now() - MIN_AGE_MS;
-    if (!ageOk) { log(`${dir}: ${p.name} latest (${ver || '?'}) is too new or unknown; keeping the locked version`); continue; }
-    log(`${dir}: refreshing ${p.name} to ${p.alias}@${ver}`);
-    run('npm', ['update', p.name, '--legacy-peer-deps', '--no-audit', '--no-fund'], path.join(ROOT, dir));
-  }
-  log(`${dir}: ${changed} specs updated; installing`);
-  const inst = install(dir);
-  if (inst.status !== 0) { log(`${dir}: install failed, restoring`); restore(dir, snap); anyFailed = true; continue; }
-  const problems = verify(dir);
-  if (problems.length) {
-    log(`${dir}: verification failed, restoring package.json and lockfile:\n  - ${problems.join('\n  - ')}`);
-    restore(dir, snap);
-    run('npm', ['install', '--legacy-peer-deps', '--no-audit', '--no-fund'], path.join(ROOT, dir), { quiet: true });
-    anyFailed = true;
-    continue;
-  }
-  summary.push(`${dir}: ${changed} updated and verified`);
-}
+    const snap = snapshot(dir);
+    let changed = 0;
+    for (const p of plan) {
+      if (!p.changed) continue;
+      if (p.isEngine) {
+        pkg.engines = pkg.engines || {};
+        pkg.engines.node = p.next;
+      } else {
+        pkg[p.section][p.name] = p.next;
+      }
+      changed++;
+    }
+    if (changed) fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
-if (APPLY && !anyFailed) {
-  const t = runTests();
-  if (t.skipped) log('tests skipped (--no-test)');
-  else {
-    log(`tests: ${t.pass} pass, ${t.fail} fail (of ${t.total})`);
-    if (t.newFailures.length) {
-      log('NEW test failures (not listed in dependency-policy.json knownTestFailures):\n  - ' + t.newFailures.join('\n  - '));
+    for (const p of plan) {
+      if (!p.alias) continue;
+      const latest = run('npm', ['view', p.alias, 'dist-tags.latest', '--json'], ROOT, { quiet: true });
+      const ver = latest.status === 0 ? JSON.parse(latest.stdout || '""') : null;
+      const times = ver ? await publishTimes(p.alias) : null;
+      const ageOk = times && ver && new Date(times[ver]).getTime() <= Date.now() - MIN_AGE_MS;
+      if (!ageOk) {
+        log(`${dir}: ${p.name} latest (${ver || '?'}) is too new or unknown; keeping the locked version`);
+        continue;
+      }
+      log(`${dir}: refreshing ${p.name} to ${p.alias}@${ver}`);
+      run('npm', ['update', p.name, '--legacy-peer-deps', '--no-audit', '--no-fund'], path.join(ROOT, dir));
+    }
+
+    log(`${dir}: ${changed} specs updated; installing`);
+    const inst = install(dir);
+    if (inst.status !== 0) {
+      log(`${dir}: install failed, restoring`);
+      restore(dir, snap);
       anyFailed = true;
+      continue;
+    }
+    const problems = verify(dir);
+    if (problems.length) {
+      log(`${dir}: verification failed, restoring package.json and lockfile:\n  - ${problems.join('\n  - ')}`);
+      restore(dir, snap);
+      run('npm', ['install', '--legacy-peer-deps', '--no-audit', '--no-fund'], path.join(ROOT, dir), { quiet: true });
+      anyFailed = true;
+      continue;
+    }
+    summary.push(`${dir}: ${changed} updated and verified`);
+  }
+
+  if (APPLY && !anyFailed) {
+    const t = runTests();
+    if (t.skipped) log('tests skipped (--no-test)');
+    else {
+      log(`tests: ${t.pass} pass, ${t.fail} fail (of ${t.total})`);
+      if (t.newFailures.length) {
+        log('NEW test failures (not listed in dependency-policy.json knownTestFailures):\n  - ' + t.newFailures.join('\n  - '));
+        anyFailed = true;
+      }
     }
   }
+  summary.forEach((s) => log(s));
+  process.exit(anyFailed ? 1 : 0);
 }
-summary.forEach((s) => log(s));
-process.exit(anyFailed ? 1 : 0);
+
+main().catch((err) => {
+  console.error('[deps] Fatal error:', err);
+  process.exit(1);
+});
