@@ -1,0 +1,53 @@
+name: Auto-update dependencies
+
+# Keeps every dependency, engine and Baileys current. Runs the repo's own
+# updater (scripts/update-dependencies.cjs), which:
+#   - picks the newest version of every package (majors included)
+#   - keeps engines.node aligned across all workspaces
+#   - refreshes Baileys (@itsliaaa/baileys) and re-patches it
+#   - verifies the clean sharp install (no nested copy under
+#     wa-sticker-formatter) and a real WEBP sticker render
+#   - syntax-checks the entry points and runs the full test suite
+#   - restores package.json/lockfile from a snapshot on ANY failure,
+#     so a bad release can never be committed
+# Packages listed in scripts/dependency-policy.json "hold" stay on their
+# current major until their call sites are migrated (see policy file).
+
+on:
+  schedule:
+    - cron: "23 3 * * 1" # every Monday 03:23 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-update-deps
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Apply updates, verify and test
+        run: node scripts/update-dependencies.cjs --apply --major
+
+      - name: Commit and push if anything changed
+        run: |
+          if [ -n "$(git status --porcelain -- package.json package-lock.json mias/package.json mias/package-lock.json)" ]; then
+            git config user.name "mais-deps-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package.json package-lock.json mias/package.json mias/package-lock.json
+            git commit -m "chore(deps): auto-update dependencies, engines and baileys"
+            git push
+          else
+            echo "Everything already up to date — nothing to commit."
+          fi
