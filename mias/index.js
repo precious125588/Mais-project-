@@ -36565,45 +36565,32 @@ cmd(["addcmd","editcmd","savecmd"], {
   category: "OWNER",
   ownerOnly: true,
 }, async (sock, msg, args) => {
+  const _addcmdFail = async (text) => {
+    try { await react(sock, msg, "❌"); } catch {}
+    if (text) { try { await sendReply(sock, msg, text); } catch {} }
+  };
+  try { await react(sock, msg, "🌀"); } catch {}
   const raw = getBody(msg);
   const _prefix = (CONFIG.PREFIX || ".").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const body = raw.replace(new RegExp(`^${_prefix}(?:addcmd|editcmd|savecmd)\\s+`, "i"), "");
   if (!body.trim()) {
-    await sendReply(sock, msg,
-`📝 *addcmd — Add Command to Disk*
-━━━━━━━━━━━━━━━━━━━━
-
-*Format:*
-${CONFIG.PREFIX}addcmd <name> | <category> | <description>
-<JavaScript code>
-
-*Example:*
-${CONFIG.PREFIX}addcmd hello | MISC | Say hello world
-await sendReply(sock, msg, "Hello World! 👋 from ${CONFIG.BOT_NAME}");
-
-*Commands:*
-• *${CONFIG.PREFIX}addcmd*   — add new command (errors if name exists)
-• *${CONFIG.PREFIX}editcmd*  — overwrite existing command
-• *${CONFIG.PREFIX}savecmd*  — same as addcmd
-
-💾 Saved to disk → survives bot restarts.
-📢 Notifies you + sudo users after saving.`);
+    await _addcmdFail(`Usage: ${CONFIG.PREFIX}addcmd <name> | <category> | <description>, then put the JavaScript handler on the next line.`);
     return;
   }
   const nl = body.indexOf("\n");
   const headerLine = (nl === -1 ? body : body.slice(0, nl)).trim();
   const handlerCode = (nl === -1 ? "" : body.slice(nl + 1)).trim();
-  if (!handlerCode) { await sendReply(sock, msg, `❌ No JS code found. Write your code on the lines below the header.`); return; }
+  if (!handlerCode) { await _addcmdFail("No JavaScript handler found. Put the handler on the line below the command details."); return; }
 
   const parts = headerLine.split("|").map(s => s.trim());
   const name = (parts[0] || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
   const category = (parts[1] || "MISC").toUpperCase().replace(/[^A-Z0-9_]/g, "");
   const desc = parts[2] || "Custom command";
-  if (!name) { await sendReply(sock, msg, `❌ Command name is required (first part before |).`); return; }
+  if (!name) { await _addcmdFail("Command name is required before the first |."); return; }
 
   const _cmdCaller = extractCommandName(msg);
   if (_cmdCaller === "addcmd" && commands.has(name)) {
-    await sendReply(sock, msg, `❌ Command *${name}* already exists.\nUse *${CONFIG.PREFIX}editcmd* to overwrite it.`); return;
+    await _addcmdFail(`Command ${name} already exists. Use ${CONFIG.PREFIX}editcmd to overwrite it.`); return;
   }
 
   // Compile check before saving
@@ -36614,12 +36601,11 @@ await sendReply(sock, msg, "Hello World! 👋 from ${CONFIG.BOT_NAME}");
   try {
     new _AsyncFn(..._argNames, handlerCode);
   } catch (compErr) {
-    await sendReply(sock, msg, `❌ Syntax error in your code:\n\`\`\`${compErr.message}\`\`\`\n\nFix it and try again.`);
+    await _addcmdFail(`Invalid JavaScript: ${compErr.message}`);
     return;
   }
 
   // Save to disk: mias/commands/<CATEGORY>/<name>.js
-  let _savedToDisk = false;
   let _diskPath = "";
   try {
     const _cmdDir = path.join(__dirname, "commands", category);
@@ -36638,7 +36624,6 @@ ${handlerCode.split("\n").map(l => "    " + l).join("\n")}
 };
 `;
     fs.writeFileSync(_diskPath, _fileContent, "utf8");
-    _savedToDisk = true;
   } catch (fErr) {
     // Not fatal — still register in runtime
     console.warn("[addcmd] disk write failed:", fErr.message);
@@ -36705,18 +36690,6 @@ ${handlerCode.split("\n").map(l => "    " + l).join("\n")}
     console.log(`[addcmd] broadcast sent to ${_notified} users for cmd "${name}"`);
   })().catch(() => {});
 
-  await sendReply(sock, msg,
-`✅ *Command "${name}" saved & live!*
-━━━━━━━━━━━━━━━━━━━━
-📝 *Name:* ${CONFIG.PREFIX}${name}
-📂 *Category:* ${category}
-💬 *Desc:* ${desc}
-💾 *Disk:* ${_savedToDisk ? `commands/${category}/${name}.js ✅` : "⚠️ Runtime only this session"}
-🔄 *Restart-safe:* ${_savedToDisk ? "✅ Yes" : "❌ No"}
-👥 *Access:* All users ✅
-🔔 *Paired users DM notified:* ${_bcJids.size}
-━━━━━━━━━━━━━━━━━━━━
-Try: *${CONFIG.PREFIX}${name}*`);
   await react(sock, msg, "✅");
 });
 
