@@ -40,7 +40,8 @@ const PhoneNumber = require('awesome-phonenumber')
 const defaultPairingMode = process.argv.includes("--qr") ? "qr" : "code";
 const useMobile = process.argv.includes("--mobile");
 const pino = require('pino')
-const FileType = require('file-type')
+// file-type 22 is ESM-only: load it with a dynamic import on first use.
+const FileType = { fromBuffer: async (buf) => { const m = await import('file-type'); return (m.fileTypeFromBuffer ?? m.default?.fromBuffer)(buf) } }
 const fs = require('fs')
 const path = require('path')
 let themeemoji = "😇";

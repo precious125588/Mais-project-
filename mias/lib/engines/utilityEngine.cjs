@@ -6,15 +6,28 @@
  * Architecture: Services → UtilityEngine → packages
  */
 
-const { v4: uuidv4, v1: uuidv1, validate: uuidValidate } = require("uuid");
+// uuid 14 is ESM-only, so ids come from node:crypto (same UUID format).
+const crypto = require("crypto");
 const CryptoJS = require("crypto-js");
 const moment = require("moment-timezone");
 
 // ─── UUID ─────────────────────────────────────────────────────────────────────
 
-function generateId() { return uuidv4(); }
-function generateTimedId() { return uuidv1(); }
-function isValidUuid(s) { return uuidValidate(s); }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function generateId() { return crypto.randomUUID(); }
+
+// Time-ordered UUID (v7 layout): the first 48 bits are the millisecond clock, so ids sort by creation time.
+function generateTimedId() {
+  const ts = Date.now().toString(16).padStart(12, "0");
+  const rand = crypto.randomBytes(10);
+  rand[0] = (rand[0] & 0x0f) | 0x70; // version 7
+  rand[2] = (rand[2] & 0x3f) | 0x80; // RFC 4122 variant
+  const h = ts + rand.toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+function isValidUuid(s) { return typeof s === "string" && UUID_RE.test(s); }
 
 // ─── Crypto helpers ───────────────────────────────────────────────────────────
 
@@ -179,7 +192,7 @@ function sleep(ms) {
 
 module.exports = {
   // UUID
-  generateId, generateTimedId, isValidUuid, uuidv4, uuidv1,
+  generateId, generateTimedId, isValidUuid, uuidv4: generateId, uuidv1: generateTimedId,
   // Crypto
   md5, sha256, sha1, hmacSha256, base64Encode, base64Decode, aesEncrypt, aesDecrypt, CryptoJS,
   // Moment

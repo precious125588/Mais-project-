@@ -1,7 +1,15 @@
 "use strict";
 
 const path = require("path");
-const FileType = require("file-type");
+// file-type 22 is ESM-only, so it is loaded with a dynamic import on first use.
+let _fileTypePromise = null;
+const loadFileType = () => (_fileTypePromise ??= import("file-type"));
+async function fromBuffer(buffer) {
+  const mod = await loadFileType();
+  const detect = mod.fileTypeFromBuffer ?? mod.default?.fromBuffer;
+  return detect(buffer);
+}
+const FileType = { fromBuffer };
 
 const MIME_BY_EXTENSION = new Map([
   [".jpg", "image/jpeg"],
@@ -105,7 +113,7 @@ module.exports = {
   detectExtension,
   detectFile,
   detectMedia,
-  fromBuffer: FileType.fromBuffer.bind(FileType),
+  fromBuffer,
   isMediaType,
   library: FileType,
 };
