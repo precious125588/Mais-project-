@@ -56,6 +56,30 @@ function unwrapMsg(m) {
   return cur;
 }
 
+// Text of the message being replied to. The command's own text (".gst") is never
+// the status text: that was why ".gst" on a quoted message posted the word "gst".
+function quotedPlainText(msg) {
+  const ci = msg?.message?.extendedTextMessage?.contextInfo
+    || msg?.message?.imageMessage?.contextInfo
+    || msg?.message?.videoMessage?.contextInfo
+    || msg?.message?.documentMessage?.contextInfo
+    || null;
+  const q = unwrapMsg(ci?.quotedMessage || null);
+  if (!q) return '';
+  const candidates = [
+    q.conversation,
+    q.extendedTextMessage?.text,
+    q.imageMessage?.caption,
+    q.videoMessage?.caption,
+    q.documentMessage?.caption,
+    q.buttonsMessage?.contentText,
+    q.interactiveMessage?.body?.text,
+    q.templateMessage?.hydratedTemplate?.hydratedContentText,
+    q.templateMessage?.hydratedTemplate?.hydratedTitleText,
+  ];
+  return String(candidates.find((t) => typeof t === 'string' && t.trim()) || '').trim();
+}
+
 module.exports = {
   install(ctx) {
     const report = { gstGroupOnly: false };
@@ -224,9 +248,20 @@ module.exports = {
         return { ok: false, error: lastErr || 'relay rejected' };
       }
 
-      async function buildPayload(msg) {
+      async function buildPayload(sock, msg, urlArg, typedText) {
         const inner = innerMedia(msg.message || {});
-        const text = (msg.message?.extendedTextMessage?.text || msg.message?.conversation || '').trim();
+        // An image link (for example a Pinterest image) is read exactly like .fulldp reads it.
+        if (!inner && urlArg) {
+          let ub = null;
+          try {
+            ub = typeof globalThis.__miasReadImageBuf === 'function' ? await globalThis.__miasReadImageBuf(sock, msg, [urlArg]) : null;
+          } catch (e) {
+            return { error: '❌ ' + ((e && e.message) || 'Could not read that image link.') };
+          }
+          if (!ub || ub.length < 200) return { error: '❌ That link did not return an image. Use a direct image link.' };
+          return { kind: 'image', buf: ub, caption: '' };
+        }
+        const text = quotedPlainText(msg) || String(typedText || '').trim();
         if (!inner) {
           if (!text) return { error: `📢 *Group Status*\n\nUsage:\n*${PREFIX}gst <text>*\n*${PREFIX}gst gclink <text>* (includes group invite link)\nOr reply to any image/video/audio/sticker/video-note with *${PREFIX}gst* (or *${PREFIX}gst gclink*).` };
           return { kind: 'text', text };
@@ -253,6 +288,7 @@ module.exports = {
         let wantGcLink = false;
 
         const rawArgs = (args || []).map(a => String(a || '').trim()).filter(Boolean);
+        const urlArg = rawArgs.find(a => /^https?:\/\//i.test(a) && !/chat\.whatsapp\.com\//i.test(a)) || '';
         const filteredArgs = [];
 
         for (const arg of rawArgs) {
@@ -313,7 +349,7 @@ module.exports = {
         const watchdog = setTimeout(() => reactOnce('❌'), 120000);
 
         try {
-          const payload = await buildPayload(msg);
+          const payload = await buildPayload(sock, msg, urlArg, customCaption);
           if (payload.error) {
             clearTimeout(watchdog);
             await reactOnce('❌');

@@ -105,6 +105,8 @@ import { createStatusEditFlow } from "./lib/statusEditFlow.js";
 import { normalizeInviteCode, approvalPrompt, adminNumberList, parseAdminChoice } from "./features/joinApproval.js";
 import { ensureDiskSpace, getMediaLimitBytes, isNoSpaceError, TIKTOK_DOWNLOAD_MAX_BYTES, TIKTOK_DOCUMENT_MAX_BYTES } from "./lib/diskGuard.js";
 import { installSettingsCommand } from "./features/settingsCommands.js";
+import { installSplitVideo } from "./features/splitVideo.js";
+import { convertToMp4 } from "./lib/videoTools.js";
 import { installPairCommands } from "./features/pairCommands.js";
 import { installSetsudoCommand, installSudoCommand, sudoPending as __sudoPendingMap } from "./features/sudoCommands.js";
 import { runTikTokBulk, formatBulkSummary, bulkModeId } from "./features/ttBulk.js";
@@ -8314,7 +8316,7 @@ const MENU_CATEGORIES = [
     "isonline","online","checkstatus","onlinecheck","activecheck","isactive","wacheck","checkactive","whatsappcheck"] },
   { name: "LOGO",      emoji: "🎨", cmds: ["alienglow","burning","chromeone","chrometwo","comic","fire","glowinghot","glowingsteel","gradientbevel","slab","neontext","simple","starburst","felt","outline","animatedglow","3dtextured","3dgradient","glossy","embossed","pixelbadge","chromium","iced","frosty","particle","moltencore","glitter","fantasy","logolist",
     "flagtext","flag3dtext","logomaker","blackpinklogo","sandsummer","galaxywallpaper"] },
-  { name: "MEDIA",     emoji: "🖼️", cmds: ["toimg","tomp3","toaudio","toptt","tovideo","togif","tovv","viewonce","vv","s","trim","trimvid","videotrim"] },
+  { name: "MEDIA",     emoji: "🖼️", cmds: ["toimg","tomp3","toaudio","toptt","tovideo","togif","tovv","viewonce","vv","s","trim","trimvid","videotrim","split","remux"] },
   { name: "MISC",      emoji: "📁", cmds: [
     "antidelete","antidel","nodelete","antidstatus","antiedit","antied","noedit","antivonce","antiviewonce",
     "uptime","alive","runtime","owner","echo","report","feedback","request","repo"] },
@@ -9815,6 +9817,15 @@ installSettingsCommand({
   getBotPic: (...a) => getBotPic(...a),
   CONFIG,
   buildSettingsMenu: (...a) => buildSettingsMenu(...a),
+});
+
+// .split (90 second parts) and .remux — see mias/features/splitVideo.js
+installSplitVideo({
+  cmd: (...a) => cmd(...a),
+  sendReply: (...a) => sendReply(...a),
+  react: (...a) => react(...a),
+  downloadContentFromMessage,
+  CONFIG,
 });
 
   // ── Creator Mode — lock/unlock bot to creator-only access ───────────────────
@@ -20770,9 +20781,25 @@ cmd(["tovv"], {
       _tvFromDirect = true;
     }
   }
+  // Same image reader .fulldp uses: a quoted/attached image document, or an image
+  // link such as a Pinterest image URL (typed after .tovv, or inside the quoted text).
+  let _tvPreBuf = null;
+  let _tvImgErr = "";
+  if (!(quoted && (quoted.imageMessage || quoted.videoMessage))) {
+    const _tvLink = (args || []).find((a) => /^https?:\/\//i.test(String(a || "")))
+      || ((msg.message?.extendedTextMessage?.text || "").match(/https?:\/\/[^\s]+/i) || [])[0]
+      || (((quoted && (quoted.extendedTextMessage?.text || quoted.conversation)) || "").match(/https?:\/\/[^\s]+/i) || [])[0]
+      || null;
+    try {
+      if (typeof globalThis.__miasReadImageBuf === "function") {
+        const _tvb = await globalThis.__miasReadImageBuf(sock, msg, _tvLink ? [_tvLink] : []);
+        if (_tvb && _tvb.length > 200) { _tvPreBuf = _tvb; quoted = { imageMessage: { mimetype: "image/jpeg" } }; }
+      }
+    } catch (e) { _tvImgErr = e?.message || String(e); }
+  }
   if (!quoted) {
     await react(sock, msg, "❌");
-    await sendReply(sock, msg, `❌ Reply to an *image* or *video* with ${CONFIG.PREFIX}tovv to send it as a view-once.`);
+    await sendReply(sock, msg, _tvImgErr ? "❌ " + _tvImgErr : `❌ Reply to an *image* or *video* with ${CONFIG.PREFIX}tovv to send it as a view-once.`);
     return;
   }
   const img = quoted.imageMessage;
@@ -20786,14 +20813,15 @@ cmd(["tovv"], {
   try {
     const node = img || vid;
     const kind = img ? "image" : "video";
-    let buf = Buffer.from([]);
-    try {
+    let buf = _tvPreBuf ? _tvPreBuf : Buffer.from([]);
+    if (!_tvPreBuf) try {
       const stream = await downloadContentFromMessage(node, kind);
       for await (const c of stream) buf = Buffer.concat([buf, c]);
     } catch (_dlErr) {
       console.log("[tovv] downloadContentFromMessage error:", _dlErr?.message);
     }
-    const cap = (args.join(" ") || (_tvFromDirect ? "" : node.caption) || "").trim();
+    const _tvCapArgs = _tvPreBuf ? args.filter((a) => !/^https?:\/\//i.test(String(a || ""))).join(" ") : args.join(" ");
+    const cap = (_tvCapArgs || (_tvFromDirect || _tvPreBuf ? "" : node.caption) || "").trim();
     const jid = msg.key.remoteJid;
 
     let relayed = false;
@@ -22384,8 +22412,9 @@ function __miasHasPendingPicker(jid) {
     if (saveTube && now - saveTube.ts <= 10 * 60 * 1000) return true;
     const movie = __miasMapGet(_mynetMoviePicks, jid);
     if (movie && now - movie.ts <= 10 * 60 * 1000) return true;
-    if (_lastAdultResults.get(__miasPickerKey(jid)) || _lastAdultResults.get(jid)) return true;
-    if (_menuPickStore.get(__miasPickerKey(jid)) || _menuPickStore.get(jid)) return true;
+    const _pickFresh = (v) => !!v && now - Number(v.ts || 0) <= 10 * 60 * 1000;
+    if (_pickFresh(_lastAdultResults.get(__miasPickerKey(jid))) || _pickFresh(_lastAdultResults.get(jid))) return true;
+    if (_pickFresh(_menuPickStore.get(__miasPickerKey(jid))) || _pickFresh(_menuPickStore.get(jid))) return true;
     const _num = (j) => String(j || "").replace(/:\d+(?=@)/, "").replace(/[^0-9]/g, "");
     const _n1 = _num(jid);
     if (_n1 && typeof _P2_PENDING !== "undefined" && _P2_PENDING && _P2_PENDING.size) {
@@ -22418,8 +22447,9 @@ function __miasHasPendingPicker_UNUSED(jid) {
     if (pl && now - pl.ts <= 10 * 60 * 1000) return true;
     if (saveTube && now - saveTube.ts <= 10 * 60 * 1000) return true;
     if (movie && now - movie.ts <= 10 * 60 * 1000) return true;
-    if (_lastAdultResults.get(__miasPickerKey(jid)) || _lastAdultResults.get(jid)) return true;
-    if (_menuPickStore.get(__miasPickerKey(jid)) || _menuPickStore.get(jid)) return true;
+    const _pickFresh = (v) => !!v && now - Number(v.ts || 0) <= 10 * 60 * 1000;
+    if (_pickFresh(_lastAdultResults.get(__miasPickerKey(jid))) || _pickFresh(_lastAdultResults.get(jid))) return true;
+    if (_pickFresh(_menuPickStore.get(__miasPickerKey(jid))) || _pickFresh(_menuPickStore.get(jid))) return true;
     // PRECIOUS v23: the JINX / v2 play-card stores were NOT consulted here,
     // so while a .play card was waiting for its 1-6 choice the settings
     // handler thought no picker was active, auto-armed a settings session on
@@ -31910,6 +31940,8 @@ if (typeof __miasApplyDynamicOwnerName === "function") {
     return buf;
   }
 
+  globalThis.__miasReadImageBuf = __miasReadImageBuf;
+
   // ── FIX #1: setpp / setbotpic with real image processing ────────────────
   const __miasSetPpHandler = async (sock, msg, args) => {
     try { await react(sock, msg, "🖼️"); } catch (_) {}
@@ -39447,8 +39479,8 @@ globalThis.__MiasBlocklist = __MiasBlocklist;
         }
       } catch {}
 
-      // Never expose a raw number or LID when no contact name is available.
-      return "Unknown contact";
+      // No saved or verified name: show the number so the blocklist is still useful.
+      return number ? `+${number}` : "Unknown contact";
     }
 
     const __v22Block = async (sock, msg, args = []) => {
@@ -42787,13 +42819,16 @@ cmd(["tomp3", "toaudio"], { desc: "Video/audio → MP3", category: "MEDIA" }, as
   } catch (e) { await sendReply(sock, msg, `❌ tomp3 failed: ${e?.message || e}`); }
 });
 cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/DOC/sticker to normal MP4", category: "MEDIA" }, async (sock, msg) => {
+  // Fast path: H.264 video is remuxed (stream copy) instead of re-encoded. Every
+  // download and ffmpeg step has a timeout, and one finish() always ends the job
+  // with ✅ or ❌, so the loading reaction can never stay on forever.
   const jid = msg.key.remoteJid;
-  const TOMP4_DEADLINE_MS = 4 * 60 * 1000;
+  const TOMP4_DEADLINE_MS = 3 * 60 * 1000;
   const WA_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
   const WA_DOC_MAX_BYTES = 2 * 1024 * 1024 * 1024;
   let finished = false;
   let deadline = null;
-  // Single place that ends the job: ❌ + one clear message on failure, ✅ on success.
+  let workDir = null;
   const finish = async (errorText) => {
     if (finished) return false;
     finished = true;
@@ -42807,7 +42842,7 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
     return true;
   };
   try { await react(sock, msg, "🌀"); } catch {}
-  deadline = setTimeout(() => { finish("Conversion took longer than 4 minutes, so I stopped. Try a shorter or smaller file."); }, TOMP4_DEADLINE_MS);
+  deadline = setTimeout(() => { finish("Conversion took longer than 3 minutes, so I stopped. Try a shorter or smaller file."); }, TOMP4_DEADLINE_MS);
 
   try {
     const ctx = msg.message?.extendedTextMessage?.contextInfo;
@@ -42835,14 +42870,12 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
     const stk = node?.stickerMessage;
     const img = node?.imageMessage;
     const aud = node?.audioMessage;
-
     const mediaObj = ptv || vid || doc || stk || img || aud;
     if (!mediaObj) {
       await finish(`Reply to a video, document, sticker, image or audio with ${CONFIG.PREFIX}tomp4.`);
       return;
     }
 
-    // Determine media download stream types with fallback
     let streamTypes = [];
     if (ptv) streamTypes = ["ptv", "video", "document"];
     else if (vid) streamTypes = ["video", "document"];
@@ -42861,44 +42894,27 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
 
     let buf = null;
     for (const st of streamTypes) {
+      let _dlTimer = null;
       try {
-        const stream = await downloadContentFromMessage(mediaObj, st);
-        let chunks = [];
-        let stallTimer;
-        const stallReset = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => { try { stream.destroy?.(new Error("stalled")); } catch {} }, 45000); };
-        stallReset();
-        try {
-          for await (const c of stream) { stallReset(); chunks.push(c); }
-        } finally { clearTimeout(stallTimer); }
-        const res = Buffer.concat(chunks);
-        if (res && res.length > 0) {
-          buf = res;
-          break;
-        }
-      } catch (eDl) {
-        // try next stream type
-      }
+        const work = (async () => {
+          const stream = await downloadContentFromMessage(mediaObj, st);
+          const chunks = [];
+          for await (const c of stream) chunks.push(c);
+          return Buffer.concat(chunks);
+        })();
+        const res = await Promise.race([
+          work,
+          new Promise((_, rej) => { _dlTimer = setTimeout(() => rej(new Error("download timed out")), 90000); }),
+        ]);
+        if (res && res.length > 0) { buf = res; break; }
+      } catch {
+        // try the next stream type
+      } finally { clearTimeout(_dlTimer); }
     }
-
     if (!buf || !buf.length) {
       await finish("Couldn't download that media from WhatsApp. Ask for it to be sent again and retry.");
       return;
     }
-
-    const cp = require("child_process");
-    const os = require("os");
-    const path = require("path");
-    const fs = require("fs");
-    const _id = Date.now() + "_" + Math.random().toString(36).slice(2, 7);
-
-    // Find ffmpeg binary (ffmpeg-static or system ffmpeg)
-    let ffBin = "ffmpeg";
-    try {
-      const ffStatic = require("ffmpeg-static");
-      if (ffStatic && typeof ffStatic === "string" && fs.existsSync(ffStatic)) {
-        ffBin = ffStatic;
-      }
-    } catch {}
 
     let inExt = "bin";
     if (ptv || vid) inExt = "mp4";
@@ -42915,95 +42931,43 @@ cmd(["tomp4", "tovideo", "converttomp4", "doc2mp4"], { desc: "Convert any video/
       else inExt = "mp4";
     }
 
-    const inPath = path.join(os.tmpdir(), `tomp4_in_${_id}.${inExt}`);
-    const outPath = path.join(os.tmpdir(), `tomp4_out_${_id}.mp4`);
+    workDir = fs.mkdtempSync(path.join(os.tmpdir(), "tomp4-"));
+    const inPath = path.join(workDir, `in.${inExt}`);
+    const outPath = path.join(workDir, "out.mp4");
+    fs.writeFileSync(inPath, buf);
 
-    const execFF = (args) => new Promise((resolve, reject) => {
-      cp.execFile(ffBin, args, { timeout: 240000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout, stderr) => {
-        if (err) { err.stderr = stderr; reject(err); }
-        else resolve(stdout);
-      });
-    });
-    // Reads the stream layout ffmpeg prints for the input (no output file needed).
-    const probe = (file) => new Promise((resolve) => {
-      cp.execFile(ffBin, ["-hide_banner", "-i", file], { timeout: 30000, maxBuffer: 16 * 1024 * 1024 }, (_err, stdout, stderr) => {
-        const text = `${stderr || ""}\n${stdout || ""}`;
-        const v = text.match(/Stream #\d+:\d+[^\n]*?: Video: ([a-z0-9_]+)([^\n]*)/i);
-        const a = text.match(/Stream #\d+:\d+[^\n]*?: Audio: ([a-z0-9_]+)/i);
-        resolve({ videoCodec: v ? v[1].toLowerCase() : "", videoInfo: v ? v[2] : "", audioCodec: a ? a[1].toLowerCase() : "" });
-      });
-    });
+    const kind = stk ? "sticker" : img ? "image" : aud ? "audio" : "video";
+    const res = await convertToMp4(inPath, outPath, { kind, timeoutMs: 170000 });
 
-    let lastErr = "";
-    const tryFF = async (args) => {
-      try { await execFF(args); return true; }
-      catch (e) {
-        if (e?.code === "ENOENT") throw e;
-        lastErr = String(e?.stderr || e?.message || "").trim().split("\n").filter(Boolean).pop() || "";
-        return false;
-      }
-    };
-
-    let converted = false;
-    try {
-      fs.writeFileSync(inPath, buf);
-      const scaleEven = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
-      if (stk) {
-        converted = (await tryFF(["-y", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", `${scaleEven},fps=15`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", outPath]))
-          || (await tryFF(["-y", "-loop", "1", "-t", "3", "-i", inPath, "-movflags", "+faststart", "-pix_fmt", "yuv420p", "-vf", scaleEven, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", outPath]));
-      } else if (img) {
-        converted = await tryFF(["-y", "-loop", "1", "-t", "5", "-i", inPath, "-vf", scaleEven, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-preset", "veryfast", "-crf", "18", outPath]);
-      } else if (aud) {
-        converted = await tryFF(["-y", "-f", "lavfi", "-i", "color=c=black:s=720x720:r=25", "-i", inPath, "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p", "-shortest", "-movflags", "+faststart", outPath]);
-      } else {
-        // Video or document video. If the video is already H.264 (yuv420p), remux it: same picture quality, no re-encode, so it finishes almost instantly.
-        const info = await probe(inPath);
-        const videoRemuxable = info.videoCodec === "h264" && /yuv420p/.test(info.videoInfo) && !/10(le|be)/.test(info.videoInfo);
-        if (videoRemuxable) {
-          const audioArgs = !info.audioCodec ? ["-an"] : info.audioCodec === "aac" ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"];
-          converted = await tryFF(["-y", "-i", inPath, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", ...audioArgs, "-movflags", "+faststart", outPath]);
-        }
-        // Otherwise re-encode at high quality (CRF 18 is visually near-lossless).
-        if (!converted) {
-          converted = await tryFF(["-y", "-i", inPath, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-vf", scaleEven, "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", outPath]);
-        }
-        if (!converted) {
-          converted = await tryFF(["-y", "-i", inPath, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-vf", scaleEven, "-an", "-movflags", "+faststart", outPath]);
-        }
-      }
-
-      let outBuf = null;
-      if (converted && fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
-        outBuf = fs.readFileSync(outPath);
-      } else if (inExt === "mp4") {
-        // The input is already an MP4 and ffmpeg could not touch it: send it unchanged.
-        outBuf = buf;
-      }
-
-      if (!outBuf || !outBuf.length) {
-        const hint = lastErr ? ` (${lastErr.slice(0, 160)})` : "";
-        await finish(`Conversion failed. The file may be corrupted or in a format I can't read${hint}.`);
-        return;
-      }
-      if (finished) return; // the deadline already reported a failure, so don't send late
-      if (outBuf.length > WA_DOC_MAX_BYTES) {
-        await finish("The converted video is over 2 GB, which is WhatsApp's document limit.");
-        return;
-      }
-      if (outBuf.length > WA_VIDEO_MAX_BYTES) {
-        await sock.sendMessage(jid, { document: outBuf, mimetype: "video/mp4", fileName: "converted.mp4", caption: "Over 64 MB, so I sent it as a document. Quality is unchanged." }, { quoted: msg });
-      } else {
-        await sock.sendMessage(jid, { video: outBuf, mimetype: "video/mp4" }, { quoted: msg });
-      }
-      await finish(null);
-    } finally {
-      try { fs.unlinkSync(inPath); } catch {}
-      try { fs.unlinkSync(outPath); } catch {}
+    let outBuf = null;
+    if (res.ok && fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+      outBuf = fs.readFileSync(outPath);
+    } else if (inExt === "mp4") {
+      // The input is already an MP4 and ffmpeg could not touch it: send it unchanged.
+      outBuf = buf;
     }
+    if (!outBuf || !outBuf.length) {
+      const hint = res.error ? ` (${String(res.error).slice(0, 160)})` : "";
+      await finish(`Conversion failed. The file may be corrupted or in a format I can't read${hint}.`);
+      return;
+    }
+    if (finished) return; // the deadline already reported a failure, so don't send late
+    if (outBuf.length > WA_DOC_MAX_BYTES) {
+      await finish("The converted video is over 2 GB, which is WhatsApp's document limit.");
+      return;
+    }
+    if (outBuf.length > WA_VIDEO_MAX_BYTES) {
+      await sock.sendMessage(jid, { document: outBuf, mimetype: "video/mp4", fileName: "converted.mp4", caption: "Over 64 MB, so I sent it as a document. Quality is unchanged." }, { quoted: msg });
+    } else {
+      await sock.sendMessage(jid, { video: outBuf, mimetype: "video/mp4" }, { quoted: msg });
+    }
+    await finish(null);
   } catch (e) {
     console.error("[tomp4] error:", e?.message || e);
     const missingFfmpeg = e?.code === "ENOENT";
     await finish(missingFfmpeg ? "ffmpeg isn't installed on the server, so I can't convert videos right now." : "Something went wrong while converting. Try again in a moment.");
+  } finally {
+    if (workDir) { try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {} }
   }
 });
 cmd(["tovn", "toptt"], { desc: "Audio/video → voice note", category: "MEDIA" }, async (sock, msg) => {
