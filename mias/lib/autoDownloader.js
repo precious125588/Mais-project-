@@ -30,6 +30,7 @@ import {
 } from "../handlers/reactionHandler.js";
 
 // Load @vreden/youtube_scraper (CommonJS) — same library used by .ytmp4/.ytmp3 commands
+const providerMedia = createRequire(import.meta.url)("./providerMedia.cjs");
 let _ytdl = null;
 try {
   const _req = createRequire(import.meta.url);
@@ -51,7 +52,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const ZERO_BASE   = "https://zeroapi2-production.up.railway.app";
 const ZERO_KEY    = process.env.ZERO_API_KEY || "";
-const PREXZY_BASE = "https://apis.prexzyvilla.site";
+const PREXZY_BASE = process.env.PREXZY_API || "https://prexzyapis.com";
 
 const REQUEST_TIMEOUT  = 30000;
 const DOWNLOAD_TIMEOUT = 150000;
@@ -742,7 +743,7 @@ async function fromEporner(url) {
 
 // ─── Proven APIs from case.js commands (davidcyril / prexzyvilla / prince / vreden) ──
 
-const PREXZY_BASE2 = "https://apis.prexzyvilla.site";
+const PREXZY_BASE2 = process.env.PREXZY_API || "https://prexzyapis.com";
 const PRINCE_BASE = "https://api.princetechn.com";
 const PRINCE_KEY  = "prince";
 const UA2 = "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
@@ -776,11 +777,10 @@ async function fromVredenMp3(url) {
 /** prexzyvilla ytmp4 API */
 async function fromPrexzyYtMp4(url) {
   try {
-    const r = await axios.get(`${PREXZY_BASE2}/download/ytmp4?url=${encodeURIComponent(url)}`,
+    const r = await axios.get(`${PREXZY_BASE2}/download/ytmp4?url=${encodeURIComponent(url)}&quality=1080`,
       { timeout: 40000, headers: { "User-Agent": UA2 } });
-    const d = r.data?.result || r.data?.data || r.data;
-    const dlUrl = d?.url || d?.video || d?.download;
-    if (dlUrl && String(dlUrl).startsWith("http")) return { url: dlUrl, type: "video", title: d?.title || "YouTube", _via: "prexzy-ytmp4" };
+    const picked = providerMedia.pickPrexzyVideo(r.data);
+    if (picked?.url) return { ...picked, type: "video", _via: "prexzy-ytmp4" };
   } catch (_) {}
   return null;
 }
@@ -1060,6 +1060,7 @@ const AIO_ENDPOINTS = [
   { name: "prexzy-download",   run: async (u, p) => prexzyGet(`/download/${PLATFORM_ALIASES[p] || p}`, { url: u }, 45000) },
   { name: "prexzy-downloader", run: async (u, p) => prexzyGet(`/downloader/${PLATFORM_ALIASES[p] || p}`,{ url: u }, 45000) },
   { name: "prexzy-aio",        run: async (u)    => prexzyGet("/download/aio",                          { url: u }, 45000) },
+  { name: "nexray-aio",        run: async (u)    => httpGet(`https://api.nexray.eu.cc/downloader/aio?url=${encodeURIComponent(u)}`, { timeout: 45000 }) },
   { name: "davidcyril",        run: async (u, p) => dcGet(`/download/${PLATFORM_ALIASES[p] || p}`,      { url: u }, 45000) },
   { name: "siputzx-platform",  run: async (u, p) => httpGet(`https://api.siputzx.my.id/api/d/${PLATFORM_ALIASES[p] || p}?url=${encodeURIComponent(u)}`) },
   { name: "siputzx-aio",       run: async (u)    => httpGet(`https://api.siputzx.my.id/api/d/aio?url=${encodeURIComponent(u)}`) },
@@ -1084,7 +1085,13 @@ async function aioFallback(url, platform) {
       try {
         const r = await api.run(url, endpointName);
         if (!r?.ok && !r?.data) { errors.push(`${api.name}:net`); continue; }
-        const best = pickBestCandidate(r.data, platform, endpointName);
+        let best = null;
+        if (api.name === "nexray-aio") {
+          const selected = providerMedia.pickNexrayVideo(r.data, { maxBytes: MAX_FILE_SIZE_BYTES });
+          if (selected?.url) best = { ...selected, _via: "nexray-aio" };
+        } else {
+          best = pickBestCandidate(r.data, platform, endpointName);
+        }
         if (best?.url) return { result: best, errors };
         errors.push(`${api.name}:empty`);
       } catch (e) {
@@ -1439,11 +1446,12 @@ async function nexrayFallback(url, platform) {
   const pickMedia = (d) => {
     const r = d?.result || d?.data || d;
     if (typeof r === "string" && /^https?:\/\//i.test(r)) return { url: r, type: null };
+    const selectedVideo = providerMedia.pickNexrayVideo(d, { maxBytes: MAX_FILE_SIZE_BYTES });
+    if (selectedVideo) return { ...selectedVideo, _via: "nexray-aio" };
     if (Array.isArray(r) && r[0]?.url) return { url: r[0].url, title: r[0]?.title, type: null };
-    const u = r?.url || r?.download || r?.download_url || r?.dl || r?.video || r?.hdplay || r?.play || r?.audio || r?.media || r?.mp4 || r?.mp3;
-    if (u && /^https?:\/\//i.test(String(u))) {
-      return { url: String(u), title: r?.title || r?.desc, type: r?.type || (r?.audio && !r?.video ? "audio" : null) };
-    }
+    const u = r?.download || r?.download_url || r?.dl || r?.video || r?.hdplay || r?.play || r?.audio || r?.media || r?.mp4 || r?.mp3;
+    // `result.url` from NexRay can be the input page itself, not a media URL.
+    if (u && /^https?:\/\//i.test(String(u))) return { url: String(u), title: r?.title || r?.desc, type: r?.type || (r?.audio && !r?.video ? "audio" : null) };
     return null;
   };
   const perPlatform = {
@@ -1515,7 +1523,7 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
   const jid = msg.key.remoteJid;
   let tmpPath = null;
   try {
-    const result = await resolveMediaUrl(url, platform);
+    let result = await resolveMediaUrl(url, platform);
     if (!result?.url && !(result?.type === "slider" && result?.images?.length)) {
       throw new Error("No download URL resolved");
     }
@@ -1525,6 +1533,7 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
     let fileName;
     let dlType = result.type || preferredType(platform);
     let dlMime = "video/mp4";
+    let downloaded = null;
 
     if (result.type === "slider" && Array.isArray(result.images) && result.images.length > 0) {
       const pv = getPortableVideo();
@@ -1539,7 +1548,16 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
       dlType = "video";
       dlMime = "video/mp4";
     } else {
-      const downloaded = await downloadToTemp(result.url, dlType);
+      try {
+        downloaded = await downloadToTemp(result.url, dlType);
+      } catch (firstDownloadError) {
+        if (platform !== "youtube") throw firstDownloadError;
+        const alternate = await nexrayFallback(url, platform).catch(() => null);
+        if (!alternate?.url || alternate.url === result.url) throw firstDownloadError;
+        result = alternate;
+        dlType = result.type || "video";
+        downloaded = await downloadToTemp(result.url, dlType);
+      }
       tmpPath = downloaded.tmpPath;
       bytes = fs.readFileSync(tmpPath);
       const sizeText = downloaded.size >= 1024 * 1024

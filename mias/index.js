@@ -851,7 +851,7 @@ const CONFIG = {
   SESSION_ID:   process.env.SESSION_ID   || "",
   OWNER_NUMBER: (process.env.OWNER_NUMBER || process.env.OWNER || "").trim(),
   OWNER_JID: (process.env.OWNER_JID || process.env.OWNER_LID || "").trim(),
-  BOT_NAME:     process.env.BOT_NAME || "𝑴𝑰𝑨𝑺 𝑴𝑫𝑿",
+  BOT_NAME:     "MIAS MDX",
   PREFIX:       INITIAL_PREFIX !== null
     ? INITIAL_PREFIX
     : Object.prototype.hasOwnProperty.call(process.env, "PREFIX")
@@ -887,7 +887,8 @@ function __miasApplyDynamicOwnerName(sock) {
     const real = (u.name || u.verifiedName || u.notify || "").trim();
     if (real) {
       CONFIG.OWNER_NAME = real;
-      CONFIG.BOT_NAME = real;
+      // Keep the brand canonical; owner display names are separate metadata.
+      CONFIG.BOT_NAME = "MIAS MDX";
       try { global.ownername = real; global.OWNER_NAME = real; } catch {}
     }
     const n = String(u.id || "").replace(/[^0-9]/g, "").split(":")[0];
@@ -9018,11 +9019,11 @@ function buildMenu(jid, senderName, sender, context = {}) {
 
   const ruleWidth = rule.length; // divider width = reference line width
   const centerLine = (txt) => {
-    const w = [...String(txt)].length;
-    const pad = Math.max(0, Math.floor((ruleWidth - w) / 2));
+    const visible = String(txt).replace(/\*/g, "");
+    const pad = Math.max(0, Math.floor((ruleWidth - [...visible].length) / 2));
     return " ".repeat(pad) + txt;
   };
-  let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
+  let t = rule + "\n" + centerLine("*MIAS MDX*") + "\n" + rule + "\n\n";
   t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
@@ -9144,11 +9145,11 @@ function buildMenuOverview(jid, sender, context = {}) {
   try { host = String(detectHostEnvironment().platform || "UNKNOWN").toUpperCase(); } catch {}
   const rule = "\u2500".repeat(20);
   const centerLine = (txt) => {
-    const w = [...String(txt)].length;
-    const pad = Math.max(0, Math.floor((rule.length - w) / 2));
+    const visible = String(txt).replace(/\*/g, "");
+    const pad = Math.max(0, Math.floor((rule.length - [...visible].length) / 2));
     return " ".repeat(pad) + txt;
   };
-  let t = rule + "\n*MIA'S MDX*\n" + rule + "\n\n";
+  let t = rule + "\n" + centerLine("*MIAS MDX*") + "\n" + rule + "\n\n";
   t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
@@ -13490,7 +13491,7 @@ Examples:
       async () => { const { data } = await axios.get(`https://api.nexray.eu.cc/downloader/v1/youtube?url=${encodeURIComponent(videoUrl)}`, { timeout: 30000 }); const d = data?.result || data?.data || data; return d?.url || d?.video || d?.download_url || d?.dl || d?.mp4; },
       async () => { const { data } = await axios.get(`https://api.siputzx.my.id/api/d/ytmp4?url=${encodeURIComponent(videoUrl)}`, { timeout: 25000 }); return data?.data?.dl || data?.data?.url || data?.url; },
       async () => { const { data } = await axios.get(`https://api.ryzendesu.vip/api/downloader/ytmp4?url=${encodeURIComponent(videoUrl)}`, { timeout: 25000 }); return data?.url || data?.result?.url || data?.data?.url; },
-      async () => { const r = await prexzyGet("/download/ytmp4", { url: videoUrl, quality: isHD ? "1080" : "720" }, 30000); return r.data?.data?.url || r.data?.url || r.data?.download; },
+      async () => { const r = await prexzyGet("/download/ytmp4", { url: videoUrl, quality: isHD ? "1080" : "720" }, 30000); return require("./lib/providerMedia.cjs").pickPrexzyVideo(r.data)?.url; },
       async () => { const { data } = await axios.post("https://co.wuk.sh/api/json", { url: videoUrl, downloadMode: "video", videoQuality: isHD ? "1080" : "720", filenameStyle: "basic" }, { headers: { Accept: "application/json", "Content-Type": "application/json" }, timeout: 30000 }); return data?.url; },
       async () => { const { data } = await axios.post("https://cobalt-api.kwiatekmiki.com/", { url: videoUrl, downloadMode: "video", videoQuality: isHD ? "1080" : "720" }, { headers: { Accept: "application/json", "Content-Type": "application/json" }, timeout: 30000 }); return data?.url; },
       async () => { const tox = await toxicCall("/download/ytmp4", { url: videoUrl, q: isHD ? "1080" : "720" }); return tox?.url || tox?.download; },
@@ -14561,6 +14562,12 @@ cmd(["isonline","online","checkstatus","onlinecheck"], { desc: "Check if a user 
       presenceStatus = "private";
     }
   } catch { presenceStatus = "private"; }
+  if (!lastSeenMs) {
+    try {
+      const rec = getSettings(getOwnerJid())?.lastSeenRecords?.[String(targetJid).toLowerCase()];
+      if (rec?.timestamp) lastSeenMs = Number(rec.timestamp);
+    } catch {}
+  }
 
   const statusMap = {
     available:   "🟢 *ONLINE RIGHT NOW*",
@@ -14687,6 +14694,12 @@ cmd(["check","checkuser","chk"], {
       presenceStatus = "private";
     }
   } catch { presenceStatus = "private"; }
+  if (!lastSeenMs) {
+    try {
+      const rec = getSettings(getOwnerJid())?.lastSeenRecords?.[String(targetJid).toLowerCase()];
+      if (rec?.timestamp) lastSeenMs = Number(rec.timestamp);
+    } catch {}
+  }
 
   let lastSeenText = "Unknown";
   if (lastSeenMs) {
@@ -24446,7 +24459,9 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
       const { data: _nxd } = await axios.get(`https://api.nexray.eu.cc/downloader/aio?url=${encodeURIComponent(url)}`, { timeout: 25000 });
       const _nd = _nxd?.result || _nxd?.data || _nxd;
       if (_nd) {
-        dlUrl = _nd?.url || _nd?.video || _nd?.audio || _nd?.download_url;
+        const _providerMedia = require("./lib/providerMedia.cjs");
+        const _nexBest = _providerMedia.pickNexrayVideo(_nxd);
+        dlUrl = _nexBest?.url || _nd?.download_url || _nd?.video || _nd?.audio;
         title = title || _nd?.title;
       }
     } catch {}
@@ -24475,7 +24490,9 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
           const _best = _d.find(x => x?.quality === "hd" || x?.quality === "1080" || x?.quality === "720") || _d[0];
           dlUrl = _extract(_best);
         } else if (Array.isArray(_d?.medias)) {
-          dlUrl = _extract(_d.medias[0]);
+          const _providerMedia = require("./lib/providerMedia.cjs");
+          const _bestMedia = _providerMedia.pickNexrayVideo(dp);
+          dlUrl = _bestMedia?.url || _extract(_d.medias[0]);
         } else if (Array.isArray(_d?.data)) {
           dlUrl = _extract(_d.data[0]);
         } else {
