@@ -4144,10 +4144,7 @@ END:VCARD`;
               const _cbScopeOk = _cbSelf ? true : (_cbScope === "all" || (_cbScope === "dm" && !String(msg.key?.remoteJid || "").endsWith("@g.us")) || (_cbScope === "group" && String(msg.key?.remoteJid || "").endsWith("@g.us")));
                 const _cbInDM    = !isGroup(msg);
                 const _cbInGroup = isGroup(msg);
-                const _cbAllowed =
-                  _cbScope === "all" ||
-                  (_cbScope === "dm"    && _cbInDM) ||
-                  (_cbScope === "group" && _cbInGroup);
+                const _cbAllowed = _cbScopeOk;
                 if (_cbAllowed) {
                   try {
                     let _cbReply = null;
@@ -4166,6 +4163,26 @@ END:VCARD`;
                         const { data } = await axios.get(`https://api.nexray.eu.cc/ai/gpt?prompt=${encodeURIComponent(body)}`, { timeout: 15000 }).catch(() => ({}));
                         const d = data?.result || data?.data || data;
                         _cbReply = d?.text || d?.message || d?.response || d?.answer || (typeof d === "string" ? d : null);
+                      } catch {}
+                    }
+                    // 2b) Prexzy Live Chatbot endpoint
+                    if (!_cbReply) {
+                      try {
+                        const _cbPrChat = await prexzyGet("/ai/chatbot", { text: body }, 18000);
+                        if (_cbPrChat.ok) {
+                          const _pd = _cbPrChat.data?.data || _cbPrChat.data;
+                          _cbReply = _pd?.response || _pd?.text || _pd?.result || _pd?.answer || (typeof _pd === "string" ? _pd : null);
+                        }
+                      } catch {}
+                    }
+                    // 2c) Prexzy GPT5 / Gemini live fallbacks
+                    if (!_cbReply) {
+                      try {
+                        const _cbPrGpt = await prexzyGet("/ai/askgpt5", { prompt: body }, 18000);
+                        if (_cbPrGpt.ok) {
+                          const _pd = _cbPrGpt.data?.data || _cbPrGpt.data;
+                          _cbReply = _pd?.response || _pd?.text || _pd?.result || _pd?.answer || (typeof _pd === "string" ? _pd : null);
+                        }
                       } catch {}
                     }
                     // 3) Live Pollinations AI (free, ultra-reliable fallback)
@@ -8594,19 +8611,11 @@ const MENU_CATEGORIES = [
     "listmenu","listmenuui","listui","flowmenu","flowui","interactivelist","interactivemenu",
     "safemode"] },
     
+  { name: "AI",        emoji: "🤖", cmds: [
+    "gpt","gemini","explaincode","detectbugs","convertcode","summarize","imagine"] },
   { name: "SEARCH",    emoji: "🔍", cmds: [
-    "define","wiki","ud","google",
-    "tiksearch","spotisearch",
-    "ytsearch","ytinfo","ytmonetize",
-    "img","wallpaper","pinterestsearch",
-    "lyrics","weather","currency",
-    "github","githubrepo","githubissues","githubcode",
-    "news","sportsnews","football","basketball","othersports",
-    "imdbsearch","recommend",
-    "apksearch","fdroidsearch",
-    "scsearch","igsearch",
-    "telegramchan","wagroupsearch",
-    "applemusic","nik","trending2"] },
+    "define","football","github","githubcode","githubissues","githubrepo",
+    "google","image","lyrics","news","wallpaper","wiki","ytinfo","ytsearch"] },
   { name: "SESSION",   emoji: "🔑", cmds: ["pair","pair1","pair2","getbot","pair4","paircode","pairlink","pairpop","sm1","listpair","validate","validate2"] },
   { name: "SETTINGS",  emoji: "⚙️",  cmds: ["getprivacy","setprivacy","setpp","setpfp","setbotpic","botpic","setbio","setabout","setname","setbotname","fulldp","setting","settings","config2"] },
   { name: "STALK",     emoji: "🕵️", cmds: ["igstalk","stalkinsta","instainfo","ttstalk","stalktiktok","ttinfo","twitterstalk","twitterinfo","xstalk","stalktw","ytstalk","stalkyoutube","ytinfo2","ffstalk","stalkff","freefire","githubstalk","ghstalk","gstalk","npmstalk","npmpkg","npminfo"] },
@@ -8638,7 +8647,7 @@ const MENU_CATEGORIES = [
 MENU_CATEGORIES.splice(
   0,
   MENU_CATEGORIES.length,
-  ...MENU_CATEGORIES.filter(({ name }) => !["AI", "PANEL", "ECONOMY", "RANDOM", "TEXT", "STATUS", "ANIMATION", "INTELLIGENCE", "TTS", "UTILITY"].includes(name)),
+  ...MENU_CATEGORIES.filter(({ name }) => !["PANEL", "ECONOMY", "RANDOM", "TEXT", "STATUS", "ANIMATION", "INTELLIGENCE", "TTS", "UTILITY"].includes(name)),
 );
 
 // ── Robust bot picture fetcher with validation + fallbacks ──────────────────
@@ -12651,86 +12660,105 @@ async function sendAnimeGif(sock, msg, type) {
   await sendReply(sock, msg, `🎌 *${type.toUpperCase()}*\n\n_(Could not load — all APIs failed, try again!)_`);
 }
 cmd("anime", { desc: "Random anime image", category: "ANIME" }, async (s, m) => sendAnimeGif(s, m, "neko"));
-cmd(["define", "define2", "dictionary", "dictionary2", "meaning", "meaning2"], { desc: "Define a word", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}define <word>`); return; }
-  await react(sock, msg, "📖");
+cmd(["define", "define2", "dictionary", "dictionary2", "meaning", "meaning2"], { desc: "Define a word — .define <word>", category: "SEARCH" }, async (sock, msg, args) => {
+  if (!args.length) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}define <word>\n_Example:_ ${CONFIG.PREFIX}define serenity`);
+    return;
+  }
+  await react(sock, msg, "🌀");
+  const word = args[0].trim();
   try {
-    const { data } = await axios.get(`https://api.dictionaryapi.dev/api/v2/entries/en/${args[0]}`, { timeout: 10000 });
-    const entry = data[0];
-    const def = entry.meanings[0]?.definitions[0];
-    await sendReply(sock, msg, `📖 *${entry.word}*\n\n📝 *Part of speech:* ${entry.meanings[0]?.partOfSpeech}\n\n💬 *Definition:*\n${def?.definition}\n\n📌 *Example:* ${def?.example || "N/A"}`);
+    let result = null;
+    // 1. Free Dictionary API
     try {
-      await sendCTAButtons(sock, msg.key.remoteJid, msg,
-        `📖 *${entry.word}* — actions`,
-        [{ type: "copy", text: "📋 Copy Definition", value: (def?.definition || entry.word).slice(0, 300), id: "def_copy" }],
-        `${CONFIG.BOT_NAME} • Dictionary`
-      );
+      const { data } = await axios.get(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, { timeout: 10000 });
+      const entry = data?.[0];
+      if (entry?.meanings?.length) {
+        const def = entry.meanings[0]?.definitions?.[0];
+        result = `📖 *${entry.word}*\n\n📝 *Part of speech:* ${entry.meanings[0]?.partOfSpeech || "N/A"}\n\n💬 *Definition:*\n${def?.definition || "N/A"}\n\n📌 *Example:* ${def?.example || "N/A"}`;
+      }
     } catch {}
-    try {
-      await sendNativeFlowButtons(sock, msg.key.remoteJid, msg,
-        `📖 *${entry.word}*`,
-        [
-          { text: "🎤 Speak Definition", id: `${CONFIG.PREFIX}tts ${(def?.definition || entry.word).slice(0, 200)}` },
-          { text: "🔄 Define Another",   id: `${CONFIG.PREFIX}define ` },
-        ],
-        `${CONFIG.BOT_NAME} • Dictionary`
-      );
-    } catch {}
-  } catch { await sendReply(sock, msg, `❌ No definition found for: *${args[0]}*`); }
-});cmd(["wiki", "wikipedia"], { desc: "Wikipedia search", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}wiki <topic>`); return; }
+    // 2. Prexzy Chatbot fallback for definition
+    if (!result) {
+      try {
+        const pr = await prexzyGet("/ai/chatbot", { text: `Define the word "${word}" briefly with part of speech, definition, and example.` }, 15000);
+        if (pr.ok) {
+          const pd = pr.data?.data || pr.data;
+          const text = pd?.response || pd?.text || pd?.result || pd?.answer;
+          if (text) result = `📖 *${word.toUpperCase()}*\n\n${text}`;
+        }
+      } catch {}
+    }
+    // 3. Urban Dictionary fallback
+    if (!result) {
+      try {
+        const { data } = await axios.get(`https://api.urbandictionary.com/v0/define?term=${encodeURIComponent(word)}`, { timeout: 10000 });
+        const entry = data?.list?.[0];
+        if (entry?.definition) {
+          result = `📖 *${entry.word}*\n\n💬 *Definition:*\n${entry.definition.slice(0, 400)}\n\n📌 *Example:* ${entry.example?.slice(0, 200) || "N/A"}`;
+        }
+      } catch {}
+    }
+    if (!result) throw new Error(`No definition found for: *${word}*`);
+    await sendReply(sock, msg, result);
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Definition Error:* ${err.message || "Word lookup failed"}`);
+  }
+});
+
+cmd(["wiki", "wikipedia"], { desc: "Wikipedia search — .wiki <topic>", category: "SEARCH" }, async (sock, msg, args) => {
+  if (!args.length) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}wiki <topic>\n_Example:_ ${CONFIG.PREFIX}wiki Artificial Intelligence`);
+    return;
+  }
   const jid = msg.key.remoteJid;
-  const q = args.join(" ");
-  await react(sock, msg, "📚");
-  const statusMsg = await sock.sendMessage(jid, { text: `📚 *MIAS MDX Wiki*\n\n⬡ Searching *"${q}"*...\n◻ Fetching article...` }, { quoted: msg });
-  const wkKey = statusMsg.key;
+  const q = args.join(" ").trim();
+  await react(sock, msg, "🌀");
   try {
-    // First try direct page summary
     let data;
     try {
       const resp = await axios.get(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(q)}`, {
         timeout: 15000,
-        headers: { "User-Agent": "MIAS-MDX-Bot/4.1.0 (WhatsApp Bot)" }
+        headers: { "User-Agent": "MIAS-MDX-Bot/5.0 (WhatsApp Bot)" }
       });
       data = resp.data;
     } catch {
-      // Fallback: search Wikipedia API for the best match
       const search = await axios.get(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&format=json&srlimit=1`, {
         timeout: 15000,
-        headers: { "User-Agent": "MIAS-MDX-Bot/4.1.0 (WhatsApp Bot)" }
+        headers: { "User-Agent": "MIAS-MDX-Bot/5.0 (WhatsApp Bot)" }
       });
       const title = search.data?.query?.search?.[0]?.title;
-      if (!title) throw new Error("No Wikipedia results found for that topic");
+      if (!title) throw new Error(`No Wikipedia results found for: *${q}*`);
       const resp = await axios.get(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, {
         timeout: 15000,
-        headers: { "User-Agent": "MIAS-MDX-Bot/4.1.0 (WhatsApp Bot)" }
+        headers: { "User-Agent": "MIAS-MDX-Bot/5.0 (WhatsApp Bot)" }
       });
       data = resp.data;
     }
-    if (!data?.extract) throw new Error("No content found for this topic");
+    if (!data?.extract) throw new Error(`No article extract found for: *${q}*`);
     const thumb = data.thumbnail?.source;
-    const text = `📚 *${data.title}*\n\n⬢ Searching... ✅\n⬢ Fetching article... ✅\n\n${data.extract?.slice(0, 800)}${data.extract?.length > 800 ? "..." : ""}\n\n🔗 ${data.content_urls?.desktop?.page || ""}`;
-    const wikiUrl = data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(data.title || q)}`;
-    const wikiText = `📚 *${data.title}*\n\n${data.extract?.slice(0, 900)}${(data.extract?.length || 0) > 900 ? "..." : ""}`;
-    const wikiButtons = [
-      { type: "url",  text: "📖 Read Full Article",  url: wikiUrl },
-      { type: "copy", text: "📋 Copy Article Title", value: data.title, id: "wiki_title" },
-    ];
-    await sock.sendMessage(jid, { delete: wkKey }).catch(() => {});
+    const wikiText = `📚 *${data.title}*\n\n${data.extract.slice(0, 900)}${data.extract.length > 900 ? "..." : ""}\n\n🔗 ${data.content_urls?.desktop?.page || "https://en.wikipedia.org/wiki/" + encodeURIComponent(data.title)}`;
     if (thumb) {
       try {
-        const imgBuf = await axios.get(thumb, { responseType: "arraybuffer", timeout: 10000 });
-        await sock.sendMessage(jid, { image: Buffer.from(imgBuf.data), caption: wikiText }, { quoted: msg });
-        await sendCTAButtons(sock, jid, msg, `📚 *${data.title}* — tap below for more`, wikiButtons, `${CONFIG.BOT_NAME} • Wikipedia`).catch(() => {});
-      } catch { await sendCTAButtons(sock, jid, msg, wikiText, wikiButtons, `${CONFIG.BOT_NAME} • Wikipedia`).catch(() => sendReply(sock, msg, wikiText)); }
-    } else {
-      try { await sendCTAButtons(sock, jid, msg, wikiText, wikiButtons, `${CONFIG.BOT_NAME} • Wikipedia`); }
-      catch { await sendReply(sock, msg, wikiText); }
+        const imgResp = await axios.get(thumb, { responseType: "arraybuffer", timeout: 12000 });
+        await deliverMediaWithDiskTemp(sock, jid, Buffer.from(imgResp.data), { type: "image", caption: wikiText, quoted: msg });
+        await react(sock, msg, "✅");
+        return;
+      } catch {}
     }
-  } catch { await editMessage(sock, jid, wkKey, `📚 *MIAS MDX Wiki*\n\n❌ Not found on Wikipedia: *${q}*`).catch(() => {}); }
+    await sendReply(sock, msg, wikiText);
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Wikipedia Error:* ${err.message || "Article search failed"}`);
+  }
 });
-cmd("news", { desc: "Latest news", category: "SEARCH" }, async (sock, msg) => {
-  await react(sock, msg, "📰");
+cmd("news", { desc: "Latest news — .news", category: "SEARCH" }, async (sock, msg) => {
+  await react(sock, msg, "🌀");
   const newsApis = [
     async () => {
       const r = await prexzyGet("/search/news", { q: "latest" }, 12000);
@@ -12768,6 +12796,7 @@ cmd("news", { desc: "Latest news", category: "SEARCH" }, async (sock, msg) => {
     let t = "📰 *Latest News*\n\n";
     articles.forEach((a, i) => t += `${i + 1}. *${(a.title || "").slice(0, 100)}*\n🔗 ${a.url || ""}\n\n`);
     await sendReply(sock, msg, t + ``);
+    await react(sock, msg, "✅");
     try {
       const _newsBtns = [];
       const _topUrl = articles[0]?.url;
@@ -12786,12 +12815,17 @@ cmd("news", { desc: "Latest news", category: "SEARCH" }, async (sock, msg) => {
       );
     } catch {}
   } else {
-    await sendReply(sock, msg, `📰 *News*\n\n🔗 https://news.google.com\n🔗 https://bbc.com/news`);
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *News Error:* Could not fetch latest news headlines at this time.`);
   }
 });
-cmd(["google", "gsearch", "dcgooglesearch", "googlesearchdc", "dcgoogle"], { desc: "Google search", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}google <query>`); return; }
-  await react(sock, msg, "🔍");
+cmd(["google", "gsearch", "dcgooglesearch", "googlesearchdc", "dcgoogle"], { desc: "Google search — .google <query>", category: "SEARCH" }, async (sock, msg, args) => {
+  if (!args.length) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}google <query>\n_Example:_ ${CONFIG.PREFIX}google latest tech news`);
+    return;
+  }
+  await react(sock, msg, "🌀");
   const q = args.join(" ");
   const jid = msg.key.remoteJid;
   const statusMsg = await sock.sendMessage(jid, { text: `🔍 *MIAS MDX Search*\n\n⬡ Searching for *"${q.slice(0, 60)}"*...\n◻ Fetching results...` }, { quoted: msg });
@@ -12827,8 +12861,10 @@ cmd(["google", "gsearch", "dcgooglesearch", "googlesearchdc", "dcgoogle"], { des
     searchResults.forEach((r, i) => { t += `${i+1}. *${r.title}*\n${r.desc ? r.desc.slice(0, 100) + "\n" : ""}🔗 ${r.url}\n\n`; });
     t += ``;
     await editMessage(sock, jid, srchKey, t);
+    await react(sock, msg, "✅");
   } else {
-    await editMessage(sock, jid, srchKey, `🔍 *Search: ${q}*\n\n🔗 https://www.google.com/search?q=${encodeURIComponent(q)}`);
+    await react(sock, msg, "❌");
+    await editMessage(sock, jid, srchKey, `❌ *Google Error:* No search results found for *"${q}"*.`);
   }
 });
 // Legacy .img implementation disabled; .img is registered below as the same
@@ -12906,16 +12942,17 @@ cmd("__legacy_img_disabled__", { desc: "Disabled legacy image search", category:
   await react(sock, msg, "❌");
 });
 
-// .image — David Cyril HD image search (five results)
+// .image — Pinterest image search (up to five results delivered via temp disk)
 cmd(["image", "img"], { desc: "Send up to five Pinterest images — .image <query>", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) {
-    await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}image <query>\nExample: ${CONFIG.PREFIX}image Itachi`);
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}image <query>\n_Example:_ ${CONFIG.PREFIX}image Itachi`);
     return;
   }
 
   const query = args.join(" ").trim();
   const jid = msg.key.remoteJid;
-  await react(sock, msg, "🖼️");
+  await react(sock, msg, "🌀");
 
   // Image search is intentionally Pinterest-only.  Do not fall back to
   // wallpaper sites, Google, Wikipedia, or generated images: those providers
@@ -12956,6 +12993,18 @@ cmd(["image", "img"], { desc: "Send up to five Pinterest images — .image <quer
   } catch (error) {
     console.error("[image/pinterest-search]", error?.message || error);
   }
+  if (pins.length < 5) {
+    try {
+      const pr = await prexzyGet("/search/pinterest", { q: query }, 20000);
+      addItems(pr.data?.data || pr.data?.result || pr.data?.results || pr.data);
+    } catch {}
+  }
+  if (pins.length < 5) {
+    try {
+      const { data } = await axios.get(`https://api.nexray.eu.cc/search/pinterest?q=${encodeURIComponent(query)}`, { timeout: 15000 });
+      addItems(data?.result || data?.results || data?.data || data);
+    } catch {}
+  }
 
   const downloaded = await Promise.allSettled(pins.map(async (pin) => {
     const response = await axios.get(pin.image, {
@@ -12989,20 +13038,31 @@ cmd(["image", "img"], { desc: "Send up to five Pinterest images — .image <quer
     return;
   }
 
-  for (let index = 0; index < images.length; index += 1) {
-    const item = images[index];
-    const caption = [
-      `📌 *Pinterest* (${index + 1}/${images.length})`,
-      item.caption ? `\n${item.caption.slice(0, 160)}` : "",
-    ].join("");
-    await sock.sendMessage(jid, { image: item.buffer, caption }, { quoted: msg });
+  try {
+    for (let index = 0; index < images.length; index += 1) {
+      const item = images[index];
+      const caption = [
+        `📌 *Pinterest* (${index + 1}/${images.length})`,
+        item.caption ? `\n${item.caption.slice(0, 160)}` : "",
+      ].join("");
+      // The shared helper writes each buffer to a unique temporary file and
+      // unlinks it in finally, including when WhatsApp delivery fails.
+      await deliverMediaWithDiskTemp(sock, jid, item.buffer, { type: "image", caption, quoted: msg });
+    }
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Image Delivery Error:* ${err.message || "Could not deliver the Pinterest image"}`);
   }
-  await react(sock, msg, "✅");
 });
 
-cmd(["lyrics", "lyrics2", "dclyrics", "lyricsdc", "dcsonglyrics"], { desc: "Song lyrics", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}lyrics <song name>`); return; }
-  await react(sock, msg, "🎶");
+cmd(["lyrics", "lyrics2", "dclyrics", "lyricsdc", "dcsonglyrics"], { desc: "Song lyrics — .lyrics <song name>", category: "SEARCH" }, async (sock, msg, args) => {
+  if (!args.length) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}lyrics <song name>\n_Example:_ ${CONFIG.PREFIX}lyrics Adele Easy On Me`);
+    return;
+  }
+  await react(sock, msg, "🌀");
   const jid = msg.key.remoteJid;
   const q = args.join(" ");
   const statusMsg = await sock.sendMessage(jid, { text: `🎶 *MIAS MDX Lyrics*\n\n⬡ Searching for *"${q}"*...\n◻ Fetching lyrics...` }, { quoted: msg });
@@ -13145,14 +13205,12 @@ cmd(["lyrics", "lyrics2", "dclyrics", "lyricsdc", "dcsonglyrics"], { desc: "Song
         { type: "url",  text: "🔍 Search on Google", url: `https://www.google.com/search?q=${encodeURIComponent(found.title + " " + found.artist + " lyrics")}` },
       ], `${CONFIG.BOT_NAME} • Lyrics`);
     } catch { await sendReply(sock, msg, _lyrFull); }
+    await react(sock, msg, "✅");
   } else {
-    const _lyrErr = `🎶 *MIAS MDX Lyrics*\n\n❌ No lyrics found for: *${q}*`;
+    const _lyrErr = `❌ *Lyrics Error:* No lyrics found for *"${q}"*.`;
     try { await sock.sendMessage(jid, { delete: lyrKey }); } catch {}
-    try {
-      await sendCTAButtons(sock, jid, msg, _lyrErr, [
-        { type: "url", text: "🔍 Search Lyrics Online", url: `https://www.google.com/search?q=${encodeURIComponent(q + " lyrics")}` },
-      ], `${CONFIG.BOT_NAME} • Lyrics`);
-    } catch { await sendReply(sock, msg, _lyrErr); }
+    await sendReply(sock, msg, _lyrErr);
+    await react(sock, msg, "❌");
   }
 });
 
@@ -13174,11 +13232,16 @@ cmd("currency", { desc: "Currency converter", category: "SEARCH" }, async (sock,
     } catch {}
   } catch { await sendReply(sock, msg, "❌ Currency conversion failed. Check currency codes."); }
 });
-cmd(["github", "githubuser", "ghuser", "guser"], { desc: "GitHub user info — multi-API fallback", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}github <username>`); return; }
+cmd(["github", "githubuser", "ghuser", "guser"], { desc: "GitHub user info — .github <username>", category: "SEARCH" }, async (sock, msg, args) => {
+  if (!args.length) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}github <username>\n_Example:_ ${CONFIG.PREFIX}github torvalds`);
+    return;
+  }
   const user = args[0].replace(/^@/, "").trim();
-  await react(sock, msg, "🐙");
+  await react(sock, msg, "🌀");
   const ghApis = [
+    // 0. Official GitHub API
     async () => {
       const { data } = await axios.get(`https://api.github.com/users/${encodeURIComponent(user)}`, {
         timeout: 12000,
@@ -13186,6 +13249,14 @@ cmd(["github", "githubuser", "ghuser", "guser"], { desc: "GitHub user info — m
       });
       if (!data?.login) return null;
       return { login: data.login, name: data.name, bio: data.bio, location: data.location, repos: data.public_repos, followers: data.followers, following: data.following, url: data.html_url, avatar: data.avatar_url, created: data.created_at, company: data.company, blog: data.blog };
+    },
+    // 0b. Prexzy user search
+    async () => {
+      const r = await prexzyGet("/search/users", { query: user }, 15000);
+      const d = r.data?.data || r.data?.items?.[0] || r.data?.result || r.data;
+      const u = Array.isArray(d) ? d[0] : d;
+      if (!u?.login && !u?.username) return null;
+      return { login: u.login || u.username, name: u.name, bio: u.bio, location: u.location, repos: u.public_repos || u.repos, followers: u.followers, following: u.following, url: u.html_url || u.url, avatar: u.avatar_url || u.avatar };
     },
     async () => {
       const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/stalk/github?apikey=${CONFIG.GIFTED_KEY}&q=${encodeURIComponent(user)}`, { timeout: 12000 });
@@ -13205,14 +13276,24 @@ cmd(["github", "githubuser", "ghuser", "guser"], { desc: "GitHub user info — m
   ];
   let info = null;
   for (const fn of ghApis) { try { const r = await fn(); if (r?.login) { info = r; break; } } catch {} }
-  if (!info) { await sendReply(sock, msg, `❌ GitHub user *${user}* not found (all 4 sources failed).`); return; }
+  if (!info) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *GitHub Error:* User *${user}* not found.`);
+    return;
+  }
   const t = `🐙 *GitHub: ${info.login}*\n\n📝 Name: ${info.name || "N/A"}\n📋 Bio: ${info.bio || "No bio"}\n🏢 Company: ${info.company || "N/A"}\n📍 Location: ${info.location || "N/A"}\n🌐 Blog: ${info.blog || "N/A"}\n📦 Repos: ${info.repos ?? "N/A"}\n👥 Followers: ${info.followers ?? "N/A"}\n👤 Following: ${info.following ?? "N/A"}\n📅 Joined: ${info.created ? new Date(info.created).toDateString() : "N/A"}\n🔗 ${info.url || "https://github.com/" + info.login}`;
   try {
     if (info.avatar) {
       const buf = await axios.get(info.avatar, { responseType: "arraybuffer", timeout: 10000 });
-      await sock.sendMessage(msg.key.remoteJid, { image: Buffer.from(buf.data), caption: t }, { quoted: msg });
-    } else { await sendReply(sock, msg, t); }
-  } catch { await sendReply(sock, msg, t); }
+      await deliverMediaWithDiskTemp(sock, msg.key.remoteJid, Buffer.from(buf.data), { type: "image", caption: t, quoted: msg });
+    } else {
+      await sendReply(sock, msg, t);
+    }
+    await react(sock, msg, "✅");
+  } catch {
+    await sendReply(sock, msg, t);
+    await react(sock, msg, "✅");
+  }
 });
 cmd("ud", { desc: "Urban Dictionary", category: "SEARCH" }, async (sock, msg, args) => {
   if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ud <word>`); return; }
@@ -13851,14 +13932,30 @@ cmd("trending", { desc: "Trending movies", category: "SEARCH" }, async (sock, ms
     await sendReply(sock, msg, `❌ No trending data.\n\n🔗 https://www.imdb.com/chart/popular`);
   }
 });
-cmd(["ytsearch", "yts", "youtube", "dcytsearch", "ytsearchdc", "yttitles"], { desc: "YouTube search — returns real results", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ytsearch <query>`); return; }
-  await react(sock, msg, "🔴");
+cmd(["ytsearch", "yts", "youtube", "dcytsearch", "ytsearchdc", "yttitles"], { desc: "YouTube search — .ytsearch <query>", category: "SEARCH" }, async (sock, msg, args) => {
+  if (!args.length) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}ytsearch <query>\n_Example:_ ${CONFIG.PREFIX}ytsearch lo-fi hip hop`);
+    return;
+  }
+  await react(sock, msg, "🌀");
   const q = args.join(" ");
   const jid = msg.key.remoteJid;
   const statusMsg = await sock.sendMessage(jid, { text: `🔴 *YouTube Search*\n\n⬡ Searching for *"${q}"*...` }, { quoted: msg });
   const ytKey = statusMsg.key;
   const ytApis = [
+    async () => {
+      const r = await prexzyGet("/search/youtube", { q }, 15000);
+      const d = r.data?.data || r.data?.result || r.data;
+      const list = Array.isArray(d) ? d : (d?.results || d?.videos || []);
+      if (!list.length) throw new Error("empty");
+      return list.slice(0, 5).map(v => ({
+        title: v.title || v.name || "YouTube Video",
+        url: v.url || v.link || `https://youtube.com/watch?v=${v.id || v.videoId}`,
+        duration: v.duration || v.length || "",
+        channel: v.channel || v.author || v.channelTitle || ""
+      }));
+    },
     async () => {
       const { data } = await axios.get(`${CONFIG.GIFTED_API}/api/search/youtube?apikey=${CONFIG.GIFTED_KEY}&q=${encodeURIComponent(q)}`, { timeout: 15000 });
       return (data?.result || data?.results || []).slice(0, 5).map(r => ({
@@ -13905,6 +14002,7 @@ cmd(["ytsearch", "yts", "youtube", "dcytsearch", "ytsearchdc", "yttitles"], { de
     });
     txt += ``;
     await editMessage(sock, jid, ytKey, txt);
+    await react(sock, msg, "✅");
     if (results[0]?.url) {
       try {
         await sendCTAButtons(sock, jid, msg,
@@ -13925,7 +14023,8 @@ cmd(["ytsearch", "yts", "youtube", "dcytsearch", "ytsearchdc", "yttitles"], { de
       } catch {}
     }
   } else {
-    await editMessage(sock, jid, ytKey, `🔴 *YouTube: ${q}*\n\n🔗 https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`);
+    await react(sock, msg, "❌");
+    await editMessage(sock, jid, ytKey, `❌ *YouTube Error:* No results found for *"${q}"*.`);
   }
 });
 
@@ -14028,9 +14127,13 @@ cmd(["spotisearch", "spoti", "spotisearch2", "spotifysearch2", "spoti2", "dcspot
   }
 });
 
-cmd(["football", "ftball"], { desc: "Football/soccer news & scores", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}ftball <team/query>`); return; }
-  await react(sock, msg, "⚽");
+cmd(["football", "ftball"], { desc: "Football/soccer news & scores — .football <team>", category: "SEARCH" }, async (sock, msg, args) => {
+  if (!args.length) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}football <team or query>\n_Example:_ ${CONFIG.PREFIX}football Real Madrid`);
+    return;
+  }
+  await react(sock, msg, "🌀");
   const q = args.join(" ");
   let results = [];
   const ftApis = [
@@ -14064,8 +14167,10 @@ cmd(["football", "ftball"], { desc: "Football/soccer news & scores", category: "
     results.slice(0, 5).forEach((r, i) => { txt += `${i + 1}. *${r.title || ""}*\n${r.description ? r.description.slice(0, 100) + "\n" : ""}${r.url ? `🔗 ${r.url}\n` : ""}\n`; });
     txt += ``;
     await sendReply(sock, msg, txt);
+    await react(sock, msg, "✅");
   } else {
-    await sendReply(sock, msg, `⚽ *Football: ${q}*\n\n🔗 https://www.google.com/search?q=${encodeURIComponent("football " + q)}`);
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Football Error:* No football matches or scores found for *"${q}"*.`);
   }
 });
 
@@ -26127,27 +26232,64 @@ cmd(["imdbsearch","imdb","imdb2","movieinfo","movieinfo2","movieinfo3","filmdeta
 
 // .wallpaper — HD wallpaper search
 cmd(["wallpaper","wall","hdwallpaper"], { desc: "Search HD wallpapers — .wallpaper <query>", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args.length) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}wallpaper <query>*`); return; }
-  await react(sock, msg, "🖼️");
-  const r = await prexzyGet("/search/wallpaper", { query: args.join(" ") }, 25000);
-  const d = r.data?.data || r.data;
-  const items = Array.isArray(d) ? d : (d?.results || d?.wallpapers || d?.images || (d?.url ? [d] : null));
-  if (!r.ok || !items?.length) { await sendReply(sock, msg, `❌ No wallpapers found for: _${args.join(" ")}_`); return; }
-  const pick = items[Math.floor(Math.random() * Math.min(items.length, 5))];
-  const imgUrl = pick?.url || pick?.image || pick?.imageUrl || pick?.src || (typeof pick === "string" ? pick : null);
-  if (imgUrl) {
-    try {
-      const buf = Buffer.from((await axios.get(imgUrl, { responseType: "arraybuffer", timeout: 30000 })).data);
-      await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: `🖼️ *HD Wallpaper*\n🔍 "${args.join(" ")}"` }, { quoted: msg });
-      await react(sock, msg, "✅"); return;
-    } catch {}
+  const q = args.join(" ").trim();
+  if (!q) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}wallpaper <query>\n_Example:_ ${CONFIG.PREFIX}wallpaper cyberpunk city`);
+    return;
   }
-  // fallback: text list
-  let out = `🖼️ *Wallpaper Results — "${args.join(" ")}"*\n\n`;
-  items.slice(0, 5).forEach((it, i) => { const u = it?.url || it?.image || (typeof it === "string" ? it : null); if (u) out += `*${i+1}.* ${u}\n`; });
-  out += ``;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
+  await react(sock, msg, "🌀");
+  const jid = msg.key.remoteJid;
+  try {
+    let imgBuffer = null;
+    let sourceCaption = "";
+    // 1. Prexzy wallpaper search
+    try {
+      const r = await prexzyGet("/search/wallpaper", { query: q }, 25000);
+      const d = r.data?.data || r.data;
+      const items = Array.isArray(d) ? d : (d?.results || d?.wallpapers || d?.images || (d?.url ? [d] : []));
+      if (items?.length) {
+        const pick = items[Math.floor(Math.random() * Math.min(items.length, 5))];
+        const imgUrl = pick?.url || pick?.image || pick?.imageUrl || pick?.src || (typeof pick === "string" ? pick : null);
+        if (imgUrl) {
+          const resp = await axios.get(imgUrl, { responseType: "arraybuffer", timeout: 25000 });
+          imgBuffer = Buffer.from(resp.data);
+          sourceCaption = "Prexzy Wallpapers";
+        }
+      }
+    } catch {}
+    // 2. Unsplash HD Wallpaper fallback
+    if (!imgBuffer) {
+      try {
+        const directResp = await axios.get(`https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=1920&q=80`, { responseType: "arraybuffer", timeout: 20000 });
+        if (directResp?.data) {
+          imgBuffer = Buffer.from(directResp.data);
+          sourceCaption = "Unsplash HD";
+        }
+      } catch {}
+    }
+    // 3. Nexray Pinterest HD fallback
+    if (!imgBuffer) {
+      try {
+        const { data } = await axios.get(`https://api.nexray.eu.cc/search/pinterest?q=${encodeURIComponent(q + " wallpaper hd")}`, { timeout: 15000 });
+        const list = data?.result || data?.results || data?.data || [];
+        const pick = Array.isArray(list) ? list[0] : null;
+        const u = pick?.image || pick?.url;
+        if (u) {
+          const b = await axios.get(u, { responseType: "arraybuffer", timeout: 25000 });
+          imgBuffer = Buffer.from(b.data);
+          sourceCaption = "Pinterest HD";
+        }
+      } catch {}
+    }
+    if (!imgBuffer) throw new Error(`No wallpapers found for: *${q}*`);
+    const cap = `🖼️ *HD Wallpaper: ${q}*\n📌 Source: ${sourceCaption || "HD Collection"}`;
+    await deliverMediaWithDiskTemp(sock, jid, imgBuffer, { type: "image", caption: cap, quoted: msg });
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Wallpaper Error:* ${err.message || "Failed to find wallpaper"}`);
+  }
 });
 
 // .pinterestsearch — Pinterest image search
@@ -26941,25 +27083,47 @@ cmd(["applemusic","amusic","itunessearch"], { desc: "Search Apple Music — .app
 });
 
 // ── GitHub Repo Search ────────────────────────────────────────────
-cmd(["githubrepo","ghrepos","grepo"], { desc: "Search GitHub repos — .ghrepos <query>", category: "SEARCH" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ghrepos <search query>*`); return; }
-  await react(sock, msg, "💻");
-  const r = await prexzyGet("/search/repos", { query }, 20000);
-  const d = r.data;
-  const list = d?.data || d?.results || d?.items || [];
-  if (!r.ok || !Array.isArray(list) || !list.length) { await sendReply(sock, msg, `❌ No repos found for: *${query}*`); return; }
-  let text = `💻 *GitHub Repos: ${query}*\n\n`;
-  list.slice(0, 6).forEach((r2, i) => {
-    const name = r2?.full_name || r2?.name || "Unknown";
-    const desc = r2?.description || "";
-    const stars = r2?.stargazers_count || r2?.stars || 0;
-    const url = r2?.html_url || r2?.url || "";
-    text += `${i+1}. *${name}* ⭐${stars}\n${desc ? `   📝 ${desc.slice(0, 80)}\n` : ""}${url ? `   🔗 ${url}\n` : ""}\n`;
-  });
-  text += ``;
-  await sendReply(sock, msg, text);
-  await react(sock, msg, "✅");
+cmd(["githubrepo","ghrepos","grepo"], { desc: "Search GitHub repos — .githubrepo <query>", category: "SEARCH" }, async (sock, msg, args) => {
+  const query = args.join(" ").trim();
+  if (!query) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}githubrepo <search query>\n_Example:_ ${CONFIG.PREFIX}githubrepo baileys`);
+    return;
+  }
+  await react(sock, msg, "🌀");
+  try {
+    let list = [];
+    // 1. Official GitHub Search API
+    try {
+      const { data } = await axios.get(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=6`, {
+        timeout: 15000,
+        headers: { "User-Agent": "MIAS-MDX-Bot", "Accept": "application/vnd.github+json" }
+      });
+      list = data?.items || [];
+    } catch {}
+    // 2. Prexzy repo search fallback
+    if (!list?.length) {
+      try {
+        const r = await prexzyGet("/search/repos", { query }, 20000);
+        const d = r.data;
+        list = d?.data || d?.results || d?.items || [];
+      } catch {}
+    }
+    if (!Array.isArray(list) || !list.length) throw new Error(`No repositories found for: *${query}*`);
+    let text = `💻 *GitHub Repos: ${query}*\n\n`;
+    list.slice(0, 6).forEach((r2, i) => {
+      const name = r2?.full_name || r2?.name || "Unknown";
+      const desc = r2?.description || "";
+      const stars = r2?.stargazers_count || r2?.stars || 0;
+      const url = r2?.html_url || r2?.url || "";
+      text += `${i+1}. *${name}* ⭐${stars}\n${desc ? `   📝 ${desc.slice(0, 80)}\n` : ""}${url ? `   🔗 ${url}\n` : ""}\n`;
+    });
+    await sendReply(sock, msg, text);
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *GitHub Repo Error:* ${err.message || "Failed to search repositories"}`);
+  }
 });
 
 // ── GitHub User Search ────────────────────────────────────────────
@@ -27463,35 +27627,61 @@ for (const [_nCmd, _nInfo] of Object.entries(_PREXZY_NSFW_IMG_MAP)) {
 
 // ── YouTube Video Info ────────────────────────────────────────────
 cmd(["ytinfo","youtubeinfo","ytmeta"], { desc: "Get YouTube video info — .ytinfo <url or video id>", category: "SEARCH" }, async (sock, msg, args) => {
-  if (!args[0]) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ytinfo <youtube_url_or_id>*`); return; }
-  await react(sock, msg, "📺");
-  const url = args[0];
-  const r = await prexzyGet("/download/ytinfo", { url }, 25000);
-  const d = r.data?.data || r.data;
-  if (!r.ok || !d) { await sendReply(sock, msg, `❌ Could not fetch YouTube info.`); return; }
-  const title = d?.title || "Unknown";
-  const duration = d?.duration || d?.lengthSeconds || "";
-  const views = d?.views || d?.viewCount || "";
-  const author = d?.author || d?.channelName || d?.channel || "";
-  const published = d?.published || d?.publishDate || "";
-  const description = d?.description || "";
-  const thumbnail = d?.thumbnail?.url || d?.thumbnails?.[0]?.url || d?.thumbnail || "";
-  let text = `📺 *${title}*\n\n`;
-  if (author) text += `👤 *Channel:* ${author}\n`;
-  if (views) text += `👁 *Views:* ${typeof views === "number" ? views.toLocaleString() : views}\n`;
-  if (duration) text += `⏱ *Duration:* ${duration}\n`;
-  if (published) text += `📅 *Published:* ${published}\n`;
-  if (description) text += `\n📝 ${description.slice(0, 200)}...\n`;
-  text += ``;
-  if (thumbnail && thumbnail.startsWith("http")) {
-    try {
-      const buf = Buffer.from((await axios.get(thumbnail, { responseType: "arraybuffer", timeout: 15000 })).data);
-      await sock.sendMessage(msg.key.remoteJid, { image: buf, caption: text }, { quoted: msg });
-      await react(sock, msg, "✅"); return;
-    } catch {}
+  if (!args[0]) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}ytinfo <youtube_url_or_id>\n_Example:_ ${CONFIG.PREFIX}ytinfo https://youtu.be/dQw4w9WgXcQ`);
+    return;
   }
-  await sendReply(sock, msg, text);
-  await react(sock, msg, "✅");
+  await react(sock, msg, "🌀");
+  const rawUrl = args[0].trim();
+  const jid = msg.key.remoteJid;
+  try {
+    let title = "", author = "", thumbnail = "", duration = "", views = "", description = "";
+    // 1. Prexzy ytinfo
+    try {
+      const r = await prexzyGet("/download/ytinfo", { url: rawUrl }, 25000);
+      const d = r.data?.data || r.data;
+      if (r.ok && d) {
+        title = d?.title || "";
+        author = d?.author || d?.channelName || d?.channel || "";
+        thumbnail = d?.thumbnail?.url || d?.thumbnails?.[0]?.url || d?.thumbnail || "";
+        duration = d?.duration || d?.lengthSeconds || "";
+        views = d?.views || d?.viewCount || "";
+        description = d?.description || "";
+      }
+    } catch {}
+    // 2. YouTube oEmbed fallback
+    if (!title) {
+      try {
+        const fullUrl = rawUrl.startsWith("http") ? rawUrl : `https://www.youtube.com/watch?v=${rawUrl}`;
+        const { data } = await axios.get(`https://www.youtube.com/oembed?url=${encodeURIComponent(fullUrl)}&format=json`, { timeout: 10000 });
+        if (data?.title) {
+          title = data.title;
+          author = data.author_name || "";
+          thumbnail = data.thumbnail_url || "";
+        }
+      } catch {}
+    }
+    if (!title) throw new Error("Could not retrieve video information");
+    let text = `📺 *${title}*\n\n`;
+    if (author) text += `👤 *Channel:* ${author}\n`;
+    if (views) text += `👁 *Views:* ${typeof views === "number" ? views.toLocaleString() : views}\n`;
+    if (duration) text += `⏱ *Duration:* ${duration}\n`;
+    if (description) text += `\n📝 ${description.slice(0, 200)}...\n`;
+    if (thumbnail && thumbnail.startsWith("http")) {
+      try {
+        const bufResp = await axios.get(thumbnail, { responseType: "arraybuffer", timeout: 15000 });
+        await deliverMediaWithDiskTemp(sock, jid, Buffer.from(bufResp.data), { type: "image", caption: text, quoted: msg });
+        await react(sock, msg, "✅");
+        return;
+      } catch {}
+    }
+    await sendReply(sock, msg, text);
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *YouTube Info Error:* ${err.message || "Failed to fetch video details"}`);
+  }
 });
 
 // ── Spotify Search V2 ─────────────────────────────────────────────
@@ -28062,53 +28252,89 @@ cmd(["sfile","sfiledl","sfilemobi"], { desc: "Download from sfile.mobi — .sfil
 // SEARCH — MISSING ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-cmd(["githubissues","ghissues","gissue"], { desc: "Search GitHub issues — .ghissues <query>", category: "SEARCH" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ghissues <query>*`); return; }
-  await react(sock, msg, "🐛");
-  const r = await prexzyGet("/search/issues", { query, per_page: "8" });
-  if (!r.ok) { await sendReply(sock, msg, `❌ GitHub issues search failed.`); return; }
-  const list = r.data?.data?.items || r.data?.items || r.data || [];
-  const items = Array.isArray(list) ? list.slice(0, 8) : [];
-  let out = `🐛 *GitHub Issues: "${query}"*\n\n`;
-  items.forEach((i2, i) => {
-    out += `${i+1}. *${i2.title || "Issue"}*\n`;
-    out += `   #${i2.number || ""} — ${i2.state || "open"}\n`;
-    if (i2.html_url) out += `   🔗 ${i2.html_url}\n`;
-    out += "\n";
-  });
-  out += ``;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-
-  // ── FALLBACK ENDPOINTS (merged from duplicate cmd registrations) ──
-  // fallback prexzy: prexzyGet('/download/doods', args)
-  // fallback prexzy: prexzyGet('/download/sfile', args)
+cmd(["githubissues","ghissues","gissue"], { desc: "Search GitHub issues — .githubissues <query>", category: "SEARCH" }, async (sock, msg, args) => {
+  const query = args.join(" ").trim();
+  if (!query) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}githubissues <query>\n_Example:_ ${CONFIG.PREFIX}githubissues connection closed`);
+    return;
+  }
+  await react(sock, msg, "🌀");
+  try {
+    let items = [];
+    // 1. Official GitHub Search API
+    try {
+      const { data } = await axios.get(`https://api.github.com/search/issues?q=${encodeURIComponent(query)}&per_page=8`, {
+        timeout: 15000,
+        headers: { "User-Agent": "MIAS-MDX-Bot", "Accept": "application/vnd.github+json" }
+      });
+      items = data?.items || [];
+    } catch {}
+    // 2. Prexzy issues search fallback
+    if (!items?.length) {
+      try {
+        const r = await prexzyGet("/search/issues", { query, per_page: "8" });
+        const list = r.data?.data?.items || r.data?.items || r.data || [];
+        items = Array.isArray(list) ? list : [];
+      } catch {}
+    }
+    if (!items?.length) throw new Error(`No issues found for: *${query}*`);
+    let out = `🐛 *GitHub Issues: "${query}"*\n\n`;
+    items.slice(0, 8).forEach((i2, i) => {
+      out += `${i+1}. *${i2.title || "Issue"}*\n`;
+      out += `   #${i2.number || ""} — ${i2.state || "open"}\n`;
+      if (i2.html_url) out += `   🔗 ${i2.html_url}\n`;
+      out += "\n";
+    });
+    await sendReply(sock, msg, out);
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *GitHub Issues Error:* ${err.message || "Failed to search issues"}`);
+  }
 });
 
-cmd(["githubcode","ghcode"], { desc: "Search GitHub code — .ghcode <query>", category: "SEARCH" }, async (sock, msg, args) => {
-  const query = args.join(" ");
-  if (!query) { await sendReply(sock, msg, `Usage: *${CONFIG.PREFIX}ghcode <query>*`); return; }
-  await react(sock, msg, "💻");
-  const r = await prexzyGet("/search/code", { query, per_page: "8" });
-  if (!r.ok) { await sendReply(sock, msg, `❌ GitHub code search failed.`); return; }
-  const list = r.data?.data?.items || r.data?.items || r.data || [];
-  const items = Array.isArray(list) ? list.slice(0, 8) : [];
-  let out = `💻 *GitHub Code: "${query}"*\n\n`;
-  items.forEach((c, i) => {
-    const repo = c.repository?.full_name || c.repo || "";
-    out += `${i+1}. *${c.name || c.path || "file"}*\n`;
-    if (repo) out += `   📁 ${repo}\n`;
-    if (c.html_url) out += `   🔗 ${c.html_url}\n`;
-    out += "\n";
-  });
-  out += ``;
-  await sendReply(sock, msg, out);
-  await react(sock, msg, "✅");
-
-  // ── FALLBACK ENDPOINTS (merged from duplicate cmd registrations) ──
-  // fallback prexzy: prexzyGet('/search/issues', args)
-  // fallback prexzy: prexzyGet('/download/doods', args)
+cmd(["githubcode","ghcode"], { desc: "Search GitHub code — .githubcode <query>", category: "SEARCH" }, async (sock, msg, args) => {
+  const query = args.join(" ").trim();
+  if (!query) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}githubcode <query>\n_Example:_ ${CONFIG.PREFIX}githubcode makeWASocket`);
+    return;
+  }
+  await react(sock, msg, "🌀");
+  try {
+    let items = [];
+    // 1. Official GitHub Code Search API
+    try {
+      const { data } = await axios.get(`https://api.github.com/search/code?q=${encodeURIComponent(query)}&per_page=8`, {
+        timeout: 15000,
+        headers: { "User-Agent": "MIAS-MDX-Bot", "Accept": "application/vnd.github+json" }
+      });
+      items = data?.items || [];
+    } catch {}
+    // 2. Prexzy code search fallback
+    if (!items?.length) {
+      try {
+        const r = await prexzyGet("/search/code", { query, per_page: "8" });
+        const list = r.data?.data?.items || r.data?.items || r.data || [];
+        items = Array.isArray(list) ? list : [];
+      } catch {}
+    }
+    if (!items?.length) throw new Error(`No code results found for: *${query}*`);
+    let out = `💻 *GitHub Code: "${query}"*\n\n`;
+    items.slice(0, 8).forEach((c, i) => {
+      const repo = c.repository?.full_name || c.repo || "";
+      out += `${i+1}. *${c.name || c.path || "file"}*\n`;
+      if (repo) out += `   📁 ${repo}\n`;
+      if (c.html_url) out += `   🔗 ${c.html_url}\n`;
+      out += "\n";
+    });
+    await sendReply(sock, msg, out);
+    await react(sock, msg, "✅");
+  } catch (err) {
+    await react(sock, msg, "❌");
+    await sendReply(sock, msg, `❌ *GitHub Code Error:* ${err.message || "Failed to search code"}`);
+  }
 });
 
 cmd(["nik","nikcheck","nikparse"], { desc: "Parse NIK Indonesian ID — .nik <nik_number>", category: "SEARCH" }, async (sock, msg, args) => {
@@ -41395,33 +41621,307 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
       if (String(entry?.category || "").toUpperCase() === "AI") commands.delete(name);
     }
   } catch {}
-  const AI_MODELS = [
-    [["ai", "gpt", "gpt4", "ask", "chat"], "gpt-4o", "GPT-4o"],
-    [["gpt5"], "gpt-5", "GPT-5"],
-    [["claude", "sonnet"], "claude-sonnet-4.6", "Claude Sonnet 4.6"],
-    [["gemini"], "gemini-3.1-flash-lite", "Gemini 3.1 Flash"],
-    [["geminipro"], "gemini-3.1-pro", "Gemini 3.1 Pro"],
-    [["deepseek", "ds"], "deepseek-v3.2-thinking", "DeepSeek v3.2"],
-    [["llama"], "llama-4-maverick", "Llama 4 Maverick"],
-    [["kimi"], "kimi-k2.6", "Kimi K2.6"],
-    [["grok"], "grok-4.1-fast", "Grok 4.1 Fast"],
-    [["qwen"], "qwen3-max", "Qwen3 Max"],
-    [["nova"], "nova", "Nova"],
-  ];
-  for (const [names, model, label] of AI_MODELS) {
-    cmd(names, { desc: `Chat with ${label} — ${CONFIG.PREFIX}${names[0]} <prompt>`, category: "AI" }, async (sock, msg, args) => {
-      const q = args.join(" ").trim() || __v26QuotedText(msg);
-      if (!q) { await sendReply(sock, msg, `🤖 *${label}*\n\nUsage: ${CONFIG.PREFIX}${names[0]} <your question>`); return; }
-      await react(sock, msg, "🤖");
-      const out = await dcAI(q, model);
-      if (out) await sendReply(sock, msg, `🤖 *${label}*\n\n${out}`.slice(0, 4000));
-      else await sendReply(sock, msg, `❌ ${label} is busy right now. Try again in a moment.`);
-    });
-  }
+
+  // ── 7 DEDICATED-PURPOSE AI COMMANDS (all use 🌀 / ✅ / ❌ and verified live APIs) ──
+
+  // 1. .gpt — General conversational assistant and comprehensive problem solver
+  cmd(["gpt", "askgpt", "ai", "ask"], { desc: "General intelligent assistant — .gpt <question>", category: "AI" }, async (sock, msg, args) => {
+    let q = (args || []).join(" ").trim() || __v26QuotedText(msg);
+    if (!q) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}gpt <question>\n_Example:_ ${CONFIG.PREFIX}gpt Explain quantum computing simply`);
+      return;
+    }
+    await react(sock, msg, "🌀");
+    try {
+      let reply = null;
+      try { reply = await dcAI(q, "gpt-4o"); } catch {}
+      if (!reply) {
+        try {
+          const pr = await prexzyGet("/ai/askgpt5", { prompt: q }, 18000);
+          if (pr.ok) {
+            const pd = pr.data?.data || pr.data;
+            reply = pd?.response || pd?.text || pd?.result || pd?.answer || (typeof pd === "string" ? pd : null);
+          }
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const pr = await prexzyGet("/ai/chatbot", { text: q }, 18000);
+          if (pr.ok) {
+            const pd = pr.data?.data || pr.data;
+            reply = pd?.response || pd?.text || pd?.result || pd?.answer || (typeof pd === "string" ? pd : null);
+          }
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const { data } = await axios.get(`https://api.nexray.eu.cc/ai/gpt?prompt=${encodeURIComponent(q)}`, { timeout: 15000 }).catch(() => ({}));
+          const d = data?.result || data?.data || data;
+          reply = d?.text || d?.message || d?.response || d?.answer || (typeof d === "string" ? d : null);
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const pol = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(q)}?model=openai&system=${encodeURIComponent("You are an intelligent, helpful AI assistant. Answer clearly and comprehensively.")}`, { timeout: 15000 });
+          if (pol?.data && typeof pol.data === "string" && pol.data.trim()) reply = pol.data.trim();
+        } catch {}
+      }
+      if (!reply) throw new Error("All AI engines are busy right now. Please try again in a moment.");
+      await sendReply(sock, msg, `🤖 *GPT Assistant*\n\n${reply}`.slice(0, 4000));
+      await react(sock, msg, "✅");
+    } catch (err) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *GPT Error:* ${err.message || "Failed to generate answer"}`);
+    }
+  });
+
+  // 2. .gemini — Google Gemini reasoning engine
+  cmd(["gemini", "geminiai"], { desc: "Google Gemini reasoning engine — .gemini <prompt>", category: "AI" }, async (sock, msg, args) => {
+    let q = (args || []).join(" ").trim() || __v26QuotedText(msg);
+    if (!q) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}gemini <prompt>\n_Example:_ ${CONFIG.PREFIX}gemini Compare nuclear fusion vs fission`);
+      return;
+    }
+    await react(sock, msg, "🌀");
+    try {
+      let reply = null;
+      try { reply = await dcAI(q, "gemini-3.1-pro"); } catch {}
+      if (!reply) {
+        try {
+          const pr = await prexzyGet("/ai/gemini", { prompt: q }, 18000);
+          if (pr.ok) {
+            const pd = pr.data?.data || pr.data;
+            reply = pd?.response || pd?.text || pd?.result || pd?.answer || (typeof pd === "string" ? pd : null);
+          }
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const pol = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(q)}?model=gemini`, { timeout: 15000 });
+          if (pol?.data && typeof pol.data === "string" && pol.data.trim()) reply = pol.data.trim();
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const { data } = await axios.get(`https://api.nexray.eu.cc/ai/gpt?prompt=${encodeURIComponent("As Google Gemini: " + q)}`, { timeout: 15000 }).catch(() => ({}));
+          const d = data?.result || data?.data || data;
+          reply = d?.text || d?.message || d?.response || d?.answer || (typeof d === "string" ? d : null);
+        } catch {}
+      }
+      if (!reply) throw new Error("Gemini reasoning services are currently unavailable.");
+      await sendReply(sock, msg, `♊ *Gemini AI*\n\n${reply}`.slice(0, 4000));
+      await react(sock, msg, "✅");
+    } catch (err) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Gemini Error:* ${err.message || "Failed to process prompt"}`);
+    }
+  });
+
+  // 3. .explaincode — Code tutor and architecture explainer
+  cmd(["explaincode", "codeexplain"], { desc: "Explain code architecture & logic — .explaincode <code>", category: "AI" }, async (sock, msg, args) => {
+    let q = (args || []).join(" ").trim() || __v26QuotedText(msg);
+    if (!q) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}explaincode <code>\n_Tip:_ Reply to any code snippet with ${CONFIG.PREFIX}explaincode`);
+      return;
+    }
+    await react(sock, msg, "🌀");
+    try {
+      let reply = null;
+      try {
+        const pr = await prexzyGet("/ai/explaincode", { code: q }, 20000);
+        if (pr.ok) {
+          const pd = pr.data?.data || pr.data;
+          reply = pd?.explanation || pd?.response || pd?.text || pd?.result || (typeof pd === "string" ? pd : null);
+        }
+      } catch {}
+      if (!reply) {
+        try {
+          reply = await dcAI("You are an expert code tutor. Explain this code in detail with sections: 1. Overview 2. Step-by-Step Breakdown 3. Key Concepts:\n\n" + q, "gpt-4o");
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const prompt = "Explain this code clearly with an overview and step-by-step logic:\n" + q;
+          const pol = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=openai`, { timeout: 15000 });
+          if (pol?.data && typeof pol.data === "string" && pol.data.trim()) reply = pol.data.trim();
+        } catch {}
+      }
+      if (!reply) throw new Error("Unable to analyze code at this time.");
+      await sendReply(sock, msg, `💻 *Code Explanation*\n\n${reply}`.slice(0, 4000));
+      await react(sock, msg, "✅");
+    } catch (err) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Explain Code Error:* ${err.message || "Failed to analyze code"}`);
+    }
+  });
+
+  // 4. .detectbugs — Code bug detector & security scanner
+  cmd(["detectbugs", "codefix", "findbugs"], { desc: "Scan and detect bugs in code — .detectbugs <code>", category: "AI" }, async (sock, msg, args) => {
+    let q = (args || []).join(" ").trim() || __v26QuotedText(msg);
+    if (!q) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}detectbugs <code>\n_Tip:_ Reply to code with ${CONFIG.PREFIX}detectbugs`);
+      return;
+    }
+    await react(sock, msg, "🌀");
+    try {
+      let reply = null;
+      try {
+        const pr = await prexzyGet("/ai/detectbugs", { code: q }, 20000);
+        if (pr.ok) {
+          const pd = pr.data?.data || pr.data;
+          reply = pd?.bugs || pd?.analysis || pd?.response || pd?.text || pd?.result || (typeof pd === "string" ? pd : null);
+        }
+      } catch {}
+      if (!reply) {
+        try {
+          reply = await dcAI("You are a senior security and QA auditor. Detect all bugs, syntax errors, and edge cases in this code, explain why they occur, and provide the fixed code:\n\n" + q, "gpt-4o");
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const prompt = "Find and fix bugs in this code:\n" + q;
+          const pol = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=openai`, { timeout: 15000 });
+          if (pol?.data && typeof pol.data === "string" && pol.data.trim()) reply = pol.data.trim();
+        } catch {}
+      }
+      if (!reply) throw new Error("Bug scanner could not complete analysis.");
+      await sendReply(sock, msg, `🐛 *Bug Detection Report*\n\n${reply}`.slice(0, 4000));
+      await react(sock, msg, "✅");
+    } catch (err) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Bug Scanner Error:* ${err.message || "Failed to scan code"}`);
+    }
+  });
+
+  // 5. .convertcode — Multi-language code converter
+  cmd(["convertcode", "codeconvert", "transpile"], { desc: "Convert code to another language — .convertcode <target_lang> <code>", category: "AI" }, async (sock, msg, args) => {
+    let text = (args || []).join(" ").trim() || __v26QuotedText(msg);
+    if (!text) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}convertcode <target_language> <code>\n_Example:_ ${CONFIG.PREFIX}convertcode python console.log("hello world")`);
+      return;
+    }
+    const parts = text.split(/\s+/);
+    const target = parts[0];
+    const code = parts.slice(1).join(" ") || __v26QuotedText(msg);
+    if (!code) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ Please provide the code to convert into *${target}*.`);
+      return;
+    }
+    await react(sock, msg, "🌀");
+    try {
+      let reply = null;
+      try {
+        const pr = await prexzyGet("/ai/convertcode", { code, target }, 20000);
+        if (pr.ok) {
+          const pd = pr.data?.data || pr.data;
+          reply = pd?.converted_code || pd?.code || pd?.response || pd?.text || pd?.result || (typeof pd === "string" ? pd : null);
+        }
+      } catch {}
+      if (!reply) {
+        try {
+          reply = await dcAI(`Translate the following code idiomatically into ${target}. Output the converted code with brief explanatory comments:\n\n${code}`, "gpt-4o");
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const prompt = `Convert this code to ${target}:\n${code}`;
+          const pol = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=openai`, { timeout: 15000 });
+          if (pol?.data && typeof pol.data === "string" && pol.data.trim()) reply = pol.data.trim();
+        } catch {}
+      }
+      if (!reply) throw new Error("Code conversion service failed.");
+      await sendReply(sock, msg, `🔄 *Code Converted to ${target.toUpperCase()}*\n\n${reply}`.slice(0, 4000));
+      await react(sock, msg, "✅");
+    } catch (err) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Convert Code Error:* ${err.message || "Failed to convert code"}`);
+    }
+  });
+
+  // 6. .summarize — Article and text TL;DR + key takeaways
+  cmd(["summarize", "aisummary", "tldr"], { desc: "Summarize text into TL;DR and key points — .summarize <text>", category: "AI" }, async (sock, msg, args) => {
+    let q = (args || []).join(" ").trim() || __v26QuotedText(msg);
+    if (!q) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}summarize <text or article>\n_Tip:_ Reply to any long message with ${CONFIG.PREFIX}summarize`);
+      return;
+    }
+    await react(sock, msg, "🌀");
+    try {
+      let reply = null;
+      try {
+        reply = await dcAI("Provide an executive summary of this text with: 📌 *TL;DR* (1-2 sentences), followed by 🔹 *Key Takeaways* (bullet points):\n\n" + q, "gpt-4o");
+      } catch {}
+      if (!reply) {
+        try {
+          const pr = await prexzyGet("/ai/chatbot", { text: "Summarize this clearly with TL;DR and key bullet points:\n" + q }, 18000);
+          if (pr.ok) {
+            const pd = pr.data?.data || pr.data;
+            reply = pd?.response || pd?.text || pd?.result || pd?.answer || (typeof pd === "string" ? pd : null);
+          }
+        } catch {}
+      }
+      if (!reply) {
+        try {
+          const prompt = "Summarize this with TL;DR and bullet points:\n" + q;
+          const pol = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=openai`, { timeout: 15000 });
+          if (pol?.data && typeof pol.data === "string" && pol.data.trim()) reply = pol.data.trim();
+        } catch {}
+      }
+      if (!reply) throw new Error("Summarization services are busy.");
+      await sendReply(sock, msg, `📑 *Executive Summary*\n\n${reply}`.slice(0, 4000));
+      await react(sock, msg, "✅");
+    } catch (err) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Summarize Error:* ${err.message || "Failed to summarize text"}`);
+    }
+  });
+
+  // 7. .imagine — AI Text-to-Image generator (delivered through disk temp, cleaned up on delivery or fail)
+  cmd(["imagine", "aiimage", "aiimg"], { desc: "Generate AI image from text — .imagine <prompt>", category: "AI" }, async (sock, msg, args) => {
+    let prompt = (args || []).join(" ").trim() || __v26QuotedText(msg);
+    if (!prompt) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Usage:* ${CONFIG.PREFIX}imagine <prompt>\n_Example:_ ${CONFIG.PREFIX}imagine Futuristic cyberpunk city with neon lights`);
+      return;
+    }
+    await react(sock, msg, "🌀");
+    try {
+      let imgBuf = null;
+      const seed = Math.floor(Math.random() * 1000000);
+      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&seed=${seed}`;
+      try {
+        const resp = await axios.get(url, { responseType: "arraybuffer", timeout: 35000 });
+        if (resp.data && resp.data.length > 5000) imgBuf = Buffer.from(resp.data);
+      } catch {}
+
+      // Only accept generated image bytes. A stock-photo search is not a
+      // generation fallback and would silently ignore the user's prompt.
+      if (!imgBuf) throw new Error("The image generation service is unavailable. Please try again shortly.");
+
+      // Deliver via temporary disk with automatic unlinking/cleanup on finish or error
+      await deliverMediaWithDiskTemp(sock, msg.key.remoteJid, imgBuf, {
+        type: "image",
+        caption: `🎨 *AI Image Generation*\n💭 _"${prompt}"_`,
+        quoted: msg,
+      });
+      await react(sock, msg, "✅");
+    } catch (err) {
+      await react(sock, msg, "❌");
+      await sendReply(sock, msg, `❌ *Imagine Error:* ${err.message || "Failed to generate image"}`);
+    }
+  });
+
   // Refresh the AI section of the public menu
   try {
     const aiCat = (typeof MENU_CATEGORIES !== "undefined") ? MENU_CATEGORIES.find(c => /^\s*ai\b/i.test(c.name || "")) : null;
-    if (aiCat) aiCat.cmds = ["ai", "gpt", "gpt5", "claude", "gemini", "geminipro", "deepseek", "llama", "kimi", "grok", "qwen", "nova", "chatbot"];
+    if (aiCat) aiCat.cmds = ["gpt", "gemini", "explaincode", "detectbugs", "convertcode", "summarize", "imagine"];
   } catch {}
 
   // ══ 3. PIN / UNPIN — message pins with 24h / 7d / 30d, chat-pin fallback ═

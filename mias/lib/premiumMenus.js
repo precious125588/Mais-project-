@@ -12,7 +12,7 @@ search-jkt48 search-lirik search-npm search-pinterest search-playstore search-re
 search-scholar search-shopee search-soundcloud search-spotify search-tokopedia
 search-tiktok search-stickerwa search-twitter search-wallpaper search-wikipedia
 search-wiktionary search-youtube search-ytmusic sportsnews spotisearch telegramchan
-tiksearch trending ud trending2 wagroupsearch wallpaper
+tiksearch trending ud trending2 wagroupsearch currency movie
 `.trim().split(/\s+/));
 // "apple music" is an existing display label for the registered applemusic name.
 export const MENU_DISPLAY_LABELS = Object.freeze({ 'apple music': 'applemusic' });
@@ -96,8 +96,11 @@ export const ORIGINAL_PHASE1_QUOTES = Object.freeze([
   'The future improves every time you finish one useful thing today.',
 ]);
 const CATEGORY_ALIASES = { GAME: 'GAMES', STALKER: 'STALK', GROUPS: 'GROUP', TOOL: 'TOOLS', DOWNLOADS: 'DOWNLOAD', DL: 'DOWNLOAD', MAIN: 'INFO', SYSTEM: 'INFO', SETTING: 'SETTINGS' };
-export function normalizeMenuCategory(value) {
+export function normalizeMenuCategory(value, categories = []) {
   const key = String(value || '').trim().toUpperCase().replace(/^CAT_/, '');
+  if (key === 'AI' && Array.isArray(categories) && categories.some(c => String(c?.name || '').toUpperCase() === 'AI')) {
+    return 'AI';
+  }
   return LEGACY_LABELS[key] || CATEGORY_ALIASES[key] || key;
 }
 export function boldCommand(value) {
@@ -134,7 +137,7 @@ export function isMenuEntryVisible(name, entry, context = {}) {
 export function canonicalMenuEntries(commands, aliases = new Map(), categories = [], context = {}) {
   const shared = new Map();
   for (const cat of categories) {
-    const category = normalizeMenuCategory(cat.name);
+    const category = normalizeMenuCategory(cat.name, categories);
     if (REMOVED_MENU_CATEGORIES.has(category)) continue;
     for (const name of cat.cmds || []) {
       const key = String(name).toLowerCase();
@@ -152,10 +155,10 @@ export function canonicalMenuEntries(commands, aliases = new Map(), categories =
     // A deleted canonical must not be advertised by a dangling alias.
     const primary = commands.get(canonical);
     if (!isMenuEntryVisible(canonical, primary, context)) continue;
-    const rawCategory = normalizeMenuCategory(primary.category || shared.get(canonical) || 'MISC');
+    const rawCategory = normalizeMenuCategory(primary.category || shared.get(canonical) || 'MISC', categories);
     const category = REMOVED_MENU_CATEGORIES.has(rawCategory) ? shared.get(canonical) : rawCategory;
     if (!category || REMOVED_MENU_CATEGORIES.has(category)) continue;
-    const definition = categories.find(cat => normalizeMenuCategory(cat.name) === category);
+    const definition = categories.find(cat => normalizeMenuCategory(cat.name, categories) === category);
     if ((definition?.adult || ['ADULT', 'HENTAI', 'NSFW'].includes(category)) && context.owner !== undefined && (!context.adultMode || context.safeMode)) continue;
     if (!unique.has(canonical) || name === canonical) unique.set(canonical, { name: canonical, category, entry: primary });
   }
@@ -166,7 +169,7 @@ export function activeMenuCategories(commands, aliases, categories, context = {}
   const grouped = new Map();
   for (const item of entries) {
     if (!grouped.has(item.category)) {
-      const previous = categories.find(cat => normalizeMenuCategory(cat.name) === item.category);
+      const previous = categories.find(cat => normalizeMenuCategory(cat.name, categories) === item.category);
       grouped.set(item.category, { ...previous, name: item.category, emoji: previous?.emoji || '📁', cmds: [] });
     }
     grouped.get(item.category).cmds.push(item.name);
@@ -176,8 +179,9 @@ export function activeMenuCategories(commands, aliases, categories, context = {}
 export function resolveMenuCategory(args, categories) {
   if (!Array.isArray(args) || !args.length) return null;
   const raw = args.join(' ').trim().toUpperCase().replace(/^CAT_/, '');
-  if (Object.hasOwn(LEGACY_LABELS, raw)) return null;
-  const wanted = normalizeMenuCategory(raw);
+  const hasExplicit = Array.isArray(categories) && categories.some(cat => String(cat?.name || '').toUpperCase() === raw);
+  if (!hasExplicit && Object.hasOwn(LEGACY_LABELS, raw)) return null;
+  const wanted = normalizeMenuCategory(raw, categories);
   if (!wanted || REMOVED_MENU_CATEGORIES.has(wanted)) return null;
   const exact = categories.find(cat => cat.name === wanted);
   if (exact) return exact;
@@ -229,8 +233,8 @@ export function installMenuCategoryPolicy(commands, aliases, categories, legacyN
     return originalSet(name, entry);
   };
   function clean() {
-    for (const cat of categories) if (REMOVED_MENU_CATEGORIES.has(normalizeMenuCategory(cat.name))) removed.add(cat.name);
-    categories.splice(0, categories.length, ...categories.filter(cat => !REMOVED_MENU_CATEGORIES.has(normalizeMenuCategory(cat.name))));
+    for (const cat of categories) if (REMOVED_MENU_CATEGORIES.has(normalizeMenuCategory(cat.name, categories))) removed.add(cat.name);
+    categories.splice(0, categories.length, ...categories.filter(cat => !REMOVED_MENU_CATEGORIES.has(normalizeMenuCategory(cat.name, categories))));
     return { removed: [...removed].sort(), ambiguous: [...ambiguous].sort(), exclusions: menuExclusionReport(commands, aliases) };
   }
   clean();
