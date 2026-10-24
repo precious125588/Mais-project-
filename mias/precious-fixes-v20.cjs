@@ -462,6 +462,8 @@ function install(ctx) {
     ['39.2', 'Anti ViewOnce', 'DISABLE', s => !s.antiViewOnce],
     ['40.1', 'Anti ViewOnce Mode', 'CHAT', s => (s.antiViewOnceMode || 'private') === 'chat'],
     ['40.2', 'Anti ViewOnce Mode', 'PRIVATE', s => (s.antiViewOnceMode || 'private') === 'private'],
+    ['41.1', 'Anti Delete Status', 'ENABLE', s => !!s.antiDStatus],
+    ['41.2', 'Anti Delete Status', 'DISABLE', s => !s.antiDStatus],
   ];
   report.rows = T.length;
 
@@ -493,7 +495,7 @@ function install(ctx) {
 
   const LEGACY_BTN = {
     blockcalls: ['1.1', '1.2'], linkguard: ['2.1', '2.3'], badword: ['3.1', '3.3'],
-    statusmention: ['4.1', '4.4'], callaction: ['5.1', '5.2'], antidelete: ['6.1', '6.2'],
+    statusmention: ['4.1', '4.4'], callaction: ['5.1', '5.2'], antidelete: ['6.1', '6.2'], antidstatus: ['41.1', '41.2'],
     autoreact: ['7.1', '7.2'], autoblock: ['8.1', '8.2'], readmsgs: ['9.1', '9.2'],
     viewstatus: ['10.1', '10.2'], reactstatus: ['11.1', '11.2'], welcome: ['12.1', '12.2'],
     autovoice: ['13.1', '13.2'], autosticker: ['14.1', '14.2'], autoreply: ['15.1', '15.2'],
@@ -560,9 +562,8 @@ function install(ctx) {
     try {
       const sender = ctx.getSender(msg);
       if (msg.key.fromMe) return true;
-      if (typeof isOwner === 'function' && ctx.isOwner(sender)) return true;
-      if (typeof isCreator === 'function' && ctx.isCreator(sender)) return true;
-      if (typeof isSudo === 'function' && ctx.isSudo(sender)) return true;
+      if (typeof ctx.isOwner === 'function' && ctx.isOwner(sender)) return true;
+      if (typeof ctx.isSudo === 'function' && ctx.isSudo(sender)) return true;
     } catch (e) {}
     return false;
   }
@@ -633,6 +634,8 @@ function install(ctx) {
   async function settingsReply(sock, msg, body) {
     const jid = msg && msg.key && msg.key.remoteJid;
     if (!jid) return false;
+    // Owner-global settings must not be authorized by a quoted panel or stale session.
+    if (!currentUserAllowed(sock, msg)) return false;
 
     const raw = extractChoice(msg, body);
     if (!raw) return false;

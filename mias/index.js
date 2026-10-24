@@ -1719,7 +1719,7 @@ function defaultSettings() {
     // autoReact (legacy per-chat key) defaults OFF; message auto-react lives in autoReactMsgs.
     welcome: false, goodbye: false, adminOnly: false, autoReact: false,
     stickerWm: false, antiSpam: false, antiDelete: false,
-    antiViewOnce: false, antiViewOnceMode: "private",
+    antiViewOnce: false, antiViewOnceMode: "private", antiDStatus: false,
     antiEdit: false, antiBad: false, antiSticker: false,
     antiStatus: false, antiRaid: false,
     blockCalls: true, linkGuard: "delete", badWordGuard: "delete",
@@ -2948,6 +2948,33 @@ async function connectToWA(force = false) {
         // exactly that symptom. We now process ONLY live "notify"
         // messages and ignore "append" / "prepend" replays.
         // ────────────────────────────────────────────────────────────────
+        const protectionNow = Math.floor(Date.now() / 1000);
+        if (!ev.type || ev.type === "notify" || ev.type === "append") {
+          for (const msg of ev.messages || []) {
+            if (!msg?.key?.remoteJid) continue;
+            if (msg.messageStubType === 1 || msg.messageStubType === "REVOKE") {
+              sock.ev.emit("messages.update", [{ key: msg.key, update: { messageStubType: 1 } }]);
+              continue;
+            }
+            if (!msg.message || msg.messageStubType != null) continue;
+            const ts = Number(msg.messageTimestamp?.low ?? msg.messageTimestamp ?? 0);
+            if (ev.type === "append" && (!ts || protectionNow - ts > 300)) continue;
+            if (ts && protectionNow - ts > 300) continue;
+            const protocol = unwrapMessageContent(msg.message)?.protocolMessage;
+            if (protocol) {
+              if ((protocol.type === 0 || protocol.type === "REVOKE") && protocol.key?.id) {
+                sock.ev.emit("messages.update", [{ key: { ...protocol.key, remoteJid: protocol.key.remoteJid || msg.key.remoteJid }, update: { messageStubType: 1 } }]);
+              }
+              continue;
+            }
+            try { storeMessage(msg); } catch {}
+            const __voPayload = __extractViewOncePayload(msg.message);
+            if (__voPayload) {
+              const snapshot = { ...msg, key: { ...msg.key }, message: msg.message };
+              __queueViewOnce(sock, snapshot, __voPayload);
+            }
+          }
+        }
         if (ev.type && ev.type !== "notify") { __replyTrace({ key: { fromMe: (ev.messages || []).some((x) => x?.key?.fromMe) } }, "upsert-" + ev.type); return; }
 
         const msgs = ev.messages || [];
@@ -3062,15 +3089,8 @@ async function connectToWA(force = false) {
             }
           } catch {}
 
-          // ── Anti-ViewOnce capture ─────────────────────────────────────────────
-          // normalizeMessage() below strips the viewOnce envelope, so the payload
-          // must be read from the raw message here. Capture is fire-and-forget so
-          // command latency is unaffected, and it runs before the private-mode filter
-          // so view-once media is still captured while the bot is silenced for others.
-          try {
-            const __voPayload = __extractViewOncePayload(msg.message);
-            if (__voPayload) handleViewOnce(sock, msg, __voPayload).catch(() => {});
-          } catch {}
+          // Anti-ViewOnce is already queued at raw ingress, before flood/private
+          // gates and before normalization strips the view-once envelope.
 
           try { normalizeMessage(msg); } catch {}
 
@@ -4470,8 +4490,8 @@ END:VCARD`;
     });
 
     // ── v15: ANTI-DELETE + ANTI-EDIT listener ──
-    sock.ev.on("messages.update", async (updates) => {
-      if (isBotPrivateModeActive()) return;
+    const deletedDelivered = new Set();
+    const handleProtectionUpdates = async (updates) => {
       try {
         for (const upd of updates || []) {
           const key = upd?.key;
@@ -4493,7 +4513,8 @@ END:VCARD`;
             const globalAntiEdit = !!sOwner?.antiEdit && matchesScopeValue(sOwner?.antiEditScope || "all", remoteJid);
             if (!(localAntiEdit || globalAntiEdit)) continue;
             if (key.fromMe) continue;
-            const original = _msgRetryStore.get(key.id);
+            const original = _msgRetryStore.get(`${remoteJid}|${key.id}`) || _msgRetryStore.get(key.id);
+            if (original?._jid && original._jid !== remoteJid) continue;
             const oldText =
               original?.conversation ||
               original?.extendedTextMessage?.text ||
@@ -4510,7 +4531,7 @@ END:VCARD`;
               let _aiedGroupName = "";
               if (_aiedIsGroup) { try { const _aiedMeta = _groupMetaCache.get(remoteJid) || await sock.groupMetadata(remoteJid).catch(() => null); _aiedGroupName = _aiedMeta?.subject || ""; } catch {} }
               const _aiedAuthorNum = (author || "").split("@")[0];
-              const _aiedPushName = cached?._pushName || "";
+              const _aiedPushName = original?._pushName || "";
               const _aiedWhen = new Date().toLocaleString("en-GB", { hour12: true });
               await sock.sendMessage(sendTo, {
                 text: `✏️ *Anti-Edit*
@@ -4526,33 +4547,25 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
             continue;
           }
 
-          // Detect DELETE: update.update.messageStubType === REVOKE (68)
+          // Detect DELETE: Baileys WAMessageStubType.REVOKE is 1 (68 is OVERSIZED).
           const stubType = upd?.update?.messageStubType;
-          const isRevoke = stubType === 68 || stubType === "REVOKE" ||
-                           upd?.update?.message === null;
+          const isRevoke = stubType === 1 || stubType === "REVOKE" ||
+                           upd?.update?.message?.protocolMessage?.type === 0;
+          // A null payload alone is not proof of a revoke (also used for sync updates).
           if (!isRevoke) continue;
 
           const sChat = getSettings(remoteJid);
           const sOwner = getSettings(ownerJid);
-          // v9: hard kill-switch — when owner ran `.antidelete off`, ALL
-          // antidelete activity stops regardless of leftover per-chat flags
-          // (was leaking deleted-message reposts after disable).
-          if (sOwner?.antiDeleteForceOff) {
-            try { console.log("[antidelete] suppressed (force-off) for", remoteJid); } catch {}
-            continue;
-          }
-          const localAntiDelete = !!sChat?.antiDelete;
-          const globalAntiDelete = !!sOwner?.antiDelete && matchesScopeValue(sOwner?.antiDelScope || "all", remoteJid);
-          if (!(localAntiDelete || globalAntiDelete)) continue;
+          const isStatus = remoteJid === "status@broadcast";
+          if (isStatus ? !sOwner?.antiDStatus : sOwner?.antiDeleteForceOff) continue;
+          const localAntiDelete = !isStatus && !!sChat?.antiDelete;
+          const globalAntiDelete = !isStatus && !!sOwner?.antiDelete && matchesScopeValue(sOwner?.antiDelScope || "all", remoteJid);
+          if (!isStatus && !(localAntiDelete || globalAntiDelete)) continue;
           if (key.fromMe) continue;
-          // For status@broadcast, check antidstatus setting specifically
-          const _sOwner2 = getSettings(ownerJid);
-          if (remoteJid === "status@broadcast") {
-            if (!_sOwner2?.antiDStatus) continue;
-          }
-
-          const cached = _msgRetryStore.get(key.id);
-          if (!cached) continue;
+          const deleteId = `${remoteJid}|${key.id}`;
+          if (deletedDelivered.has(deleteId)) continue;
+          const cached = _msgRetryStore.get(`${remoteJid}|${key.id}`) || _msgRetryStore.get(key.id);
+          if (!cached || (cached._jid && cached._jid !== remoteJid) || cached._fromMe) continue;
           const author = cached._participant || key.participant || remoteJid;
           const sendTo = localAntiDelete ? remoteJid : ownerJid;
 
@@ -4656,6 +4669,8 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
                 mentions: author ? [author] : [],
               });
             }
+            deletedDelivered.add(deleteId);
+            if (deletedDelivered.size > 3000) deletedDelivered.delete(deletedDelivered.values().next().value);
           } catch (e) {
             console.error("[anti-delete send]", e?.message);
             try {
@@ -4664,7 +4679,15 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
           }
         }
       } catch (e) { console.error("messages.update handler error:", e?.message); }
-    });
+    };
+    let protectionUpdates = Promise.resolve();
+    const queueProtectionUpdates = updates => {
+      protectionUpdates = protectionUpdates.then(() => handleProtectionUpdates(updates)).catch(err => console.error("[protection-update]", err?.message || err));
+      return protectionUpdates;
+    };
+    sock.ev.on("messages.update", queueProtectionUpdates);
+    // messages.delete is local delete-for-me/app-state sync in Baileys,
+    // NOT a revoke. Only confirmed protocol/update revokes are restored.
 
     // ── GROUP PARTICIPANTS UPDATE: welcome/goodbye/antidemote/antipromote/antiraid ──
     sock.ev.on("group-participants.update", async (event) => {
@@ -4680,7 +4703,7 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
           // patches _groupMetaCache instantly; using sock.groupMetadata() directly
           // here could return stale WA-server data before the delayed live refresh
           // corrects it. Fall back to live fetch if cache is empty.
-          meta = _groupMetaCache.get(gid) || await sock.groupMetadata(gid).catch(() => null);
+          meta = _groupMetaCache.get(gid) || (action === "demote" ? null : await sock.groupMetadata(gid).catch(() => null));
           if (meta && !_groupMetaCache.has(gid)) _groupMetaCache.set(gid, meta);
         } catch {}
         const groupName = meta?.subject || gid;
@@ -4822,34 +4845,44 @@ ${_aiedIsGroup ? `📢 *Group:* ${_aiedGroupName || remoteJid}
             }
           }
 
-          // ── Bot self-protection: ALWAYS re-promote if bot itself is demoted ──
+          // Restore only when WhatsApp grants permission; never report a rejected promotion as success.
           if (action === "demote") {
-            const _botNum = _cleanNum(sock.user?.id || "");
-            const _demotedNum = _cleanNum(pJid);
-            if (_botNum && _demotedNum === _botNum) {
-              try {
-                const _botJidFull = sock.user?.id?.replace(/:.*@/, "@") || (pJid);
-                await sock.groupParticipantsUpdate(gid, [_botJidFull], "promote");
-                await sock.sendMessage(gid, {
-                  text: `🛡️ Nice try! You cannot demote me. I have re-promoted myself. 😏`,
-                });
-              } catch {}
-            }
-          }
-
-          // ── Anti-Demote (auto-promote demoted admins back) ──────────────────
-          if (action === "demote" && s?.antiDemote) {
-            const _botNum2 = _cleanNum(sock.user?.id || "");
-            const _pNum2 = _cleanNum(pJid);
-            // Don't double-promote bot — already handled above
-            if (_pNum2 !== _botNum2) {
-              try {
-                await sock.groupParticipantsUpdate(gid, [pJid], "promote");
-                await sock.sendMessage(gid, {
-                  text: `🛡️ *Anti-Demote* — @${num} was auto-promoted back. Demotion blocked.`,
-                  mentions: [pJid],
-                });
-              } catch {}
+            const normalizeIdentity = value => {
+              const jid = typeof resolveLid === "function" ? (resolveLid(value) || value) : value;
+              return String(jid || "").replace(/:\d+(?=@)/, "");
+            };
+            const selfIds = [sock.user?.id, sock.user?.lid, _botJid].filter(Boolean).map(normalizeIdentity);
+            const isSelf = selfIds.includes(normalizeIdentity(pJidRaw)) || selfIds.includes(normalizeIdentity(pJid));
+            const actorRaw = _toJid(event.authorPn || event.author || event.actor || "");
+            const actor = normalizeIdentity(actorRaw);
+            // Bot-originated administrative changes are intentional, not attacks.
+            if (actor && selfIds.includes(actor)) return;
+            if (!isSelf && !s?.antiDemote) return;
+            const restoreKey = `${gid}|${normalizeIdentity(pJid)}`;
+            const restores = sock.__demoteRestores ||= new Map();
+            const prev = restores.get(restoreKey);
+            if (prev && Date.now() - prev < 5000) return;
+            restores.set(restoreKey, Date.now());
+            if (restores.size > 1000) restores.delete(restores.keys().next().value);
+            const tag = actor ? `\n@${actor.split("@")[0]} ` : "";
+            try {
+              // No artificial delay: request restoration immediately on the event.
+              const result = await sock.groupParticipantsUpdate(gid, [pJidRaw], "promote");
+              const ok = Array.isArray(result) && result.some(row => String(row?.status) === "200");
+              if (!ok) throw new Error("WhatsApp did not authorize admin restoration");
+              _groupMetaCache.delete(gid);
+              await sock.sendMessage(gid, {
+                text: isSelf
+                  ? `🛡️ Nice try! You cannot demote me. I have re-promoted myself. 😏${tag}`
+                  : `🛡️ *Anti-Demote* — @${num} was auto-promoted back. Demotion blocked.${tag}`,
+                mentions: [...new Set([pJid, actor].filter(Boolean))],
+              }).catch(err => console.error("[anti-demote] restored but notification failed:", err?.message || err));
+            } catch (err) {
+              console.error("[anti-demote] restoration failed:", err?.message || err);
+              await sock.sendMessage(gid, {
+                text: `🛡️ *Anti-Demote* — ${isSelf ? "I was demoted" : `@${num} was demoted`}${actor ? ` by @${actor.split("@")[0]}` : ""}. WhatsApp rejected restoration; a current group admin must promote ${isSelf ? "me" : "them"} back.`,
+                mentions: [...new Set([pJid, actor].filter(Boolean))],
+              }).catch(() => {});
             }
           }
         }));
@@ -5242,13 +5275,14 @@ function _isStatusQuoteMsg(msg) {
 // Group protections are not bot replies and are not affected here.
 function _miasPrivateBlocks(msg, cmdName = "") {
   try {
-    if (!msg?.key || msg.key.fromMe) return false;
+    if (!msg?.key?.remoteJid) return true;
+    if (msg.key.fromMe) return false;
     const sender = getSender(msg);
     if (isOwner(sender) || (typeof isSudo === "function" && isSudoIn(sender, msg.key.remoteJid))) return false;
     const c = String(cmdName || "").toLowerCase();
     if (c === "aza" || c === "send") return false;
     return !isCommandAllowedInContext(msg, false, false);
-  } catch { return false; }
+  } catch { return true; }
 }
 // ==GUARD-GATE-END==
 function shouldSilenceForPrivateMode(msg) {
@@ -7030,12 +7064,12 @@ const processedMessages = new Set();
 const _msgRetryStore = new Map();
 function storeMessage(msg) {
   if (msg?.key?.id && msg?.message) {
-    let stored = null;
-    try {
-      stored = JSON.parse(JSON.stringify(unwrapMessageContent(msg.message) || msg.message));
-    } catch {
-      stored = unwrapMessageContent(msg.message) || msg.message;
-    }
+    const content = unwrapMessageContent(msg.message) || msg.message;
+    if (content?.protocolMessage || content?.editedMessage) return;
+    const scopedId = `${msg.key.remoteJid || ""}|${msg.key.id}`;
+    if (_msgRetryStore.has(scopedId)) return;
+    // Clone the envelope, not JSON: mediaKey/file hashes must remain Uint8Array.
+    const stored = { ...content };
     if (!stored || typeof stored !== "object") return;
     stored._jid = msg.key.remoteJid;
     stored._fromMe = !!msg.key.fromMe;
@@ -7044,23 +7078,60 @@ function storeMessage(msg) {
     stored._pushName = msg.pushName || msg.verifiedBizName || "";
     const ts = msg.messageTimestamp?.low || msg.messageTimestamp || Math.floor(Date.now() / 1000);
     stored._ts = Number(ts) * 1000;
-    _msgRetryStore.set(msg.key.id, stored);
-    if (_msgRetryStore.size > 3000) {
+    _msgRetryStore.set(scopedId, stored);
+    _msgRetryStore.set(msg.key.id, stored); // Baileys retry callback compatibility
+    if (_msgRetryStore.size > 6000) {
       const first = _msgRetryStore.keys().next().value;
+      const evicted = _msgRetryStore.get(first);
       _msgRetryStore.delete(first);
+      const partner = first.includes("|") ? first.slice(first.lastIndexOf("|") + 1) : `${evicted?._jid || ""}|${first}`;
+      if (_msgRetryStore.get(partner) === evicted) _msgRetryStore.delete(partner);
     }
   }
 }
 async function downloadStoredMediaBuffer(mediaNode, type) {
-  const stream = await downloadContentFromMessage(mediaNode, type);
-  let buf = Buffer.from([]);
-  for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-  return buf;
+  const signal = AbortSignal.timeout(30000);
+  const stream = await downloadContentFromMessage(mediaNode, type, { options: { signal } });
+  const chunks = [];
+  let size = 0;
+  const abort = () => stream.destroy?.(new Error("Protection media download timed out"));
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    if (signal.aborted) throw new Error("Protection media download timed out");
+    for await (const chunk of stream) {
+      size += chunk.length;
+      if (size > 128 * 1024 * 1024) throw new Error("Protection media exceeds the 128 MiB memory limit");
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks, size);
+  } finally {
+    signal.removeEventListener("abort", abort);
+    if (!stream.readableEnded) stream.destroy?.();
+  }
 }
 
 // ── Anti-ViewOnce (Stealth / Chat Reveal) Handler ──────────────────────
 // Find the view-once payload (the object holding imageMessage / videoMessage / audioMessage)
 // inside a raw incoming message. Returns null for anything that is not view-once media.
+const __voQueues = new WeakMap();
+function __queueViewOnce(sock, msg, payload) {
+  let q = __voQueues.get(sock);
+  if (!q) { q = { active: 0, pending: [], keys: new Set() }; __voQueues.set(sock, q); }
+  const key = `${msg.key?.remoteJid || ""}|${msg.key?.participant || ""}|${msg.key?.id || ""}`;
+  if (q.keys.has(key)) return;
+  if (q.pending.length >= 256) { console.warn("[antivo] capture queue full; redelivery can retry", key); return; }
+  q.keys.add(key);
+  q.pending.push({ msg, payload, key });
+  const drain = () => {
+    while (q.active < 4 && q.pending.length) {
+      const item = q.pending.shift(); q.active++;
+      handleViewOnce(sock, item.msg, item.payload).catch(err => console.error("[antivo]", err?.message || err)).finally(() => {
+        q.active--; q.keys.delete(item.key); drain();
+      });
+    }
+  };
+  drain();
+}
 const __VO_MEDIA_KEYS = ["imageMessage", "videoMessage", "audioMessage"];
 function __extractViewOncePayload(message, depth = 0) {
   if (!message || typeof message !== "object" || depth > 6) return null;
@@ -7092,6 +7163,10 @@ async function __voTrackSend(pending) {
   return sent;
 }
 async function handleViewOnce(sock, msg, voPayload = null) {
+  let captureKey = "";
+  let delivered = false;
+  let reserved = false;
+  const state = sock.__voCaptureState ||= { pending: new Set(), done: new Set() };
   try {
     if (!msg || (!msg.message && !voPayload) || msg.__voHandled) return;
     if (msg.key && msg.key.fromMe && (globalThis.__miasBotViewOnceIds || new Set()).has(msg.key.id)) return;
@@ -7104,15 +7179,13 @@ async function handleViewOnce(sock, msg, voPayload = null) {
     const isEnabled = !!(sOwner?.antiViewOnce || sChat?.antiViewOnce);
     if (!isEnabled) return;
 
-    // Same message id twice (redelivery) must not capture or send twice.
-    const _voMsgId = msg.key?.id || "";
+    // Reserve while in flight; commit ONLY after successful delivery.
+    captureKey = `${remoteJid}|${msg.key?.participant || ""}|${msg.key?.id || ""}`;
+    if (state.done.has(captureKey) || state.pending.has(captureKey)) return;
+    state.pending.add(captureKey);
+    reserved = true;
+    // Retained for diagnostics; socket-local state owns duplicate suppression.
     globalThis.__voCapturedIds ||= new Set();
-    if (_voMsgId) {
-      if (globalThis.__voCapturedIds.has(_voMsgId)) return;
-      globalThis.__voCapturedIds.add(_voMsgId);
-      if (globalThis.__voCapturedIds.size > 3000) globalThis.__voCapturedIds.clear();
-    }
-    msg.__voHandled = true;
 
     // Unwrap to find the viewOnce payload
     let vo = voPayload || msg.message;
@@ -7135,42 +7208,68 @@ async function handleViewOnce(sock, msg, voPayload = null) {
     if (!img && !vid && !aud) return;
 
     // Mode: "chat" (send revealed media in current chat) or "private" (send to owner DM)
-    const mode = String(sOwner?.antiViewOnceMode || sChat?.antiViewOnceMode || "private").toLowerCase().trim();
+    const mode = String((sChat?.antiViewOnce ? sChat.antiViewOnceMode : sOwner?.antiViewOnceMode) || "private").toLowerCase().trim();
     const isChatMode = mode === "chat";
     const targetJid = isChatMode ? remoteJid : ownerJid;
     if (!targetJid) return;
 
-    const sender = typeof resolveLid === "function"
-      ? resolveLid(msg.key?.participant || msg.participant || msg.key?.remoteJid || "")
-      : (msg.key?.participant || msg.participant || msg.key?.remoteJid || "");
-    const senderNum = sender.replace(/[^0-9]/g, "");
-    const pushName = msg.pushName || msg.verifiedBizName || senderNum || "User";
-    const chatTitle = remoteJid.endsWith("@g.us") ? "Group" : "Private Chat";
-    const originalCaption = img?.caption || vid?.caption || "";
-
-    let caption = "";
-    if (isChatMode) {
-      caption = `👁️ *Anti-ViewOnce (Revealed)*
-👤 *From:* @${senderNum} (${pushName})${originalCaption ? `
-📝 *Caption:* ${originalCaption}` : ""}`;
-    } else {
-      caption = `👁️ *Anti-ViewOnce Captured*
-👤 *Sender:* @${senderNum} (${pushName})
-📍 *Chat:* ${chatTitle} (${remoteJid})${originalCaption ? `
-📝 *Caption:* ${originalCaption}` : ""}`;
+    const rawSender = msg.key?.participantAlt || msg.key?.participant || msg.participant
+      || (msg.key?.fromMe ? sock.user?.id : msg.key?.remoteJid) || "";
+    const sender = (typeof resolveLid === "function" ? resolveLid(rawSender) : rawSender) || rawSender;
+    const senderNum = String(sender).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+    // Resolve before delivery; an inbound push name is already the sender's own display name.
+    const pushedName = String(msg.pushName || msg.verifiedBizName || "").trim();
+    let pushName = pushedName || pushNameCache.get(senderNum) || "";
+    if (!pushName && typeof getDisplayName === "function") {
+      let timer;
+      try {
+        pushName = await Promise.race([
+          getDisplayName(sock, sender, remoteJid.endsWith("@g.us") ? remoteJid : null),
+          new Promise(resolve => { timer = setTimeout(() => resolve(""), 2500); })
+        ]);
+      } catch {} finally { clearTimeout(timer); }
     }
+    pushName = String(pushName || senderNum || "Unknown sender").replace(/[\r\n]/g, " ");
+    if (pushedName && senderNum) pushNameCache.set(senderNum, pushedName);
+    const chatTitle = remoteJid.endsWith("@g.us") ? "Group" : remoteJid === "status@broadcast" ? "Status" : "Private Chat";
+    const originalCaption = img?.caption || vid?.caption || "";
+    const caption = `*Anti-ViewOnce Captured*\n\n*Sender:* @${senderNum || "unknown"} (${pushName})\n\n*Chat:* ${chatTitle}${originalCaption ? `\n\n*Caption:* ${originalCaption}` : ""}`;
 
     let buf = null;
     let mediaType = "";
+    const captureMedia = async (node, kind) => {
+      let lastError;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const result = await downloadStoredMediaBuffer(node, kind);
+          if (!result?.length) throw new Error("Empty media download");
+          return result;
+        } catch (err) {
+          lastError = err;
+          if (attempt < 2 && typeof sock.updateMediaMessage === "function") {
+            let timer;
+            try {
+              const refreshed = await Promise.race([
+                sock.updateMediaMessage(msg),
+                new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Media refresh timed out")), 5000); })
+              ]);
+              const fresh = __extractViewOncePayload(refreshed?.message || msg.message);
+              node = fresh?.[`${kind}Message`] || node;
+            } catch {} finally { clearTimeout(timer); }
+          }
+        }
+      }
+      throw lastError;
+    };
     if (img) {
       mediaType = "image";
-      buf = await downloadStoredMediaBuffer(img, "image").catch((e) => { console.log("[antivo] image download failed:", e?.message || e); return null; });
+      buf = await captureMedia(img, "image").catch((e) => { console.log("[antivo] image download failed:", e?.message || e); return null; });
     } else if (vid) {
       mediaType = "video";
-      buf = await downloadStoredMediaBuffer(vid, "video").catch((e) => { console.log("[antivo] video download failed:", e?.message || e); return null; });
+      buf = await captureMedia(vid, "video").catch((e) => { console.log("[antivo] video download failed:", e?.message || e); return null; });
     } else if (aud) {
       mediaType = "audio";
-      buf = await downloadStoredMediaBuffer(aud, "audio").catch((e) => { console.log("[antivo] audio download failed:", e?.message || e); return null; });
+      buf = await captureMedia(aud, "audio").catch((e) => { console.log("[antivo] audio download failed:", e?.message || e); return null; });
     }
 
     if (!buf || !buf.length) {
@@ -7183,13 +7282,13 @@ async function handleViewOnce(sock, msg, voPayload = null) {
     if (mediaType === "image") {
       await sock.sendMessage(targetJid, {
         image: buf,
-        caption: typeof withJustXFooter === "function" ? withJustXFooter(caption) : caption,
+        caption,
         mentions
       }, { quoted: isChatMode ? msg : undefined });
     } else if (mediaType === "video") {
       await sock.sendMessage(targetJid, {
         video: buf,
-        caption: typeof withJustXFooter === "function" ? withJustXFooter(caption) : caption,
+        caption,
         mentions
       }, { quoted: isChatMode ? msg : undefined });
     } else if (mediaType === "audio") {
@@ -7204,6 +7303,12 @@ async function handleViewOnce(sock, msg, voPayload = null) {
       }
     }
 
+    delivered = true;
+    msg.__voHandled = true;
+    state.done.add(captureKey);
+    globalThis.__voCapturedIds.add(captureKey);
+    if (state.done.size > 3000) state.done.delete(state.done.values().next().value);
+    if (globalThis.__voCapturedIds.size > 3000) globalThis.__voCapturedIds.delete(globalThis.__voCapturedIds.values().next().value);
     if (sOwner?.avoReactEmoji) {
       try { await react(sock, msg, sOwner.avoReactEmoji); } catch {}
     }
@@ -7213,6 +7318,9 @@ async function handleViewOnce(sock, msg, voPayload = null) {
       const _ownerJidErr = (typeof getOwnerJid === "function" ? getOwnerJid() : "") || ((CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net");
       await sock.sendMessage(_ownerJidErr, { text: `⚠️ Anti-ViewOnce couldn't capture that view-once media.\nReason: ${String(err?.message || err).slice(0, 200)}` });
     } catch {}
+  } finally {
+    if (reserved) state.pending.delete(captureKey);
+    if (reserved && !delivered && msg) delete msg.__voHandled;
   }
 }
 function rememberMessage(msg) {
@@ -9373,6 +9481,11 @@ function buildSettingsMenu(jid) {
 ┃ 40.2 ᴘʀɪᴠᴀᴛᴇ  ${(s.antiViewOnceMode || "private") === "private" ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
+╭━━❮ *Anti Delete Status* ❯━━╮
+┃ 41.1 ᴇɴᴀʙʟᴇ  ${s.antiDStatus ? "✅" : ""}
+┃ 41.2 ᴅɪsᴀʙʟᴇ  ${!s.antiDStatus ? "✅" : ""}
+╰━━━━━━━━━━━╯
+
 _Reply: *<section>.<option>* — e.g. *1.1* or *7.2*_
 _Reply *0* to close settings_`;
 }
@@ -9393,8 +9506,8 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "4.4": s => { s.statusMention = "false"; return "❌ Status Mention: OFF"; },
   "5.1": s => { s.callAction = "cut"; return "✅ Call Action: CUT"; },
   "5.2": s => { s.callAction = "block"; return "✅ Call Action: BLOCK"; },
-  "6.1": s => { s.antiDelete = true; return "{ antidelete on }"; },
-  "6.2": s => { s.antiDelete = false; return "{ antidelete off }"; },
+  "6.1": s => { s.antiDelete = true; s.antiDeleteForceOff = false; return "{ antidelete on }"; },
+  "6.2": s => { s.antiDelete = false; s.antiDeleteForceOff = true; return "{ antidelete off }"; },
   "7.1": s => { s.autoReactMsgs = true; return "{ auto react on }"; },
   "7.2": s => { s.autoReactMsgs = false; return "{ auto react off }"; },
   "7.3": s => { s.cmdReact = true; return "✅ Command Reactions: ON"; },
@@ -9482,6 +9595,8 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "39.4": s => { s.antiViewOnceMode = "private"; return "✅ Anti-ViewOnce Mode: PRIVATE (sends revealed media to owner DM)"; },
   "40.1": s => { s.antiViewOnceMode = "chat"; return "✅ Anti-ViewOnce Mode: CHAT (sends revealed media directly in chat)"; },
   "40.2": s => { s.antiViewOnceMode = "private"; return "✅ Anti-ViewOnce Mode: PRIVATE (sends revealed media to owner DM)"; },
+  "41.1": s => { s.antiDStatus = true; return "✅ Anti-Delete Status: ENABLED"; },
+  "41.2": s => { s.antiDStatus = false; return "❌ Anti-Delete Status: DISABLED"; },
 };
 
 // ── v38: PERSISTENCE ──────────────────────────────────────────────────────
@@ -9516,6 +9631,9 @@ function normalizeSettingsChoice(value) {
 
 async function handleSettingsNumericReply(sock, msg, body) {
   const jid = msg?.key?.remoteJid;
+  if (!jid) return false;
+  const settingsSender = getSender(msg);
+  if (!(msg.key.fromMe || isOwner(settingsSender) || (typeof isSudo === "function" && isSudo(settingsSender)))) return false;
   // PRECIOUS v22 hot-fix: bail out when the incoming message is a list /
   // button / native-flow response. The user tapped an in-bot card (.play,
   // .ytmate, .movie, ...) not a settings row; the picker handler must win.
@@ -9543,7 +9661,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
     const _bsetAct = (_btnMatch[2] || "toggle").toLowerCase();
     const _btnPairMap = {
       blockcalls: ["1.1", "1.2"], linkguard: ["2.1", "2.3"], badword: ["3.1", "3.3"],
-      statusmention: ["4.1", "4.4"], callaction: ["5.1", "5.2"], antidelete: ["6.1", "6.2"],
+      statusmention: ["4.1", "4.4"], callaction: ["5.1", "5.2"], antidelete: ["6.1", "6.2"], antidstatus: ["41.1", "41.2"],
       autoreact: ["7.1", "7.2"], cmdreact: ["7.3", "7.4"], autoblock: ["8.1", "8.2"], readmsgs: ["9.1", "9.2"],
       viewstatus: ["10.1", "10.2"], reactstatus: ["11.1", "11.2"], welcome: ["12.1", "12.2"],
       autovoice: ["13.1", "13.2"], autosticker: ["14.1", "14.2"], autoreply: ["15.1", "15.2"],
@@ -9554,7 +9672,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       antibroadcast: ["30.1", "30.2"], antiviewonce: ["39.1", "39.2"], antivo: ["39.1", "39.2"], antiviewoncemode: ["40.1", "40.2"], vomode: ["40.1", "40.2"],
     };
     const _btnPropMap = {
-      blockcalls: "blockCalls", antidelete: "antiDelete", autoreact: "autoReactMsgs", cmdreact: "cmdReact", autoblock: "autoBlock",
+      blockcalls: "blockCalls", antidelete: "antiDelete", antidstatus: "antiDStatus", autoreact: "autoReactMsgs", cmdreact: "cmdReact", autoblock: "autoBlock",
       readmsgs: "readMsgs", viewstatus: "viewStatus", reactstatus: "reactStatus", welcome: "welcome",
       autovoice: "autoVoice", autosticker: "autoSticker", autoreply: "autoReply", recording: "recording",
       typing: "typing", alwaysonline: "alwaysOnline", chatbot: "chatBotMode", ownerreact: "ownerReact",
@@ -21330,10 +21448,14 @@ cmd("multipoll", { desc: "Create multi-option poll", category: "GROUP" }, async 
 cmd("endpoll", { desc: "End active poll", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
   await sendReply(sock, msg, `✅ Poll ended. Results are in the poll message above.`);
 });
-cmd("antidemote", { desc: "Toggle anti-demote protection", category: "GROUP", ownerOnly: true }, async (sock, msg) => {
+cmd("antidemote", { desc: "Toggle anti-demote protection", category: "GROUP", ownerOnly: true }, async (sock, msg, args = []) => {
   if (!requireGroup(msg)) return;
   const s = getSettings(msg.key.remoteJid);
-  s.antiDemote = !s.antiDemote;
+  const action = String(args[0] || "").toLowerCase();
+  if (["on", "enable", "1", "true"].includes(action)) s.antiDemote = true;
+  else if (["off", "disable", "0", "false"].includes(action)) s.antiDemote = false;
+  else if (!action) s.antiDemote = !s.antiDemote;
+  else { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}antidemote on/off`); return; }
   saveNow();
   await sendReply(sock, msg, `🛡️ Anti-Demote: ${s.antiDemote ? "✅ ON — Demoted admins will be auto-promoted back" : "❌ OFF"}`);
 });
@@ -21413,9 +21535,15 @@ Usage:
 • ${CONFIG.PREFIX}antidelete on all
 • ${CONFIG.PREFIX}antidelete off`);
 });
-cmd("antidstatus", { desc: "Toggle anti-delete for status", category: "MISC", ownerOnly: true }, async (sock, msg) => {
-  const s = getSettings(msg.key.remoteJid); s.antiStatus = !s.antiStatus;
-  await sendReply(sock, msg, `📊 Anti-Delete Status: ${s.antiStatus ? "✅ ON" : "❌ OFF"}`);
+cmd("antidstatus", { desc: "Toggle anti-delete for status", category: "MISC", ownerOnly: true }, async (sock, msg, args = []) => {
+  const s = getSettings(getOwnerJid());
+  const action = String(args[0] || "").toLowerCase();
+  if (["on", "enable", "1", "true"].includes(action)) s.antiDStatus = true;
+  else if (["off", "disable", "0", "false"].includes(action)) s.antiDStatus = false;
+  else if (!action) s.antiDStatus = !s.antiDStatus;
+  else { await sendReply(sock, msg, `Usage: ${CONFIG.PREFIX}antidstatus on/off`); return; }
+  saveNow();
+  await sendReply(sock, msg, `📊 Anti-Delete Status: ${s.antiDStatus ? "✅ ON" : "❌ OFF"}`);
 });
 cmd(["antiedit","antied","noedit"], { desc: "Toggle anti-edit (supports all/groups/pm/here scopes)", category: "MISC", ownerOnly: true }, async (sock, msg, args) => {
   const chatS = getSettings(msg.key.remoteJid);
@@ -41494,6 +41622,11 @@ setInterval(() => { try { globalThis.__miasSock?.sendPresenceUpdate?.('available
     const sender = typeof getSender === "function"
       ? getSender(msg)
       : (msg?.key?.participant || msg?.key?.remoteJid || "");
+    // Settings mutate owner-wide state: a quoted panel/session is never authority.
+    const settingsAuthorized = !!msg?.key?.fromMe
+      || (typeof isOwner === "function" && isOwner(sender))
+      || (typeof isSudo === "function" && isSudo(sender));
+    if (!settingsAuthorized) return false;
     const normalizeSender = (value) => String(resolveLid(value) || value || "")
       .toLowerCase().replace(/:\d+(?=@)/g, "");
     const sessionSender = activeSession && typeof activeSession === "object" ? activeSession.sender : "";
