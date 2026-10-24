@@ -104,7 +104,16 @@ export function boldCommand(value) {
   // WhatsApp's supported bold markup, not a claim of custom fonts/colours.
   return '*' + String(value || '').toUpperCase().replace(/[*_~`\r\n]/g, '') + '*';
 }
+// Already represented in the settings UI: hide duplicate MISC menu rows only.
+export const SETTINGS_MISC_DUPLICATES = new Set([
+  'antiedit', 'antied', 'noedit', 'antidelete', 'antidel', 'nodelete',
+  'antibug', 'antibomb', 'antifreeze', 'antihang', 'antimention',
+  'autoblock', 'autobio', 'autoreact', 'cmdreact', 'autoread',
+  'autotyping', 'autorecording', 'alwaysonline', 'blockcalls',
+  'antibroadcast', 'anticall', 'antiviewonce', 'antivonce',
+]);
 export function isMenuEntryVisible(name, entry, context = {}) {
+  if (normalizeMenuCategory(entry?.category) === 'MISC' && SETTINGS_MISC_DUPLICATES.has(String(name).toLowerCase())) return false;
   if (!entry || typeof entry.handler !== 'function' || entry.disabled || entry.enabled === false || entry.hidden || entry.internal || /^Internal\b/i.test(entry.desc || '')) return false;
   if (context.owner === undefined) return true; // registry-wide audits, not a user response
   if (entry.creatorOnly && !context.creator) return false;

@@ -1492,7 +1492,106 @@ export async function resolveMediaUrl(url, platform) {
   return resolvePlatformMedia(url, p);
 }
 
+// Durable FIFO, isolated by bot identity. Only one download runs at a time.
+// Pending/running jobs survive process restarts (at-least-once delivery).
+export class AutoDownloadQueue {
+  constructor(file, worker) {
+    this.file = file; this.worker = worker; this.running = false;
+    this.jobs = []; this.waiters = new Map();
+    if (fs.existsSync(file)) {
+      const stored = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!Array.isArray(stored)) throw new Error("Invalid autodownload queue database");
+      this.jobs = stored.filter(j => j && j.id && j.msg?.key?.remoteJid && j.body);
+    }
+  }
+  persist() {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    const tmp = this.file + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(this.jobs), { mode: 0o600 });
+    fs.renameSync(tmp, this.file);
+  }
+  enqueue(job) {
+    const existing = this.jobs.find(j => j.id === job.id);
+    if (existing) return this.waiters.get(job.id)?.promise || Promise.resolve(true);
+    let resolve;
+    const promise = new Promise(r => { resolve = r; });
+    this.waiters.set(job.id, { promise, resolve });
+    this.jobs.push(job);
+    try { this.persist(); }
+    catch (err) { this.jobs.pop(); this.waiters.delete(job.id); throw err; }
+    void this.drain();
+    return promise;
+  }
+  async drain() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      while (this.jobs.length) {
+        const job = this.jobs[0];
+        let result = false;
+        try { result = await this.worker(job); }
+        catch (err) { console.error("[AutoDownloadQueue]", err?.message || err); }
+        this.jobs.shift();
+        // A persistence failure must not strand in-memory waiters or silently
+        // start further work against a stale database.
+        let persistenceError;
+        try { this.persist(); } catch (err) { persistenceError = err; }
+        this.waiters.get(job.id)?.resolve(result);
+        this.waiters.delete(job.id);
+        if (persistenceError) { console.error("[AutoDownloadQueue] persistence failed:", persistenceError.message); break; }
+      }
+    } finally { this.running = false; }
+  }
+}
+const autoDownloadQueues = new Map();
+function getAutoDownloadQueue(sock) {
+  const owner = String(sock?.user?.id || "").replace(/:\d+(?=@)/, "").replace(/[^a-zA-Z0-9]/g, "_");
+  if (!owner) throw new Error("Autodownload requires an authenticated bot identity");
+  let entry = autoDownloadQueues.get(owner);
+  if (!entry) {
+    entry = { sock };
+    const base = process.env.AUTO_DL_QUEUE_DIR || path.join(process.cwd(), "database", "autodownload");
+    entry.queue = new AutoDownloadQueue(path.join(base, owner + ".json"), job => processAutoDownload(entry.sock, job.msg, job.body, "global", false));
+    autoDownloadQueues.set(owner, entry);
+  }
+  entry.sock = sock;
+  return entry.queue;
+}
+export function resumeAutoDownloads(sock) {
+  try { void getAutoDownloadQueue(sock).drain(); }
+  catch (err) { console.error("[AutoDownloadQueue] recovery failed:", err?.message || err); }
+}
 export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
+  if (msg?.key?.fromMe || msg?.key?.remoteJid === "status@broadcast") return false;
+  if (!mode || mode === "off") return false;
+  const chat = String(msg?.key?.remoteJid || "");
+  if (!chat || (mode === "dm" && chat.endsWith("@g.us"))) return false;
+  if (mode === "here") {
+    const getter = globalThis.__MIAS_GET_SETTINGS__ || globalThis.__miasGetSettings;
+    const owner = String(sock?.user?.id || "").replace(/:\d+(?=@)/, "");
+    if (getter?.(owner)?.autoDownloadChat !== chat) return false;
+  }
+  if (/^[.!#\/$,+\-]\s*[a-z0-9]/i.test(String(body || "").trim())) return false;
+  const url = extractUrl(body || "");
+  if (!url || !detectPlatform(url)) return false;
+  const id = chat + "|" + (msg.key.id || (Date.now() + "_" + Math.random()));
+  try {
+    // Snapshot only the fields needed to quote/reply; never serialize socket or media buffers.
+    const minimal = { key: { ...msg.key }, message: { conversation: String(body) } };
+    const queue = getAutoDownloadQueue(sock);
+    const urls = [...new Set((String(body).match(/https?:\/\/[^\s"'<>]+/gi) || [])
+      .map(value => extractUrl(value)).filter(Boolean))];
+    if (!urls.length) urls.push(url);
+    for (let i = 0; i < urls.length; i++) {
+      void queue.enqueue({ id: id + "|" + i, msg: minimal, body: urls[i], createdAt: Date.now() });
+    }
+  } catch (err) {
+    try { await reactFail(sock, msg); await sock.sendMessage(chat, { text: "❌ Cannot queue download: " + err.message }, { quoted: msg }); } catch {}
+  }
+  return true;
+}
+
+async function processAutoDownload(sock, msg, body, mode, isOwner) {
   // Per-chat opt-in (settings UI option 30): enabling auto-DL for THIS chat
   // forces download here even when the global mode is off/dm — other chats
   // stay untouched.
@@ -1517,8 +1616,7 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
   // as well — the command itself decides what to send.
   if (/^[.!#\/$,+\-]\s*[a-z0-9]/i.test(String(body || "").trim())) return false;
 
-  // User spec: react 🔄 when a link is detected, ✅ when done, ❌ on error.
-  await reactCustom(sock, msg, "🔄");
+  await reactCustom(sock, msg, "🌀");
 
   const jid = msg.key.remoteJid;
   let tmpPath = null;
@@ -1551,7 +1649,7 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
       try {
         downloaded = await downloadToTemp(result.url, dlType);
       } catch (firstDownloadError) {
-        if (platform !== "youtube") throw firstDownloadError;
+        if (platform !== "youtube" && platform !== "tiktok") throw firstDownloadError;
         const alternate = await nexrayFallback(url, platform).catch(() => null);
         if (!alternate?.url || alternate.url === result.url) throw firstDownloadError;
         result = alternate;
@@ -1596,7 +1694,7 @@ export async function handleAutoDownload(sock, msg, body, mode, isOwner) {
         mimetype: downloaded.mimetype || "audio/mpeg",
         quoted: msg,
       });
-    } else if (downloaded.type === "image") {
+    } else if (dlType === "image") {
       await sendImage(sock, jid, bytes, {
         caption,
         mimetype: downloaded.mimetype,

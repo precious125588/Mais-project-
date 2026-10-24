@@ -1527,6 +1527,65 @@ const wordleGames = new Map();
 const viewonceStore = new Map();
 const _botSentMsgIds = new Set();
 const afkUsers = new Map();
+// Sender-authored profile labels only: never use the bot address-book name.
+const senderProfileNames = new Map();
+function rememberSenderProfile(msg) {
+  if (msg?.key?.fromMe) return;
+  const jid = toStandardJid(resolveLid(getSender(msg) || ""));
+  const name = String(msg?.pushName || "").trim();
+  if (jid && name && !/^\+?[\d\s()-]+$/.test(name)) {
+    senderProfileNames.set(jid, name);
+    if (senderProfileNames.size > 20000) senderProfileNames.delete(senderProfileNames.keys().next().value);
+  }
+}
+function senderProfileName(jid, participant = null) {
+  const key = toStandardJid(resolveLid(jid || ""));
+  const candidates = [senderProfileNames.get(key), participant?.notify, participant?.verifiedName, participant?.username];
+  return candidates.map(n => String(n || "").trim()).find(n => n && !/^\+?[\d\s()-]+$/.test(n)) || "No name";
+}
+function escapeVcardName(name) {
+  return String(name).replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/;/g, "\\;").replace(/,/g, "\\,");
+}
+// Steeze tracks genuine outgoing DM messages, not bot-generated replies.
+// Any incoming non-reaction message from that DM counts as a response.
+const steezePending = new Map();
+function trackSteeze(sock, msg) {
+  const chat = String(msg?.key?.remoteJid || "");
+  if (!chat.endsWith("@s.whatsapp.net") && !chat.endsWith("@lid") && !chat.endsWith("@g.us")) return;
+  const settings = getSettings(getOwnerJid());
+  if (!settings?.steezeMode) return;
+
+  // Reaction removal: when users react, automatically remove reaction without affecting bot reactions
+  if (msg.message?.reactionMessage) {
+    if (!msg.key?.fromMe && !_botSentMsgIds.has(msg.key?.id)) {
+      sock.sendMessage(chat, { delete: msg.key }).catch(() => {});
+    }
+    return;
+  }
+
+  if (msg.message?.protocolMessage) return;
+  const id = chat + "|" + msg.key.id;
+  if (!msg.key.fromMe) {
+    for (const [key, entry] of steezePending) {
+      if (entry.chat === chat) { clearTimeout(entry.timer); steezePending.delete(key); }
+    }
+    return;
+  }
+  if (!msg.key.id || _botSentMsgIds.has(msg.key.id) || steezePending.has(id)) return;
+  // Owner commands must never be scheduled for stealth deletion.
+  const text = String(msg.message?.conversation || msg.message?.extendedTextMessage?.text || "");
+  if (text.startsWith(CONFIG.PREFIX || ".")) return;
+  const entry = { chat, timer: null };
+  entry.timer = setTimeout(async () => {
+    steezePending.delete(id);
+    if (!getSettings(getOwnerJid())?.steezeMode) return;
+    try { await sock.sendMessage(chat, { delete: msg.key }); }
+    catch (err) { console.error("[steeze] delete failed:", err?.message || err); }
+  }, 30 * 60 * 1000);
+  entry.timer.unref?.();
+  steezePending.set(id, entry);
+}
+
 const _afkLastPinger = new Map(); // jid → { senderJid, senderName, chatJid, time } — last person who pinged while AFK
 const reminders = new Map();
 const schedules = new Map();
@@ -1749,7 +1808,7 @@ function defaultSettings() {
     // v23: when ON, senders of broadcast messages are auto-blocked (.setting §34)
     antiBroadcast: false,
     ownerReact: false, adultDl: false, movieDl: "disable",
-    forcePrivate: false, autoDownload: 'off', autoDlChat: false,     buttonsMode: false,
+    forcePrivate: false, autoDownload: 'off', autoDownloadChat: null, steezeMode: false, antiEditDestination: null, autoDlChat: false,     buttonsMode: false,
     stickerGuard: "delete", linkGuard: "delete",
     // ── v4.9.4 NEW ──────────────────────────────────────────────────
     // autoReactMsgs : when ON, every incoming non-command message gets
@@ -3082,6 +3141,19 @@ async function connectToWA(force = false) {
             const _abOwnerJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
             const _abS = getSettings(_abOwnerJ);
             if (_abS?.antiBug !== false && isCrashPayload(msg)) {
+              if (!msg.key?.fromMe) {
+                const sender = toStandardJid(resolveLid(getSender(msg) || ""));
+                const boundedShield = async task => {
+                  let timer;
+                  try { await Promise.race([Promise.resolve().then(task), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Shield action timeout")), 8000); timer.unref?.(); })]); }
+                  catch (err) { console.error("[antibug]", err?.message || err); }
+                  finally { clearTimeout(timer); }
+                };
+                await boundedShield(() => sock.sendMessage(msg.key.remoteJid, { delete: msg.key }));
+                if (sender && /@(s.whatsapp.net|lid)$/.test(sender) && !isOwner(sender) && !isSudo(sender)) {
+                  await boundedShield(() => sock.updateBlockStatus(sender, "block"));
+                }
+              }
               if (process.env.DEBUG_ANTIBUG === "1") {
                 console.log("⚡ [antibug] dropped crash payload from", msg.key?.remoteJid, "id=", msg.key?.id);
               }
@@ -3092,6 +3164,7 @@ async function connectToWA(force = false) {
           // Anti-ViewOnce is already queued at raw ingress, before flood/private
           // gates and before normalization strips the view-once envelope.
 
+          try { rememberSenderProfile(msg); trackSteeze(sock, msg); } catch {}
           try { normalizeMessage(msg); } catch {}
 
           // ── ViewOnce Cache for reaction-based silent saving ──
@@ -3190,7 +3263,7 @@ async function connectToWA(force = false) {
 
           // ── AFK AUTO-OFF: owner sent a message → cancel AFK immediately ────
           try {
-            if (msg.key.fromMe) {
+            if (msg.key.fromMe && !_botSentMsgIds.has(msg.key.id)) {
               const _ownerAfkJid = getOwnerJid();
               if (_ownerAfkJid && afkUsers.has(_ownerAfkJid)) {
                 const _afkData = afkUsers.get(_ownerAfkJid);
@@ -3222,6 +3295,7 @@ async function connectToWA(force = false) {
               }
             }
           } catch {}
+
 
           // ── Auto-view & Auto-like for WhatsApp Statuses (v12) ──
           try {
@@ -3668,8 +3742,10 @@ END:VCARD`;
           // ── AFK NOTIFICATION: someone messaged while owner is AFK ────────────
           try {
             if (!msg.key.fromMe && msg.key.remoteJid !== "status@broadcast") {
-              const _ownerAfkCheck = getOwnerJid();
-              if (_ownerAfkCheck && afkUsers.has(_ownerAfkCheck)) {
+              const _ownerJ = getOwnerJid();
+              const _ownerAfkCheck = toStandardJid(resolveLid(_ownerJ || "")) || _ownerJ;
+              const _afkInfo = afkUsers.get(_ownerAfkCheck) || afkUsers.get(_ownerJ) || (sock?.user?.id ? afkUsers.get(toStandardJid(sock.user.id)) : null);
+              if (_afkInfo) {
                 const _afkInfo = afkUsers.get(_ownerAfkCheck);
                 const _afkSender = toStandardJid(getSender(msg) || "");
                 const _afkSenderName = String(msg.pushName || "").trim() || `+${_cleanNum(_afkSender)}`;
@@ -3699,12 +3775,11 @@ END:VCARD`;
                   const _afkThrottleKey = `${_ownerAfkCheck}|${msg.key.remoteJid}`;
                   const _afkLastNotice = globalThis.__afkNoticeThrottle.get(_afkThrottleKey) || 0;
                   if (Date.now() - _afkLastNotice >= 60000) {
-                    globalThis.__afkNoticeThrottle.set(_afkThrottleKey, Date.now());
                     // Notify sender that owner is AFK
                     await sock.sendMessage(msg.key.remoteJid, {
-                      text: `😴 *${CONFIG.OWNER_NAME || "Owner"} is currently AFK*\n\n💬 *Reason:* ${_afkInfo?.reason || "No reason"}\n⏱ *Away for:* ${_afkDur}\n\n_Your message has been noted. They'll reply when they're back!_ 👍`,
-                      mentions: [_afkSender]
+                      text: _afkInfo?.reason || "No reason"
                     }, { quoted: msg });
+                    globalThis.__afkNoticeThrottle.set(_afkThrottleKey, Date.now());
                   }
                 }
               }
@@ -4525,7 +4600,8 @@ END:VCARD`;
               newContent?.extendedTextMessage?.text ||
               newContent?.imageMessage?.caption || "(non-text edit)";
             const author = key.participant || remoteJid;
-            const sendTo = localAntiEdit ? remoteJid : ownerJid;
+            const destination = sOwner?.antiEditDestination || sChat?.antiEditDestination;
+            const sendTo = destination === "private" ? ownerJid : destination === "chat" ? remoteJid : localAntiEdit ? remoteJid : ownerJid;
             try {
               const _aiedIsGroup = String(remoteJid || "").endsWith("@g.us");
               let _aiedGroupName = "";
@@ -9421,6 +9497,7 @@ function buildSettingsMenu(jid) {
 ┃ 29.1 ᴏꜰꜰ  ${s.autoDownload === 'off' || !s.autoDownload ? "✅" : ""}
 ┃ 29.2 ᴅᴍ ᴏɴʟʏ  ${s.autoDownload === 'dm' ? "✅" : ""}
 ┃ 29.3 ᴀʟʟ ᴄʜᴀᴛs  ${s.autoDownload === 'global' ? "✅" : ""}
+┃ 29.4 THIS CHAT ONLY  ${s.autoDownload === 'here' ? "✅" : ""}
 ┃ _sᴏᴜʀᴄᴇs: ᴛɪᴋᴛᴏᴋ·ɪɢ·ꜰʙ·ʏᴛ·x·ꜱᴘᴏᴛɪꜰʏ·ꜱᴄ·ᴘɪɴᴛᴇʀᴇꜱᴛ·ᴛʜʀᴇᴀᴅs·ᴄᴀᴘᴄᴜᴛ·ʀᴇᴅᴅɪᴛ·ᴅᴏᴜʏɪɴ·ʟɪᴋᴇᴇ·ᴍᴇᴅɪᴀꜰɪʀᴇ·ɢᴅʀɪᴠᴇ·ᴛᴇʀᴀʙᴏx +ɴᴇxʀᴀʏ/ᴘʀᴇxᴢʏ ᴀɪᴏ_
 ┃ _ʀᴇᴀᴄᴛɪᴏɴs: 🔄 ᴅᴇᴛᴇᴄᴛᴇᴅ · ✅ ᴅᴏɴᴇ · ❌ ᴇʀʀᴏʀ_
 ╰━━━━━━━━━━━╯
@@ -9471,6 +9548,18 @@ function buildSettingsMenu(jid) {
 ┃ 37.2 ᴜɴꜰʀᴇᴇᴢᴇ  ${!s.lastSeenFrozen ? "✅" : ""}
 ╰━━━━━━━━━━━╯
 
+╭━━❮ *Steeze Mode* ❯━━╮
+┃ 42.1 ENABLE ${s.steezeMode ? "✅" : ""}
+┃ 42.2 DISABLE ${!s.steezeMode ? "✅" : ""}
+┃ Unanswered outgoing DMs expire after 30 minutes
+┃ User reactions automatically removed
+╰━━━━━━━━━━━╯
+╭━━❮ *Anti Edit* ❯━━╮
+┃ 43.1 ENABLE ${s.antiEdit ? "✅" : ""}
+┃ 43.2 DISABLE ${!s.antiEdit ? "✅" : ""}
+┃ 43.3 DELIVER IN CHAT ${s.antiEditDestination === 'chat' ? "✅" : ""}
+┃ 43.4 DELIVER IN OWNER DM ${s.antiEditDestination === 'private' ? "✅" : ""}
+╰━━━━━━━━━━━╯
 ╭━━❮ *Anti ViewOnce* ❯━━╮
 ┃ 39.1 ᴇɴᴀʙʟᴇ  ${s.antiViewOnce ? "✅" : ""}
 ┃ 39.2 ᴅɪsᴀʙʟᴇ  ${!s.antiViewOnce ? "✅" : ""}
@@ -9568,6 +9657,13 @@ const SETTINGS_MAP = globalThis.SETTINGS_MAP = {
   "29.2": s => { s.autoDownload = 'dm';     if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','dm');     return "{ autodl dm }"; },
   "29.3": s => { s.autoDownload = 'global'; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_2_autoDownload','global'); return "{ autodl all }"; },
   
+  "29.4": (s, context) => { if (!context?.jid) return "❌ Chat context is missing"; s.autoDownload = 'here'; s.autoDownloadChat = context.jid; return "✅ Auto-download: THIS CHAT ONLY"; },
+  "42.1": s => { s.steezeMode = true; return "✅ Steeze mode: ON (new outgoing DMs, 30 minutes; timers reset on restart)"; },
+  "42.2": s => { s.steezeMode = false; for (const entry of steezePending.values()) clearTimeout(entry.timer); steezePending.clear(); return "❌ Steeze mode: OFF"; },
+  "43.1": s => { s.antiEdit = true; return "✅ Anti-edit: ON"; },
+  "43.2": s => { s.antiEdit = false; return "❌ Anti-edit: OFF"; },
+  "43.3": s => { s.antiEditDestination = "chat"; return "✅ Anti-edit destination: original chat"; },
+  "43.4": s => { s.antiEditDestination = "private"; return "✅ Anti-edit destination: owner DM"; },
   "38.1": s => { s.statusForwarder = true;  if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',true);  return "{ statusforwarder on }"; },
   "38.2": s => { s.statusForwarder = false; if(globalThis.__SET_SETTING__) globalThis.__SET_SETTING__('bot','setting_19_3_statusFwdEnabled',false); return "{ statusforwarder off }"; },
   
@@ -9608,8 +9704,8 @@ try {
   for (const _k of Object.keys(SETTINGS_MAP)) {
     const _orig = SETTINGS_MAP[_k];
     if (typeof _orig !== "function" || _orig.__v38Persist) continue;
-    const _wrapped = (s) => {
-      const _r = _orig(s);
+    const _wrapped = (s, context) => {
+      const _r = _orig(s, context);
       try { _settingsDirty = true; } catch (_e1) {}
       try { if (typeof saveNow === "function") saveNow(); } catch (_e2) {}
       try { if (typeof globalThis.__v38PersistNow === "function") globalThis.__v38PersistNow(); } catch (_e3) {}
@@ -9668,6 +9764,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       recording: ["16.1", "16.2"], typing: ["17.1", "17.2"], alwaysonline: ["18.1", "18.2"],
       chatbot: ["21.1", "21.2"], ownerreact: ["22.1", "22.2"], adultmode: ["23.1", "23.2"],
       antimention: ["26.1", "26.2"], antibug: ["27.1", "27.2"], forceprivate: ["28.1", "28.2"],
+      steeze: ["42.1", "42.2"], antiedit: ["43.1", "43.2"],
       statusforwarder: ["38.1", "38.2"], lastseen: ["36.1", "36.2"], freezelastseen: ["37.1", "37.2"], statusreply: ["32.1", "32.2"],
       antibroadcast: ["30.1", "30.2"], antiviewonce: ["39.1", "39.2"], antivo: ["39.1", "39.2"], antiviewoncemode: ["40.1", "40.2"], vomode: ["40.1", "40.2"],
     };
@@ -9677,6 +9774,7 @@ async function handleSettingsNumericReply(sock, msg, body) {
       autovoice: "autoVoice", autosticker: "autoSticker", autoreply: "autoReply", recording: "recording",
       typing: "typing", alwaysonline: "alwaysOnline", chatbot: "chatBotMode", ownerreact: "ownerReact",
       adultmode: "adultMode", antimention: "antiMention", antibug: "antiBug", forceprivate: "forcePrivate",
+      steeze: "steezeMode", antiedit: "antiEdit",
       statusforwarder: "statusForwarder", lastseen: "lastSeenEnabled", freezelastseen: "lastSeenFrozen", statusreply: "statusReply", antibroadcast: "antiBroadcast", antiviewonce: "antiViewOnce", antivo: "antiViewOnce",
     };
     const _bsetPair = _btnPairMap[_bsetKey];
@@ -9688,8 +9786,8 @@ async function handleSettingsNumericReply(sock, msg, body) {
       const _bsetFn = SETTINGS_MAP[_bsetChoice];
       if (_bsetFn) {
         const _bsetOwnerJ = (CONFIG.OWNER_NUMBER || "").replace(/[^0-9]/g, "") + "@s.whatsapp.net";
-        const _bsetOut = _bsetFn(getSettings(jid));
-        _bsetFn(getSettings(_bsetOwnerJ));
+        const _bsetOut = _bsetFn(getSettings(jid), { jid });
+        if (jid !== _bsetOwnerJ) _bsetFn(getSettings(_bsetOwnerJ), { jid });
         try { saveNow && saveNow(); } catch {}
         await sendReply(sock, msg, typeof _bsetOut === "string" ? _bsetOut : "✅ Updated.");
         return true;
@@ -9910,8 +10008,8 @@ async function handleSettingsNumericReply(sock, msg, body) {
 
   const chatSettings = getSettings(jid);
   const ownerSettings = getSettings(ownerJ);
-  const result = fn(chatSettings);
-  fn(ownerSettings);
+  const result = fn(chatSettings, { jid });
+  if (ownerSettings !== chatSettings) fn(ownerSettings, { jid });
   try { saveNow && saveNow(); } catch {}
   await sendReply(sock, msg,
     `${result}\n\n_Reply another option, or *0* to close._`);
@@ -15316,7 +15414,7 @@ cmd("calendar", { desc: "Show calendar for current month (image)", category: "TO
 });
 
 cmd("afk", { desc: "Set AFK status — .afk [reason]", category: "TOOLS" }, async (sock, msg, args) => {
-  const jid = getSender(msg);
+  const jid = toStandardJid(resolveLid(msg.key.fromMe || isOwner(getSender(msg)) ? getOwnerJid() : getSender(msg)));
   const reason = args.join(" ") || "No reason";
   afkUsers.set(jid, { reason, time: Date.now() });
   const senderName = msg.pushName || "You";
@@ -15328,7 +15426,7 @@ cmd("afk", { desc: "Set AFK status — .afk [reason]", category: "TOOLS" }, asyn
     `_I'll notify senders that you're away._`);
 });
 cmd("unafk", { desc: "Remove AFK status", category: "TOOLS" }, async (sock, msg) => {
-  const jid = getSender(msg);
+  const jid = toStandardJid(resolveLid(msg.key.fromMe || isOwner(getSender(msg)) ? getOwnerJid() : getSender(msg)));
   const afk = afkUsers.get(jid);
   afkUsers.delete(jid);
   const senderName = msg.pushName || "You";
@@ -24318,6 +24416,14 @@ cmd(["aio","alldl","universaldl"], { desc: "Universal downloader — TikTok, IG,
   await forceReaction(sock, msg, "🌀");
   const url = args[0];
   const jid = msg.key.remoteJid;
+  if (/^https?:\/\/(?:[\w-]+\.)?tiktok\.com\//i.test(url)) {
+    if (typeof globalThis.__miasTikTokHdDownload !== "function") {
+      await forceReaction(sock, msg, "❌");
+      await sendReply(sock, msg, "❌ TikTok HD pipeline is unavailable; retry after startup finishes.");
+      return;
+    }
+    return globalThis.__miasTikTokHdDownload(sock, msg, url);
+  }
   let dlUrl = null, title = null, thumbUrl = null, extraInfo = "";
 
   // Detect platform for smarter routing
@@ -34086,67 +34192,42 @@ const __miasGst = async (sock, msg, args) => {
     // ───────────────────────────────────────────────────────────────────
     const __miasVcf = async (sock, msg, args) => {
       const chat = msg.key.remoteJid;
-      const isGc = String(chat || "").endsWith("@g.us");
-      try { await react(sock, msg, "📇"); } catch {}
-
-      if (!isGc) {
-        // Reuse the original single-contact path: send caller's contact card.
-        const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-        const tj = mentions[0] || getSender(msg) || msg.key.participant || msg.key.remoteJid;
-        const tn = String(tj).split("@")[0].replace(/[^0-9]/g, "");
-        let name = await __miasResolveName(sock, tj, null) || ("+" + tn);
-        const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${name} 🥀\nTEL;type=CELL;type=VOICE;waid=${tn}:+${tn}\nEND:VCARD`;
-        await sock.sendMessage(chat, { contacts: { displayName: name + " 🥀", contacts: [{ vcard }] } }, { quoted: msg });
-        try { await react(sock, msg, "✅"); } catch {}
-        return;
-      }
-
-      // GROUP VCF — live progress
-      let liveKey = null;
       try {
-        const r = await sock.sendMessage(chat, { text: "📇 *VCF*\n  • Syncing names: 0/?…" }, { quoted: msg });
-        liveKey = r.key;
-      } catch {}
-      const edit = async (txt) => {
-        if (!liveKey) return;
-        try { await sock.sendMessage(chat, { text: txt, edit: liveKey }); } catch {}
-      };
-
-      try {
-        const meta = await sock.groupMetadata(chat);
-        const total = (meta.participants || []).length;
-        let lastTick = 0;
-        const syncRes = await __miasSyncGroup(sock, chat, async (done, tot, named) => {
-          const now = Date.now();
-          if (now - lastTick < 1200) return;
-          lastTick = now;
-          await edit(`📇 *VCF*\n  • Syncing names: ${done}/${tot}\n  • Found: ${named}`);
-        });
-        await edit(`📇 *VCF*\n  • Names synced: ${syncRes.named}/${syncRes.total}\n  • Building VCF…`);
-
-        const db = __miasReadNamesDb();
-        let vcf = "", saved = 0;
-        for (const p of meta.participants || []) {
-          const resolved = (typeof resolveLid === "function") ? resolveLid(p.id) : p.id;
-          const num = p.pn ? p.pn.replace(/\D/g, "") : String(resolved || "").split("@")[0].replace(/[^0-9]/g, "");
-          if (!num || num.length < 6) continue;
-          const name = (db[num] && !/^\d+$/.test(db[num]) && !db[num].startsWith("+")) ? db[num] : ("+" + num);
-          vcf += `BEGIN:VCARD\nVERSION:3.0\nFN:${name} 🥀\nTEL;type=CELL;type=VOICE;waid=${num}:+${num}\nEND:VCARD\n`;
-          saved++;
+        await react(sock, msg, "🌀").catch(() => {});
+        if (!String(chat).endsWith("@g.us")) {
+          const mentions = getContextInfo(msg)?.mentionedJid || [];
+          const jid = mentions[0] || getSender(msg);
+          const resolved = toStandardJid(resolveLid(jid));
+          if (!String(resolved).endsWith("@s.whatsapp.net")) throw new Error("Contact phone number is unavailable; sync identity mappings first");
+          const num = String(resolved).split("@")[0].replace(/\D/g, "");
+          const name = senderProfileName(jid);
+          const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${escapeVcardName(name)}\nTEL;type=CELL;type=VOICE;waid=${num}:+${num}\nEND:VCARD`;
+          await sock.sendMessage(chat, { contacts: { displayName: name, contacts: [{ vcard }] } }, { quoted: msg });
+        } else {
+          const meta = await sock.groupMetadata(chat);
+          try { updateLidMappingsFromMeta(meta); } catch {}
+          const seen = new Set();
+          const cards = [];
+          for (const participant of meta.participants || []) {
+            const jid = toStandardJid(resolveLid(participant.id));
+            const phoneJid = participant.phoneNumber || participant.pn || (String(jid).endsWith("@s.whatsapp.net") ? jid : "");
+            const num = String(phoneJid).split("@")[0].replace(/\D/g, "");
+            if (num.length < 6 || num.length > 15 || seen.has(num)) continue;
+            seen.add(num);
+            const name = senderProfileName(participant.id, participant);
+            cards.push(`BEGIN:VCARD\nVERSION:3.0\nFN:${escapeVcardName(name)}\nTEL;type=CELL;type=VOICE;waid=${num}:+${num}\nEND:VCARD`);
+          }
+          if (!cards.length) throw new Error("No contact phone numbers are available in this group");
+          await sock.sendMessage(chat, { document: Buffer.from(cards.join("\n") + "\n", "utf8"),
+            fileName: `${(meta.subject || "group").replace(/[^a-zA-Z0-9]/g, "_")}_contacts.vcf`, mimetype: "text/vcard" }, { quoted: msg });
         }
-        await sock.sendMessage(chat, {
-          document: Buffer.from(vcf, "utf8"),
-          fileName: `${(meta.subject || "group").replace(/[^a-zA-Z0-9]/g, "_")}_contacts.vcf`,
-          mimetype: "text/vcard",
-        }, { quoted: msg });
-        await edit(`✅ *VCF ready* — *${saved}* contacts (real names: ${syncRes.named}).`);
-        try { await react(sock, msg, "✅"); } catch {}
-        _v10log(".vcf ok", { saved, named: syncRes.named });
-      } catch (e) {
-        try { console.error("[v10] .vcf error:", e?.message || e); } catch {}
-        await edit(`❌ VCF error: ${e?.message || e}`);
+        await react(sock, msg, "✅").catch(() => {});
+      } catch (err) {
+        await react(sock, msg, "❌").catch(() => {});
+        await sock.sendMessage(chat, { text: "❌ VCF failed: " + (err?.message || "Unknown error") }, { quoted: msg });
       }
     };
+
     {
       const ex = commands.get("vcf") || { desc: "Save group contacts as VCF (real names)", category: "INFO" };
       ex.handler = __miasVcf;
@@ -42318,6 +42399,18 @@ try {
     if (typeof __v32WrapTimer.unref === "function") __v32WrapTimer.unref();
   }
 
+  globalThis.__miasTikTokHdDownload = async (sock, msg, url) => {
+    try {
+      const info = await fetchTikTokInfo(url);
+      if (!info) throw new Error("TikTok metadata could not be fetched");
+      return await __v32ExecuteTikTokDownload(sock, msg, { url, info, ts: Date.now() }, parseTikTokMode("1.3"));
+    } catch (err) {
+      await forceReaction(sock, msg, "❌").catch(() => {});
+      await sendReply(sock, msg, "❌ TikTok HD download failed: " + (err?.message || "Unknown error"));
+      return true;
+    }
+  };
+
   /* ── Direct TikTok Pipeline Downloader ────────────────────────────── */
   async function __v32ExecuteTikTokDownload(sock, msg, ttPick, ttMode) {
     const jid = msg.key.remoteJid;
@@ -43405,6 +43498,7 @@ cmd("add", { desc: "Add member(s) — .add +234 901 333 4556, 2349068551055", ca
   globalThis._heavyTaskPipeline.enqueue(async () => {
     let ok = 0;
     const failed = [];
+    let hadBlocked = false;
     for (const num of numbers) {
       const jid = num + "@s.whatsapp.net";
       let okThis = false, msgNote = "";
@@ -43415,11 +43509,12 @@ cmd("add", { desc: "Add member(s) — .add +234 901 333 4556, 2349068551055", ca
           new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000))
         ]);
         const itemRes = Array.isArray(res) ? res[0] : res;
-        const status = String(itemRes?.status || "200");
+        const status = String(itemRes?.status || "unknown");
         if (status === "200") {
           okThis = true;
         } else if (status === "403") {
-          msgNote = "privacy (needs invite)";
+          msgNote = "this contact has blocked the bot";
+          hadBlocked = true;
         } else if (status === "409") {
           msgNote = "already in group";
           okThis = true;
@@ -43432,8 +43527,9 @@ cmd("add", { desc: "Add member(s) — .add +234 901 333 4556, 2349068551055", ca
         const m = String(e?.message || "");
         if (/timeout/i.test(m)) {
           msgNote = "timeout";
-        } else if (/403|privacy/i.test(m)) {
-          msgNote = "privacy settings";
+        } else if (/blocked/i.test(m) || /403|privacy/i.test(m)) {
+          msgNote = "this contact has blocked the bot";
+          hadBlocked = true;
         } else if (/409|already/i.test(m)) {
           msgNote = "already added";
           okThis = true;
@@ -43448,6 +43544,10 @@ cmd("add", { desc: "Add member(s) — .add +234 901 333 4556, 2349068551055", ca
       await new Promise(r => setTimeout(r, 1200));
     }
     try { await react(sock, msg, ok > 0 ? "✅" : "❌"); } catch {}
+    if (numbers.length === 1 && hadBlocked && ok === 0) {
+      await sendReply(sock, msg, "❌ This contact has blocked the bot.").catch(() => {});
+      return;
+    }
     const summary = [`Added ${ok} of ${numbers.length}.`];
     if (failed.length) summary.push(`Failed: ${failed.join(", ")}`);
     await sendReply(sock, msg, summary.join("\n")).catch(() => {});

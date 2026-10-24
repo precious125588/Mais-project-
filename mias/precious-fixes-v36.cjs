@@ -232,34 +232,75 @@ module.exports = function installV36(ctx) {
   //     Call from your messages.upsert status-reply branch:
   //       if (globalThis.V36_STATUS_SEND && isSendKeyword) return globalThis.V36_STATUS_SEND(sock, msg, quoted);
   globalThis.V36_STATUS_SEND = async function (sock, msg, quoted) {
-    const isStatus = msg?.key?.remoteJid === "status@broadcast";
-    const requester = (isStatus || msg?.key?.remoteJid?.endsWith("@g.us"))
-      ? (msg?.key?.participant || msg?.participant || msg?.key?.remoteJid)
-      : msg?.key?.remoteJid;
-    await react(sock, msg, "🌀").catch(() => {});
+    const chat = msg?.key?.remoteJid;
+    const requester = (chat === "status@broadcast" || chat?.endsWith("@g.us"))
+      ? (msg?.key?.participant || msg?.participant) : chat;
+    const quietReact = async emoji => { try { await react(sock, msg, emoji); } catch {} };
+    const bounded = async (operation, ms, label) => {
+      let timer;
+      try {
+        return await Promise.race([operation, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(label + " timed out")), ms);
+          timer.unref?.();
+        })]);
+      } finally { clearTimeout(timer); }
+    };
+    let dir, mediaStream;
+    await quietReact("🌀");
     try {
-      if (quoted?.imageMessage) {
-        const st = await downloadContentFromMessage(quoted.imageMessage, "image");
-        const chunks = []; for await (const c of st) chunks.push(c);
-        const better = await enhanceImage(Buffer.concat(chunks));
-        await sock.sendMessage(requester, { image: better, caption: quoted.imageMessage.caption || "✅ Sent" });
-      } else if (quoted?.videoMessage) {
-        const st = await downloadContentFromMessage(quoted.videoMessage, "video");
-        const chunks = []; for await (const c of st) chunks.push(c);
-        const rawBuf = Buffer.concat(chunks);
-        // Instant delivery with faststart remux logic (completes in ~100ms, zero CPU freeze)
-        const fastBuf = await remuxVideoFast(rawBuf);
-        await sock.sendMessage(requester, { video: fastBuf, mimetype: "video/mp4", caption: quoted.videoMessage.caption || "✅ Sent" });
-      } else if (quoted?.audioMessage) {
-        const st = await downloadContentFromMessage(quoted.audioMessage, "audio");
-        const chunks = []; for await (const c of st) chunks.push(c);
-        const mp3 = await audioToOpus(Buffer.concat(chunks));
-        await sock.sendMessage(requester, { audio: mp3, mimetype: "audio/ogg; codecs=opus", ptt: true });
+      if (!requester) throw new Error("Cannot determine status recipient");
+      const kind = ["image", "video", "audio", "document"].find(k => quoted?.[k + "Message"]);
+      if (!kind) {
+        const text = quoted?.conversation || quoted?.extendedTextMessage?.text;
+        if (!text) throw new Error("Unsupported or missing status content");
+        await bounded(sock.sendMessage(requester, { text }), 180000, "Status delivery");
+      } else {
+        const { pipeline } = require("node:stream/promises");
+        const { Transform } = require("node:stream");
+        dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "mais_status_"));
+        const raw = quoted[kind + "Message"];
+        const ext = ({ image: "jpg", video: "mp4", audio: "ogg", document: "bin" })[kind];
+        const file = path.join(dir, "status." + ext);
+        const source = await bounded(downloadContentFromMessage(raw, kind), 30000, "Status download setup");
+        let bytes = 0;
+        const limit = new Transform({ transform(chunk, encoding, done) {
+          bytes += chunk.length;
+          if (bytes > 2 * 1024 ** 3) return done(new Error("Status exceeds 2 GB delivery limit"));
+          done(null, chunk);
+        }});
+        await pipeline(source, limit, fs.createWriteStream(file), { signal: AbortSignal.timeout(150000) });
+        if (!bytes) throw new Error("Status download returned an empty file");
+        const asDocument = bytes > 90 * 1024 * 1024 || kind === "document";
+        let payload;
+        if (asDocument) {
+          mediaStream = fs.createReadStream(file);
+          payload = { document: { stream: mediaStream }, fileName: path.basename(raw.fileName || ("status." + ext)),
+            mimetype: raw.mimetype || ({image:"image/jpeg",video:"video/mp4",audio:"audio/ogg"})[kind] || "application/octet-stream",
+            caption: raw.caption || "" };
+        } else {
+          // Keep the established enhancement/remux/Opus pipeline for normal media.
+          let buffer = await fs.promises.readFile(file);
+          if (kind === "image") buffer = await enhanceImage(buffer);
+          if (kind === "video") buffer = await remuxVideoFast(buffer);
+          if (kind === "audio") buffer = await audioToOpus(buffer);
+          await fs.promises.writeFile(file, buffer);
+          mediaStream = fs.createReadStream(file);
+          payload = { [kind]: { stream: mediaStream }, caption: raw.caption || "" };
+          if (kind === "video") payload.mimetype = "video/mp4";
+          if (kind === "audio") { payload.mimetype = "audio/ogg; codecs=opus"; payload.ptt = true; }
+        }
+        await bounded(sock.sendMessage(requester, payload), 180000, "Status delivery");
       }
-      await react(sock, msg, "✅").catch(() => {});
+      await quietReact("✅");
+      return true;
     } catch (err) {
       console.error("[V36_STATUS_SEND error]", err?.message || err);
-      await react(sock, msg, "❌").catch(() => {});
+      await quietReact("❌");
+      if (requester) await bounded(sock.sendMessage(requester, { text: "❌ Status delivery failed: " + (err?.message || "Unknown error") }), 15000, "Error notification").catch(() => {});
+      return false;
+    } finally {
+      if (mediaStream) mediaStream.destroy();
+      if (dir) await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   };
 

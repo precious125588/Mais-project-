@@ -57,7 +57,7 @@ import {
   cmdCount as stickerCmdCount,
 } from "./stickerCmd.js";
 import {
-  handleAutoDownload,
+  handleAutoDownload, resumeAutoDownloads,
   detectPlatform,
   extractUrl,
 } from "./autoDownloader.js";
@@ -266,6 +266,7 @@ export async function initKevdraPatches(sessionPath, dbDir) {
 
 // ── Attach to a Baileys socket (call after makeWASocket) ──────────────────────
 export async function applyKevdraToSock(sock, sessionPath, saveCreds) {
+  resumeAutoDownloads(sock);
   _sock = sock;
   if (sessionPath) _sessionPath = sessionPath;
 
@@ -345,6 +346,7 @@ export async function applyKevdraToSock(sock, sessionPath, saveCreds) {
 export async function kevdraMessageHook(sock, msg, body, isOwner) {
   const remoteJid = msg?.key?.remoteJid;
   if (!remoteJid) return false;
+  if (sock?.user?.id) resumeAutoDownloads(sock);
 
   // Record message activity for watchdog silent-failure detector
   try { recordMessageReceived(); } catch {}
@@ -450,25 +452,14 @@ export function setAutoDownloadMode(mode) {
 
 export function getAutoDownloadMode(jid = null) {
   try {
-    if (jid && typeof globalThis.__MIAS_GET_SETTINGS__ === "function") {
-      const cs = globalThis.__MIAS_GET_SETTINGS__(jid);
-      if (cs && cs.autoDownload && cs.autoDownload !== "off") return cs.autoDownload;
+    const getter = globalThis.__MIAS_GET_SETTINGS__ || globalThis.__miasGetSettings;
+    const owner = getter?.(_resolveOwnerJid());
+    if (owner && typeof owner.autoDownload === "string") {
+      if (owner.autoDownload === "here") return jid === owner.autoDownloadChat ? "global" : "off";
+      return ["off", "dm", "global"].includes(owner.autoDownload) ? owner.autoDownload : "off";
     }
-    const oj = _resolveOwnerJid();
-    if (oj && typeof globalThis.__MIAS_GET_SETTINGS__ === "function") {
-      const os = globalThis.__MIAS_GET_SETTINGS__(oj);
-      if (os && os.autoDownload && os.autoDownload !== "off") return os.autoDownload;
-    }
-    if (typeof globalThis.__MIAS_GET_SETTINGS__ === "function") {
-      const bs = globalThis.__MIAS_GET_SETTINGS__("bot");
-      if (bs && bs.autoDownload && bs.autoDownload !== "off") return bs.autoDownload;
-    }
-    if (typeof globalThis.__GET_SETTING__ === "function") {
-      const gs = globalThis.__GET_SETTING__("bot", "setting_19_2_autoDownload", "off");
-      if (gs && gs !== "off") return gs;
-    }
-  } catch {}
-  return "off";
+    return globalThis.__GET_SETTING__?.("bot", "setting_19_2_autoDownload", "off") || "off";
+  } catch { return "off"; }
 }
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
