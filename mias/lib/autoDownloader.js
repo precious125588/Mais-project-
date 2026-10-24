@@ -1657,7 +1657,6 @@ async function processAutoDownload(sock, msg, body, mode, isOwner) {
         downloaded = await downloadToTemp(result.url, dlType);
       }
       tmpPath = downloaded.tmpPath;
-      bytes = fs.readFileSync(tmpPath);
       const sizeText = downloaded.size >= 1024 * 1024
         ? `${(downloaded.size / 1024 / 1024).toFixed(1)} MB`
         : `${(downloaded.size / 1024).toFixed(1)} KB`;
@@ -1668,40 +1667,43 @@ async function processAutoDownload(sock, msg, body, mode, isOwner) {
     }
 
     if (dlType === "video") {
-      let vBytes = bytes;
-      try {
-        const pv = getPortableVideo();
-        if (typeof pv?.normalizeVideoBuffer === "function") {
-          vBytes = await pv.normalizeVideoBuffer(bytes);
-        }
-      } catch (_) {}
-      // sendVideo auto-generates a jpeg thumbnail via mediaHandler
-      const sent = await sendVideo(sock, jid, vBytes, {
-        caption,
-        mimetype: dlMime,
-        quoted: msg,
-      });
-      if (!sent) {
-        await sendDocument(sock, jid, vBytes, {
+      let mediaSource = tmpPath;
+      if (downloaded.size > 90 * 1024 * 1024) {
+        await sendDocument(sock, jid, tmpPath, {
+          caption,
+          mimetype: dlMime || "video/mp4",
+          fileName,
+          quoted: msg,
+        });
+      } else {
+        const sent = await sendVideo(sock, jid, mediaSource, {
           caption,
           mimetype: dlMime,
           fileName,
           quoted: msg,
         });
+        if (!sent) {
+          await sendDocument(sock, jid, mediaSource, {
+            caption,
+            mimetype: dlMime,
+            fileName,
+            quoted: msg,
+          });
+        }
       }
     } else if (dlType === "audio") {
-      await sendAudio(sock, jid, bytes, {
+      await sendAudio(sock, jid, tmpPath, {
         mimetype: downloaded.mimetype || "audio/mpeg",
         quoted: msg,
       });
     } else if (dlType === "image") {
-      await sendImage(sock, jid, bytes, {
+      await sendImage(sock, jid, tmpPath, {
         caption,
         mimetype: downloaded.mimetype,
         quoted: msg,
       });
     } else {
-      await sendDocument(sock, jid, bytes, {
+      await sendDocument(sock, jid, tmpPath, {
         caption,
         mimetype: downloaded.mimetype || "application/octet-stream",
         fileName,

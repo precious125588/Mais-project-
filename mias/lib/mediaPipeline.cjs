@@ -262,9 +262,106 @@ function stats() {
   return out;
 }
 
+
+/* ── Universal disk temporary delivery engine ──────────────────────────────
+   Ensures all download outputs pass through temporary disk storage, streams
+   payloads to WhatsApp, routes >90MB media automatically as documents, and
+   cleans up temporary files in finally. */
+async function deliverMediaWithDiskTemp(sock, jid, media, {
+  type = "video",
+  caption = "",
+  fileName = null,
+  mimetype = null,
+  quoted = null,
+  ptt = false,
+  headers = null,
+  timeout = 120000,
+} = {}) {
+  let tmpPath = null;
+  let mustUnlink = false;
+  try {
+    if (typeof media === "string" && fs.existsSync(media)) {
+      tmpPath = media;
+    } else if (Buffer.isBuffer(media)) {
+      const ext = type === "audio" ? ".mp3" : type === "image" ? ".jpg" : ".mp4";
+      const spilled = bufferToStreamPayload(media, ext);
+      tmpPath = spilled.file;
+      mustUnlink = true;
+    } else if (media && typeof media.pipe === "function") {
+      const ext = type === "audio" ? ".mp3" : type === "image" ? ".jpg" : ".mp4";
+      const target = tmpFile(DIR_TMP, ext);
+      const streamed = await streamToDisk(media, target);
+      tmpPath = streamed.path;
+      mustUnlink = true;
+    } else if (typeof media === "string" && /^https?:\/\//i.test(media)) {
+      const ext = type === "audio" ? ".mp3" : type === "image" ? ".jpg" : ".mp4";
+      const fetched = await fetchToDisk(media, { ext, timeout, headers });
+      tmpPath = fetched.path;
+      mustUnlink = true;
+    }
+
+    if (!tmpPath || !fs.existsSync(tmpPath)) {
+      throw new Error("No media file available on disk for delivery");
+    }
+
+    const stat = await fsp.stat(tmpPath).catch(() => null);
+    const size = stat?.size || 0;
+    const isLarge = size > 90 * 1024 * 1024; // >90MB route as document
+
+    const defName = fileName || (type === "audio" ? `audio_${Date.now()}.mp3` : `video_${Date.now()}.mp4`);
+    const mime = mimetype || (type === "audio" ? "audio/mpeg" : type === "image" ? "image/jpeg" : "video/mp4");
+
+    if (isLarge || type === "document") {
+      return await sock.sendMessage(jid, {
+        document: { url: tmpPath },
+        mimetype: mime,
+        fileName: path.basename(defName),
+        caption,
+      }, { quoted });
+    }
+
+    if (type === "audio") {
+      return await sock.sendMessage(jid, {
+        audio: { url: tmpPath },
+        mimetype: mime,
+        ptt: Boolean(ptt),
+        fileName: path.basename(defName),
+        caption,
+      }, { quoted });
+    }
+
+    if (type === "image") {
+      return await sock.sendMessage(jid, {
+        image: { url: tmpPath },
+        caption,
+      }, { quoted });
+    }
+
+    // Default: video
+    try {
+      return await sock.sendMessage(jid, {
+        video: { url: tmpPath },
+        mimetype: mime,
+        caption,
+      }, { quoted });
+    } catch (_vidErr) {
+      return await sock.sendMessage(jid, {
+        document: { url: tmpPath },
+        mimetype: mime,
+        fileName: path.basename(defName),
+        caption,
+      }, { quoted });
+    }
+  } finally {
+    if (mustUnlink && tmpPath) {
+      await safeUnlink(tmpPath);
+    }
+  }
+}
+
 module.exports = {
   ROOT, MAX_FILE, BUF_TO_DISK, TTL_MS,
   engineReport, stats, sweep,
   downloadWaToDisk, fetchToDisk, bufferToStreamPayload,
-  normalizeVideoOnDisk, makePickerCard, wrapSocket, safeUnlink,
+  normalizeVideoOnDisk, makePickerCard, wrapSocket, safeUnlink, deliverMediaWithDiskTemp,
 };

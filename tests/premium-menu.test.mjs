@@ -49,7 +49,7 @@ function createHarness({imageFailure=false,reactionFailure=false,sendFailure=fal
 }
 function image(h){return h.sent.find(x=>x.content.image)?.content;}
 test('actual main and allmenu handlers send one image caption with live stats, footer, quote spacing',async()=>{
- const h=createHarness();await h.run();const main=image(h);assert.ok(main.image);assert.match(main.caption,/^────────────────────\n\s+\*MIAS MDX\*\n────────────────────\n\n/);assert.match(main.caption,/\n\n> _".+"_\n\n/);assert.match(main.caption,/VERSION: 5\.3\.1/);assert.match(main.caption,/MODE: PRIVATE/);assert.match(main.caption,/COMMANDS  →  \d+/);assert.match(main.caption,/𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);assert.equal(h.sent.filter(x=>x.content.react).length,1);assert.equal(h.sent[0].content.react.key,h.msg.key);
+ const h=createHarness();await h.run();const main=image(h);assert.ok(main.image);assert.match(main.caption,/^────────────────────\n\s+\*.+\*\n\s+\*M[\u200b]?IAS MDX\*\n────────────────────\n\n/);assert.match(main.caption,/\n\n> _".+"_\n\n/);assert.match(main.caption,/VERSION: 5\.3\.1/);assert.match(main.caption,/MODE: PRIVATE/);assert.match(main.caption,/COMMANDS  →  \d+/);assert.match(main.caption,/𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);assert.equal(h.sent.filter(x=>x.content.react).length,1);assert.equal(h.sent[0].content.react.key,h.msg.key);
  h.sent.length=0;await h.run([],true);const all=image(h);assert.match(all.caption,/\n\n> _".+"_\n\n/);assert.equal(h.sent.filter(x=>x.content.image).length,1);assert.equal(h.sent.filter(x=>x.content.text).length,0);assert.equal(h.sent[0].content.react.text,menu.menuReaction('ALL'));const lines=all.caption.split('\n').filter(l=>l.startsWith('± '));const entries=menu.canonicalMenuEntries(h.commands,h.aliases,h.categories);assert.equal(lines.length,entries.length);assert.equal(new Set(lines).size,lines.length);for(const e of entries)assert.ok(lines.includes('± '+menu.boldCommand(e.name)));assert.ok(!lines.includes('± '+menu.boldCommand('tt')));assert.ok(!lines.includes('± '+menu.boldCommand('disabled')));
 });
 test('every active category uses its own reaction, picture and ONLY canonical category entries',async()=>{const h=createHarness();for(const cat of menu.activeMenuCategories(h.commands,h.aliases,h.categories)){h.sent.length=0;await h.run([cat.name.toLowerCase()]);assert.equal(h.sent.filter(x=>x.content.react).length,1);assert.equal(h.sent[0].content.react.text,menu.menuReaction(cat.name));const outgoing=image(h);assert.ok(outgoing);const lines=outgoing.caption.split('\n').filter(l=>l.startsWith('± '));assert.deepEqual(lines,cat.cmds.map(n=>'± '+menu.boldCommand(n)));assert.match(outgoing.caption,/\n\n> _"/);assert.equal(h.sent.filter(x=>x.content.image).length,1);}});
@@ -85,7 +85,7 @@ test('actual menu and allmenu registrations route once, with exact branding and 
  const h=createHarness();
  await h.commands.get('menu').handler(h.sock,h.msg,[]);
  assert.equal(h.sent.filter(x=>x.content.image).length,1);
- assert.match(image(h).caption, /\*MIAS MDX\*/);
+ assert.match(image(h).caption, /\*M[\u200b]?IAS MDX\*/);
  assert.match(image(h).caption, /POWERED BY 𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x$/);
  h.sent.length=0;
  await h.commands.get('allmenu').handler(h.sock,h.msg,[]);

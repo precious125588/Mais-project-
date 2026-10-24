@@ -180,12 +180,37 @@ export async function sendImage(sock, jid, image, opts = {}) {
  */
 export async function sendVideo(sock, jid, video, opts = {}) {
   try {
-    const buf = await _resolveSource(video);
-    const content = {
-      video:    buf,
-      caption:  opts.caption  || "",
-      mimetype: opts.mimetype || "video/mp4",
-    };
+    let content;
+    if (typeof video === "string" && !video.startsWith("http://") && !video.startsWith("https://")) {
+      const { stat } = await import("fs/promises");
+      const st = await stat(video).catch(() => null);
+      if (st && st.size > 90 * 1024 * 1024) {
+        return await sendDocument(sock, jid, video, {
+          ...opts,
+          fileName: opts.fileName || `video_${Date.now()}.mp4`,
+          mimetype: opts.mimetype || "video/mp4",
+        });
+      }
+      content = {
+        video:    { url: video },
+        caption:  opts.caption  || "",
+        mimetype: opts.mimetype || "video/mp4",
+      };
+    } else {
+      const buf = await _resolveSource(video);
+      if (buf && buf.length > 90 * 1024 * 1024) {
+        return await sendDocument(sock, jid, buf, {
+          ...opts,
+          fileName: opts.fileName || `video_${Date.now()}.mp4`,
+          mimetype: opts.mimetype || "video/mp4",
+        });
+      }
+      content = {
+        video:    buf,
+        caption:  opts.caption  || "",
+        mimetype: opts.mimetype || "video/mp4",
+      };
+    }
 
     if (opts.gifPlayback) content.gifPlayback = true;
     if (opts.viewOnce)    content.viewOnce    = true;
@@ -241,11 +266,19 @@ export async function sendGif(sock, jid, gif, opts = {}) {
  */
 export async function sendAudio(sock, jid, audio, opts = {}) {
   try {
-    const buf = await _resolveSource(audio);
-    const content = {
-      audio:    buf,
-      mimetype: opts.mimetype || "audio/mpeg",
-    };
+    let content;
+    if (typeof audio === "string" && !audio.startsWith("http://") && !audio.startsWith("https://")) {
+      content = {
+        audio:    { url: audio },
+        mimetype: opts.mimetype || "audio/mpeg",
+      };
+    } else {
+      const buf = await _resolveSource(audio);
+      content = {
+        audio:    buf,
+        mimetype: opts.mimetype || "audio/mpeg",
+      };
+    }
     if (opts.ptt)     content.ptt     = true;
     if (opts.seconds) content.seconds = opts.seconds;
 
@@ -312,13 +345,25 @@ export async function sendSticker(sock, jid, sticker, opts = {}) {
  */
 export async function sendDocument(sock, jid, document, opts = {}) {
   try {
-    const buf = await _resolveSource(document);
-    const content = {
-      document: buf,
-      filename: opts.filename || "file",
-      mimetype: opts.mimetype || guessMime(opts.filename || "", "application/octet-stream"),
-      caption:  opts.caption  || "",
-    };
+    let content;
+    const filename = opts.filename || opts.fileName || (typeof document === "string" ? document.split("/").pop() : "file");
+    const mimetype = opts.mimetype || guessMime(filename, "application/octet-stream");
+    if (typeof document === "string" && !document.startsWith("http://") && !document.startsWith("https://")) {
+      content = {
+        document: { url: document },
+        filename,
+        mimetype,
+        caption:  opts.caption  || "",
+      };
+    } else {
+      const buf = await _resolveSource(document);
+      content = {
+        document: buf,
+        filename,
+        mimetype,
+        caption:  opts.caption  || "",
+      };
+    }
 
     if (opts.thumbnail) content.jpegThumbnail = opts.thumbnail;
 

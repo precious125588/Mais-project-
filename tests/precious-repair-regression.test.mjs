@@ -70,16 +70,16 @@ test(".allmenu remains the full eligible catalogue path", () => {
 });
 
 // ── 3. OWNER HEADER dedup + centering ──────────────────────────────────────
-test("owner header appears exactly once and is centered; no standalone owner line", () => {
+test("menu header has bot username on top and hardened MIAS MDX second, both centered", () => {
   // Header block inside buildMenuOverview
   const ov = IDX.split("function buildMenuOverview")[1].split("return t;")[0];
-  assert.ok(!ov.includes('t += "𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\\n\\n";'), "the standalone brand/owner line under BOT OWNER must be removed (this was the duplicate)");
+  assert.ok(!ov.includes('t += "𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\\n\\n";'), "the standalone brand/owner line under header must be removed");
   assert.ok(!/𝑷𝑹𝑬𝑪𝑰𝑶𝑼𝑺 x\\n\\n"\s*;?\s*\n\s*t \+= quoteSection/.test(ov), "no owner-name line may sit between the header and the quote");
   // Centering logic is present and shared
-  assert.ok(IDX.includes('const centerLine = (txt) =>'), "centerLine helper must exist");
-  assert.ok(IDX.includes('centerLine("*BOT OWNER*")'), "the single BOT OWNER heading must be rendered via centerLine");
-  // count occurrences of the heading emission across the whole renderer
-  const emissions = (IDX.match(/centerLine\("\*BOT OWNER\*"\)/g) || []).length;
+  assert.ok(IDX.includes("const centerLine = (txt) =>"), "centerLine helper must exist");
+  assert.ok(IDX.includes("centerLine(`*${botName}*`)"), "bot username header rendered via centerLine");
+  assert.ok(/centerLine\("\*M(?:\\u200b)?IAS MDX\*"\)/.test(IDX), "the hardened MIAS MDX heading must be rendered via centerLine");
+  const emissions = (IDX.match(/centerLine\("\*M(?:\\u200b)?IAS MDX\*"\)/g) || []).length;
   assert.equal(emissions, 2, "two renderers (overview + full) each emit the heading exactly once");
 });
 

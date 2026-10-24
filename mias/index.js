@@ -128,20 +128,29 @@ let __buttonMode = false;
 function setButtonMode(value) { __buttonMode = Boolean(value); }
 function isButtonMode() { return __buttonMode; }
 let __miasPortableVideoModule = null;
+async function deliverMediaWithDiskTemp(sock, jid, media, opts = {}) {
+  const mp = require("./lib/mediaPipeline.cjs");
+  return await mp.deliverMediaWithDiskTemp(sock, jid, media, opts);
+}
+
 async function deliverVideoWithTTHD(sock, jid, buf, { caption = "", fileName = `video_${Date.now()}.mp4`, quoted = null } = {}) {
   // Shared downloader delivery: one branding footer, idempotent.
   caption = withJustXFooter(caption);
-  let playBuf = buf;
-  try {
-    playBuf = await prepareTikTokVideo(buf);
-  } catch (_e) {
-    playBuf = buf;
+  let playMedia = buf;
+  if (Buffer.isBuffer(buf)) {
+    try {
+      playMedia = await prepareTikTokVideo(buf);
+    } catch (_e) {
+      playMedia = buf;
+    }
   }
-  try {
-    return await sock.sendMessage(jid, { video: playBuf, mimetype: "video/mp4", caption }, { quoted });
-  } catch (_vidErr) {
-    return await sock.sendMessage(jid, { document: playBuf, mimetype: "video/mp4", fileName, caption }, { quoted });
-  }
+  return await deliverMediaWithDiskTemp(sock, jid, playMedia, {
+    type: "video",
+    caption,
+    fileName,
+    mimetype: "video/mp4",
+    quoted,
+  });
 }
 
 async function __miasNormalizeVideoBuffer(value) {
@@ -7445,6 +7454,56 @@ if (_autoCleanTimer.unref) _autoCleanTimer.unref();
 console.log(`⏱️  Auto cache cleaner armed — every ${CACHE_CLEAN_MS/60000} min (msgRetry + pushNames preserved).`);
 
 // ─────────────────────────────────────────────────────────────────────
+// 12-HOUR RAM & TEMP DISK MAINTENANCE
+// Clears transient in-memory message tracking, sweeps temporary pipeline
+// and scratchpad files on disk, and runs V8 garbage collection every 12 hours.
+// ─────────────────────────────────────────────────────────────────────
+const RAM_CLEANUP_INTERVAL_MS = 12 * 60 * 60 * 1000;
+async function perform12HourRamCleanup() {
+  const before = process.memoryUsage();
+  try {
+    processedMessages?.clear?.();
+    if (typeof _lastAdultResults !== "undefined" && _lastAdultResults?.clear) _lastAdultResults.clear();
+    _botSentMsgIds?.clear?.();
+    _menuPicCache?.clear?.();
+
+    try {
+      const mp = require("./lib/mediaPipeline.cjs");
+      if (typeof mp?.sweep === "function") mp.sweep();
+    } catch {}
+
+    try {
+      const os = require("os");
+      const tmpDir = os.tmpdir();
+      const files = await fs.promises.readdir(tmpDir);
+      const now = Date.now();
+      for (const f of files) {
+        if (/^(?:mais_|hd_|v36_|v37_|video_|audio_|tmp_)/i.test(f)) {
+          const fullPath = path.join(tmpDir, f);
+          const st = await fs.promises.stat(fullPath).catch(() => null);
+          if (st && (now - st.mtimeMs > 60 * 60 * 1000)) {
+            await fs.promises.unlink(fullPath).catch(() => {});
+          }
+        }
+      }
+    } catch {}
+
+    if (typeof global.gc === "function") {
+      try { global.gc(); } catch {}
+    }
+  } catch (err) {
+    console.warn("[12h RAM Cleanup] Error during sweep:", err?.message || err);
+  }
+  const after = process.memoryUsage();
+  console.log(`🧹 [12h RAM Cleanup] Complete. RSS: ${(before.rss / 1048576).toFixed(1)}MB → ${(after.rss / 1048576).toFixed(1)}MB | Heap: ${(before.heapUsed / 1048576).toFixed(1)}MB → ${(after.heapUsed / 1048576).toFixed(1)}MB`);
+}
+
+const _ramCleanupTimer = setInterval(perform12HourRamCleanup, RAM_CLEANUP_INTERVAL_MS);
+if (_ramCleanupTimer.unref) _ramCleanupTimer.unref();
+globalThis.__perform12HourRamCleanup = perform12HourRamCleanup;
+console.log("⏱️  12-Hour RAM cleanup scheduled (armed every 12 hours).");
+
+// ─────────────────────────────────────────────────────────────────────
 // v16: KEEP-ALIVE WATCHDOG — three independent layers to keep the bot
 // online and replies fast on Optiklink/Pterodactyl/Heroku/Termux/VPS.
 // All layers are safe to disable individually via env vars.
@@ -9203,12 +9262,12 @@ function buildMenu(jid, senderName, sender, context = {}) {
 
   const ruleWidth = rule.length; // divider width = reference line width
   const centerLine = (txt) => {
-    const visible = String(txt).replace(/\*/g, "");
+    const visible = String(txt).replace(/[\*\u200b]/g, "");
     const pad = Math.max(0, Math.floor((ruleWidth - [...visible].length) / 2));
     return " ".repeat(pad) + txt;
   };
-  let t = rule + "\n" + centerLine("*MIAS MDX*") + "\n" + rule + "\n\n";
-  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
+  const botName = CONFIG.BOT_NAME || CONFIG.OWNER_NAME || "PRECIOUS x";
+  let t = rule + "\n" + centerLine(`*${botName}*`) + "\n" + centerLine("*M\u200bIAS MDX*") + "\n" + rule + "\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
   t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
@@ -9329,12 +9388,12 @@ function buildMenuOverview(jid, sender, context = {}) {
   try { host = String(detectHostEnvironment().platform || "UNKNOWN").toUpperCase(); } catch {}
   const rule = "\u2500".repeat(20);
   const centerLine = (txt) => {
-    const visible = String(txt).replace(/\*/g, "");
+    const visible = String(txt).replace(/[\*\u200b]/g, "");
     const pad = Math.max(0, Math.floor((rule.length - [...visible].length) / 2));
     return " ".repeat(pad) + txt;
   };
-  let t = rule + "\n" + centerLine("*MIAS MDX*") + "\n" + rule + "\n\n";
-  t += rule + "\n" + centerLine("*BOT OWNER*") + "\n" + rule + "\n\n";
+  const botName = CONFIG.BOT_NAME || CONFIG.OWNER_NAME || "PRECIOUS x";
+  let t = rule + "\n" + centerLine(`*${botName}*`) + "\n" + centerLine("*M\u200bIAS MDX*") + "\n" + rule + "\n\n";
   t += quoteSection(userQuote);
   t += "*BOT INFORMATION*\n";
   t += `HOST: ${host}\nPREFIX: ${CONFIG.PREFIX}\nMODE: ${mode}\nVERSION: ${CONFIG.VERSION}\n`;
@@ -18994,16 +19053,15 @@ for (const [pCmd, pInfo] of Object.entries(DL_PLATFORMS)) {
       const result = await universalDownload(args[0], pCmd);
       if (result?.dl) {
         await editMessage(sock, jid, dlKey, `${pInfo.emoji} *MIAS MDX — ${pInfo.name}*\n\n⬢ Fetching media... ✅\n⬡ Downloading...\n◻ Sending...`);
-        const buf = await axios.get(result.dl, { responseType: "arraybuffer", timeout: 600000, maxContentLength: Infinity, maxBodyLength: Infinity });
         await editMessage(sock, jid, dlKey, `${pInfo.emoji} *MIAS MDX — ${pInfo.name}*\n\n⬢ Fetching media... ✅\n⬢ Downloading... ✅\n⬡ Sending...`);
-        const ct = buf.headers?.["content-type"] || "";
-        if (ct.includes("audio") || pCmd === "spotify" || pCmd === "soundcloud") {
-          await sock.sendMessage(jid, { audio: Buffer.from(buf.data), mimetype: "audio/mpeg", ptt: false }, { quoted: msg });
-        } else if (ct.includes("video") || result.dl.includes(".mp4")) {
-          await sock.sendMessage(jid, { video: Buffer.from(buf.data), caption: `${pInfo.emoji} *${pInfo.name}*\n\n${result.title || ""}` }, { quoted: msg });
-        } else {
-          await sock.sendMessage(jid, { image: Buffer.from(buf.data), caption: `${pInfo.emoji} *${pInfo.name}*\n\n${result.title || ""}` }, { quoted: msg });
-        }
+        const isAudio = pCmd === "spotify" || pCmd === "soundcloud" || result.dl.includes(".mp3");
+        const isVid = !isAudio && (result.dl.includes(".mp4") || !result.dl.includes(".jpg"));
+        const cap = `${pInfo.emoji} *${pInfo.name}*\n\n${result.title || ""}`;
+        await deliverMediaWithDiskTemp(sock, jid, result.dl, {
+          type: isAudio ? "audio" : isVid ? "video" : "image",
+          caption: cap,
+          quoted: msg,
+        });
         await editMessage(sock, jid, dlKey, `${pInfo.emoji} *MIAS MDX — ${pInfo.name}*\n\n⬢ Fetching media... ✅\n⬢ Downloading... ✅\n⬢ Sending... ✅\n\n✅ *Done!*`);
       } else {
         await editMessage(sock, jid, dlKey, `${pInfo.emoji} *MIAS MDX — ${pInfo.name}*\n\n⬢ Fetching media... ❌\n\n⚠️ Download failed. URL may be private or unsupported.`);
@@ -19115,26 +19173,29 @@ const __facebookCommand = __facebookDownloader.createFacebookCommand({
   sendStatus: (sock, msg, text) => sock.sendMessage(msg.key.remoteJid, { text }, { quoted: msg }),
   editStatus: (sock, msg, key, text) => editMessage(sock, msg.key.remoteJid, key, text),
   resolveMedia: __resolveFacebookMedia,
-  sendVideo: (sock, msg, media, { caption }) => sock.sendMessage(
-    msg.key.remoteJid,
-    { video: media.buffer, mimetype: media.mimetype, caption },
-    { quoted: msg },
-  ),
-  sendDocument: (sock, msg, media, { caption }) => sock.sendMessage(
-    msg.key.remoteJid,
-    {
-      document: media.buffer,
+  sendVideo: (sock, msg, media, { caption }) =>
+    deliverMediaWithDiskTemp(sock, msg.key.remoteJid, media.buffer, {
+      type: "video",
+      mimetype: media.mimetype,
+      caption,
+      quoted: msg,
+    }),
+  sendDocument: (sock, msg, media, { caption }) =>
+    deliverMediaWithDiskTemp(sock, msg.key.remoteJid, media.buffer, {
+      type: "document",
       mimetype: media.mimetype,
       fileName: `facebook_${Date.now()}${media.extension || ".mp4"}`,
       caption,
-    },
-    { quoted: msg },
-  ),
-  sendAudio: (sock, msg, audio, { title }) => sock.sendMessage(
-    msg.key.remoteJid,
-    { audio, mimetype: "audio/mpeg", fileName: "facebook_audio.mp3", ptt: false, caption: title },
-    { quoted: msg },
-  ),
+      quoted: msg,
+    }),
+  sendAudio: (sock, msg, audio, { title }) =>
+    deliverMediaWithDiskTemp(sock, msg.key.remoteJid, audio, {
+      type: "audio",
+      mimetype: "audio/mpeg",
+      fileName: "facebook_audio.mp3",
+      caption: title,
+      quoted: msg,
+    }),
   extractAudio: async (buffer, media) => {
     const { extractAudio } = await import("./services/VideoService.js");
     return extractAudio(buffer, String(media.extension || ".mp4").replace(/^\./, ""), "mp3");
@@ -19424,12 +19485,15 @@ cmd(["tiktok","tt","ttdl"], { desc: "Download TikTok video/audio — supports: .
         await sock.sendMessage(jid, { sticker: _sticker, isAnimated: true }, { quoted: msg });
       } else if (isAudio) {
         const _aMime = _isValidAudio(buf) && buf.slice(4, 8).toString("ascii") === "ftyp" ? "audio/mp4" : "audio/mpeg";
-        await sock.sendMessage(jid, { audio: buf, mimetype: _aMime, ptt: false, fileName: "tiktok_audio.mp3" }, { quoted: msg });
+        await deliverMediaWithDiskTemp(sock, jid, buf, {
+          type: "audio",
+          mimetype: _aMime,
+          fileName: "tiktok_audio.mp3",
+          quoted: msg,
+        });
       } else {
         const cap = `🎵 *TikTok*${sz}`;
-        const _playBuf = await prepareTikTokVideo(buf);
-        try { await sock.sendMessage(jid, { video: _playBuf, mimetype: "video/mp4", caption: cap }, { quoted: msg }); }
-        catch { await sock.sendMessage(jid, { document: _playBuf, mimetype: "video/mp4", fileName: `tiktok_${Date.now()}.mp4`, caption: cap }, { quoted: msg }); }
+        await deliverVideoWithTTHD(sock, jid, buf, { caption: cap, quoted: msg });
       }
 
       await react(sock, msg, "✅");
